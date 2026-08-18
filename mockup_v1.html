@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>いけるとこまで旅行 - モックアップ v1</title>
+<style>
+:root {
+  --main:        #72B01D;
+  --main-deep:   #4E7D0E;
+  --main-light:  #EEF7DC;
+  --main-mid:    #B5D96A;
+  --accent:      #FF6B2B;
+  --accent-deep: #CC4A0A;
+  --accent-light:#FFF1EA;
+  --text:        #1F2937;
+  --text-sub:    #6B7280;
+  --bg:          #F6FAF0;
+  --white:       #FFFFFF;
+  --border:      #DFEDc8;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{
+  font-family:"Meiryo","メイリオ","Hiragino Sans",sans-serif;
+  background:#DDE8CC;
+  min-height:100vh;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  padding:32px 16px 48px;
+  gap:32px;
+}
+h2.section-head{
+  color:#3a5c0a;
+  font-size:13px;
+  letter-spacing:.1em;
+  font-weight:700;
+  margin-bottom:8px;
+  align-self:flex-start;
+}
+
+/* ── Phone Frame ── */
+.phone{
+  width:390px;
+  border-radius:44px;
+  overflow:hidden;
+  box-shadow:0 24px 72px rgba(0,0,0,.28);
+  background:var(--bg);
+  flex-shrink:0;
+}
+.screen{display:none;flex-direction:column;min-height:780px;}
+.screen.active{display:flex;}
+
+/* ── Status bar stub ── */
+.status-bar{
+  height:44px;
+  background:linear-gradient(135deg,var(--main),var(--main-deep));
+  display:flex;align-items:center;justify-content:flex-end;
+  padding:0 20px;
+  gap:8px;
+}
+.status-bar span{color:rgba(255,255,255,.7);font-size:11px;}
+
+/* ── App Header ── */
+.app-header{
+  background:linear-gradient(135deg,var(--main),var(--main-deep));
+  color:#fff;
+  padding:8px 24px 24px;
+}
+.app-header .eyebrow{font-size:10px;letter-spacing:.15em;opacity:.75;margin-bottom:2px;}
+.app-header .title{font-size:21px;font-weight:800;letter-spacing:.02em;}
+.app-header .sub{font-size:12px;opacity:.82;margin-top:3px;line-height:1.4;}
+
+.back-bar{
+  background:var(--white);
+  padding:12px 20px;
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:10px;
+}
+.back-btn{
+  background:var(--main-light);
+  border:1px solid var(--border);
+  color:var(--main-deep);
+  border-radius:20px;
+  padding:5px 14px;
+  font-size:12px;font-weight:700;
+  cursor:pointer;font-family:inherit;
+}
+.back-bar .page-title{font-size:14px;font-weight:700;color:var(--text);}
+
+/* ── Search Body ── */
+.search-body{padding:20px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:20px;}
+.field-label{font-size:11px;font-weight:700;color:var(--text-sub);letter-spacing:.1em;margin-bottom:6px;}
+
+.station-wrap{position:relative;}
+.station-icon-l{position:absolute;left:13px;top:50%;transform:translateY(-50%);font-size:18px;}
+.station-input{
+  width:100%;padding:13px 14px 13px 42px;
+  border:2px solid var(--border);border-radius:13px;
+  font-size:15px;font-family:inherit;color:var(--text);
+  background:var(--white);outline:none;
+  transition:border-color .2s;
+}
+.station-input:focus{border-color:var(--main);}
+
+/* Budget grid */
+.budget-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;}
+.bud-btn{
+  padding:13px 6px;
+  border:2px solid var(--border);border-radius:12px;
+  background:var(--white);color:var(--text);
+  font-size:13px;font-weight:700;font-family:inherit;
+  cursor:pointer;text-align:center;transition:all .18s;
+}
+.bud-btn em{display:block;font-size:10px;font-weight:400;font-style:normal;color:var(--text-sub);margin-top:2px;}
+.bud-btn:hover{border-color:var(--main);background:var(--main-light);}
+.bud-btn.sel{border-color:var(--main);background:var(--main);color:#fff;}
+.bud-btn.sel em{color:rgba(255,255,255,.75);}
+
+/* Transport */
+.transport-row{display:flex;gap:9px;}
+.trans-chip{
+  flex:1;padding:11px 6px;
+  border:2px solid var(--border);border-radius:10px;
+  background:var(--white);text-align:center;
+  font-size:11px;font-family:inherit;cursor:pointer;transition:all .18s;
+}
+.trans-chip .ico{font-size:20px;display:block;margin-bottom:3px;}
+.trans-chip.sel{border-color:var(--accent);background:var(--accent-light);color:var(--accent-deep);font-weight:700;}
+
+/* Search button */
+.search-btn{
+  width:100%;padding:17px;
+  background:linear-gradient(135deg,var(--accent),var(--accent-deep));
+  color:#fff;border:none;border-radius:15px;
+  font-size:16px;font-weight:800;font-family:inherit;
+  cursor:pointer;letter-spacing:.06em;
+  box-shadow:0 6px 22px rgba(255,107,43,.38);
+  transition:transform .1s;
+}
+.search-btn:active{transform:scale(.98);}
+
+/* ── Results ── */
+.results-meta{
+  background:var(--white);
+  padding:12px 20px 10px;
+  border-bottom:1px solid var(--border);
+}
+.tag-row{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:5px;}
+.tag{
+  background:var(--main-light);color:var(--main-deep);
+  font-size:12px;font-weight:700;
+  padding:4px 12px;border-radius:20px;
+  border:1px solid var(--border);
+}
+.result-count{font-size:11px;color:var(--text-sub);}
+
+.results-list{padding:14px;display:flex;flex-direction:column;gap:12px;overflow-y:auto;flex:1;}
+
+/* Spot card */
+.spot-card{
+  background:var(--white);border-radius:15px;
+  overflow:hidden;
+  box-shadow:0 2px 10px rgba(0,0,0,.06);
+  cursor:pointer;transition:transform .18s,box-shadow .18s;
+}
+.spot-card:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(0,0,0,.1);}
+.card-thumb{
+  width:100%;height:130px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:46px;position:relative;
+}
+.t1{background:linear-gradient(135deg,#C8E88A,#80B820);}
+.t2{background:linear-gradient(135deg,#D8E8A0,#9ECA48);}
+.t3{background:linear-gradient(135deg,#FFE4B0,#FFB040);}
+.fare-badge{
+  position:absolute;top:10px;right:10px;
+  background:var(--accent);color:#fff;
+  font-size:12px;font-weight:800;
+  padding:4px 11px;border-radius:20px;
+}
+.card-body{padding:13px 15px;}
+.card-name{font-size:16px;font-weight:800;color:var(--text);margin-bottom:3px;}
+.card-desc{font-size:11px;color:var(--text-sub);line-height:1.55;margin-bottom:9px;}
+.card-route{display:flex;align-items:center;gap:5px;flex-wrap:wrap;font-size:11px;color:var(--text-sub);}
+.r-chip{background:var(--main-light);color:var(--main-deep);padding:2px 8px;border-radius:6px;font-size:10px;font-weight:700;}
+.r-arr{color:var(--main);font-weight:800;font-size:12px;}
+
+/* ── Detail ── */
+.detail-hero{
+  width:100%;height:190px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:62px;position:relative;
+  background:linear-gradient(135deg,#B5D96A,#72B01D);
+}
+.detail-hero .back-float{
+  position:absolute;top:14px;left:14px;
+  background:rgba(255,255,255,.28);backdrop-filter:blur(4px);
+  border:none;color:#fff;border-radius:20px;
+  padding:6px 14px;font-size:12px;font-weight:700;
+  cursor:pointer;font-family:inherit;
+}
+.detail-body{padding:18px 22px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:16px;}
+.detail-name{font-size:22px;font-weight:800;color:var(--text);}
+.detail-loc{font-size:12px;color:var(--text-sub);}
+
+.fare-block{
+  background:var(--accent-light);
+  border:2px solid var(--accent);
+  border-radius:13px;padding:14px 18px;
+  display:flex;justify-content:space-between;align-items:center;
+}
+.fare-num{font-size:28px;font-weight:800;color:var(--accent-deep);}
+.fare-lbl{font-size:10px;color:var(--text-sub);margin-bottom:2px;}
+.time-num{font-size:20px;font-weight:700;color:var(--text);text-align:right;}
+
+.route-card{
+  background:var(--white);border:1px solid var(--border);
+  border-radius:13px;overflow:hidden;
+}
+.route-card .rc-title{
+  background:var(--main-light);padding:9px 16px;
+  font-size:11px;font-weight:700;color:var(--main-deep);letter-spacing:.08em;
+}
+.r-step{
+  display:flex;align-items:flex-start;gap:12px;
+  padding:10px 16px;border-bottom:1px solid var(--border);
+}
+.r-step:last-child{border-bottom:none;}
+.r-step .ico{font-size:18px;min-width:24px;text-align:center;margin-top:1px;}
+.r-step .txt{font-size:13px;color:var(--text);}
+.r-step .sub{font-size:10px;color:var(--text-sub);margin-top:2px;}
+
+.detail-desc{font-size:12px;color:var(--text);line-height:1.85;}
+
+.cta-btn{
+  width:100%;padding:15px;
+  background:linear-gradient(135deg,var(--accent),var(--accent-deep));
+  color:#fff;border:none;border-radius:13px;
+  font-size:14px;font-weight:800;font-family:inherit;cursor:pointer;
+}
+.cta-btn-sub{
+  width:100%;padding:13px;
+  background:var(--main-light);color:var(--main-deep);
+  border:2px solid var(--main);border-radius:13px;
+  font-size:13px;font-weight:700;font-family:inherit;cursor:pointer;
+}
+
+/* ── Bottom Nav ── */
+.bottom-nav{
+  background:var(--white);
+  border-top:1px solid var(--border);
+  display:flex;padding:8px 0 16px;
+}
+.nav-item{
+  flex:1;display:flex;flex-direction:column;align-items:center;
+  gap:3px;font-size:10px;color:var(--text-sub);cursor:pointer;
+  padding:6px 0;
+}
+.nav-item.active{color:var(--main-deep);font-weight:700;}
+.nav-item .nav-ico{font-size:20px;}
+
+/* ── Screen label ── */
+.screen-lbl{
+  text-align:center;padding:7px;
+  background:rgba(0,0,0,.04);
+  font-size:9px;color:var(--text-sub);letter-spacing:.12em;
+}
+</style>
+</head>
+<body>
+
+<!-- ===== PHONE 1: 検索 ===== -->
+<div>
+<h2 class="section-head">SCREEN 1　検索画面</h2>
+<div class="phone">
+<div class="screen active" id="s1">
+  <div class="status-bar"><span>9:41</span><span>🔋</span></div>
+  <div class="app-header">
+    <div class="eyebrow">いけるとこまで旅行</div>
+    <div class="title">予算から旅先を探す</div>
+    <div class="sub">バス・電車で行ける、知らなかった景色へ</div>
+  </div>
+  <div class="search-body">
+    <div>
+      <div class="field-label">出発駅</div>
+      <div class="station-wrap">
+        <span class="station-icon-l">🚉</span>
+        <input class="station-input" type="text" placeholder="駅名を入力（例：新ノ口）" value="新ノ口">
+      </div>
+    </div>
+    <div>
+      <div class="field-label">交通費の予算（片道）</div>
+      <div class="budget-grid">
+        <button class="bud-btn">¥1,000<em>近場へ</em></button>
+        <button class="bud-btn">¥2,000<em>1時間圏</em></button>
+        <button class="bud-btn sel">¥3,000<em>ちょっと遠め</em></button>
+        <button class="bud-btn">¥5,000<em>隣県まで</em></button>
+        <button class="bud-btn">¥8,000<em>気まま旅</em></button>
+        <button class="bud-btn">¥10,000<em>遠出もOK</em></button>
+      </div>
+    </div>
+    <div>
+      <div class="field-label">交通手段</div>
+      <div class="transport-row">
+        <button class="trans-chip sel"><span class="ico">🚃</span>電車</button>
+        <button class="trans-chip sel"><span class="ico">🚌</span>バス</button>
+        <button class="trans-chip"><span class="ico">🚶</span>徒歩のみ</button>
+      </div>
+    </div>
+    <button class="search-btn">🔍　旅先を探す</button>
+  </div>
+  <div class="bottom-nav">
+    <div class="nav-item active"><span class="nav-ico">🔍</span>探す</div>
+    <div class="nav-item"><span class="nav-ico">❤️</span>お気に入り</div>
+    <div class="nav-item"><span class="nav-ico">📋</span>履歴</div>
+  </div>
+  <div class="screen-lbl">SCREEN 1 / 検索画面</div>
+</div>
+</div>
+</div>
+
+<!-- ===== PHONE 2: 検索結果 ===== -->
+<div>
+<h2 class="section-head">SCREEN 2　検索結果画面</h2>
+<div class="phone">
+<div class="screen active" id="s2">
+  <div class="status-bar"><span>9:43</span><span>🔋</span></div>
+  <div class="app-header">
+    <div class="eyebrow">いけるとこまで旅行</div>
+    <div class="title">旅先が見つかりました</div>
+  </div>
+  <div class="results-meta">
+    <div class="tag-row">
+      <span class="tag">🚉 新ノ口駅 出発</span>
+      <span class="tag">💴 〜¥3,000</span>
+      <span class="tag">🚃 電車＋🚌 バス</span>
+    </div>
+    <div class="result-count">8件のスポットが見つかりました</div>
+  </div>
+  <div class="results-list">
+
+    <div class="spot-card">
+      <div class="card-thumb t1">⛩️<span class="fare-badge">¥690</span></div>
+      <div class="card-body">
+        <div class="card-name">壺坂寺（南法華寺）</div>
+        <div class="card-desc">西国三十三所第六番札所。山中に建つ古刹で、インドから贈られた大観音石像が有名。</div>
+        <div class="card-route">
+          <span class="r-chip">🚃 近鉄 8分</span>
+          <span class="r-arr">→</span>
+          <span class="r-chip">🚌 バス 15分</span>
+          <span class="r-arr">→</span>
+          <span>計 約30分</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="spot-card">
+      <div class="card-thumb t2">🏛️<span class="fare-badge">¥480</span></div>
+      <div class="card-body">
+        <div class="card-name">飛鳥・石舞台古墳</div>
+        <div class="card-desc">蘇我馬子の墓とも伝わる7世紀の古墳。日本最大級の横穴式石室が露出した珍しい景観。</div>
+        <div class="card-route">
+          <span class="r-chip">🚃 近鉄 8分</span>
+          <span class="r-arr">→</span>
+          <span class="r-chip">🚌 バス 20分</span>
+          <span class="r-arr">→</span>
+          <span>計 約35分</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="spot-card">
+      <div class="card-thumb t3">🌸<span class="fare-badge">¥1,230</span></div>
+      <div class="card-body">
+        <div class="card-name">吉野山</div>
+        <div class="card-desc">日本随一の桜の名所。3万本の山桜が山全体を彩る世界遺産。</div>
+        <div class="card-route">
+          <span class="r-chip">🚃 近鉄 25分</span>
+          <span class="r-arr">→</span>
+          <span class="r-chip">🚠 ロープウェイ 3分</span>
+          <span class="r-arr">→</span>
+          <span>計 約40分</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <div class="bottom-nav">
+    <div class="nav-item active"><span class="nav-ico">🔍</span>探す</div>
+    <div class="nav-item"><span class="nav-ico">❤️</span>お気に入り</div>
+    <div class="nav-item"><span class="nav-ico">📋</span>履歴</div>
+  </div>
+  <div class="screen-lbl">SCREEN 2 / 検索結果画面</div>
+</div>
+</div>
+</div>
+
+<!-- ===== PHONE 3: 詳細 ===== -->
+<div>
+<h2 class="section-head">SCREEN 3　スポット詳細画面</h2>
+<div class="phone">
+<div class="screen active" id="s3">
+  <div class="status-bar"><span>9:44</span><span>🔋</span></div>
+  <div class="detail-hero">
+    ⛩️
+    <button class="back-float">← 一覧</button>
+  </div>
+  <div class="detail-body">
+    <div>
+      <div class="detail-name">壺坂寺（南法華寺）</div>
+      <div class="detail-loc">📍 奈良県高市郡高取町壺阪</div>
+    </div>
+    <div class="fare-block">
+      <div>
+        <div class="fare-lbl">片道交通費</div>
+        <div class="fare-num">¥690</div>
+      </div>
+      <div>
+        <div class="fare-lbl">所要時間</div>
+        <div class="time-num">約30分</div>
+      </div>
+    </div>
+    <div class="route-card">
+      <div class="rc-title">ルート詳細</div>
+      <div class="r-step"><span class="ico">🚉</span><div><div class="txt">新ノ口駅 出発</div></div></div>
+      <div class="r-step"><span class="ico">🚃</span><div><div class="txt">近鉄吉野線 → 壺阪山駅</div><div class="sub">8分 / ¥280</div></div></div>
+      <div class="r-step"><span class="ico">🚌</span><div><div class="txt">奈良交通バス → 壺阪寺前</div><div class="sub">15分 / ¥410</div></div></div>
+      <div class="r-step"><span class="ico">⛩️</span><div><div class="txt">壺坂寺 到着</div></div></div>
+    </div>
+    <div class="detail-desc">
+      西国三十三所第六番札所。正式名は南法華寺。8世紀創建の古刹で、インドから贈られた大観音石像・大涅槃石像が境内に立つ。眼病に御利益があるとされ、浄瑠璃「壺坂霊験記」の舞台としても有名。境内からは大和三山と飛鳥の里を一望できる。
+    </div>
+    <button class="cta-btn">🗺️ 経路を地図で見る</button>
+    <button class="cta-btn-sub">🏨 近くの宿を探す（じゃらん）</button>
+  </div>
+  <div class="screen-lbl">SCREEN 3 / スポット詳細画面</div>
+</div>
+</div>
+</div>
+
+</body>
+</html>
