@@ -9,7 +9,8 @@
  * 2. assets/js の各スクリプトをインライン化
  * 3. assets/css をインライン化
  * 4. data/derived の JSON をJavaScriptオブジェクトリテラルとしてインライン化
- * 5. dist/index.html に出力
+ * 5. dist/index.html と docs/index.html に出力
+ *    （GitHub Pages は main branch / docs folder を配信元に設定）
  */
 
 import fs from 'fs';
@@ -27,6 +28,8 @@ const jsDir = path.join(rootDir, 'assets/js');
 const derivedDir = path.join(rootDir, 'data/derived');
 const distDir = path.join(rootDir, 'dist');
 const distIndexPath = path.join(distDir, 'index.html');
+const docsDir = path.join(rootDir, 'docs');
+const docsIndexPath = path.join(docsDir, 'index.html');
 
 /**
  * バンドル実行のメイン処理
@@ -79,14 +82,22 @@ async function bundleHTML() {
     console.log(`\n✅ バンドル完了`);
     console.log(`   出力: ${distIndexPath}`);
     console.log(`   サイズ: ${fileSizeKB} KB`);
+
+    // 8. docs/index.html にもコピー（GitHub Pages の配信元）
+    if (!fs.existsSync(docsDir)) {
+      fs.mkdirSync(docsDir, { recursive: true });
+    }
+    fs.copyFileSync(distIndexPath, docsIndexPath);
+    console.log(`✅ docs/index.html にコピー完了（GitHub Pages 配信用）`);
+
     console.log(
       `\n📤 デプロイ準備完了:`
     );
-    console.log(`   1. git add dist/index.html`);
-    console.log(`   2. git commit -m "Generate dist/index.html"`);
+    console.log(`   1. git add docs/index.html dist/index.html`);
+    console.log(`   2. git commit -m "Update dist/docs index.html"`);
     console.log(`   3. git push origin main`);
     console.log(
-      `   → GitHub Pages に自動デプロイされます\n`
+      `   → GitHub Pages (main branch / docs folder) に反映されます\n`
     );
   } catch (error) {
     console.error('❌ バンドル失敗:', error);
