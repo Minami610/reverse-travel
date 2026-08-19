@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>逆引き旅行アプリ - 予算から行き先を探す</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚌</text></svg>">
+  <link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+  <header>
+    <h1>🚌 いけるとこまで旅行</h1>
+    <p>予算を入れたら、行ける場所が出てくる。地方の知られていない景勝地を発見しよう！</p>
+  </header>
+
+  <div class="container">
+    <!-- 検索フォーム -->
+    <form id="search-form">
+      <div class="form-group">
+        <label for="departure-input">出発駅を選択</label>
+        <input
+          type="text"
+          id="departure-input"
+          placeholder="駅名を入力..."
+          autocomplete="off"
+          required
+        >
+        <div id="departure-suggestions"></div>
+      </div>
+
+      <div class="form-group">
+        <label for="budget-input">
+          予算：<span id="budget-display">¥500</span>
+        </label>
+        <input
+          type="range"
+          id="budget-input"
+          min="200"
+          max="1000"
+          step="100"
+          value="500"
+        >
+      </div>
+
+      <button type="submit" id="search-btn">検索</button>
+    </form>
+
+    <!-- 結果表示エリア -->
+    <div id="results-container">
+      <div id="results-list"></div>
+    </div>
+
+    <!-- スポット詳細表示エリア -->
+    <div id="detail-container">
+      <button id="back-btn">← 一覧に戻る</button>
+      <div id="detail-content"></div>
+    </div>
+  </div>
+
+  <!-- ES6モジュール：開発環境用 -->
+  <script type="module" src="assets/js/main.js"></script>
+
+  <!-- 
+    ビルド時に以下が埋め込まれます：
+    <script>
+      window.EMBEDDED_FARE_DATA = { ... };
+      window.EMBEDDED_STOPS_METADATA = [ ... ];
+      window.EMBEDDED_STATIONS_BY_NAME = { ... };
+      window.EMBEDDED_ROUTE_INFO = { ... };
+      window.EMBEDDED_SPOTS_BY_STATION = { ... };
+      window.EMBEDDED_SPOT_RANKING_CONFIG = { ... };
+    </script>
+  -->
+</body>
+</html>

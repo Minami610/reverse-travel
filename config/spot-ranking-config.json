@@ -1,0 +1,12 @@
+{
+  "pageview_thresholds": {
+    "description": "観光スポットの『知られていない度』判定基準（実データ取得後に調整予定）",
+    "absolute_threshold": 6000,
+    "absolute_threshold_note": "2026-08-19確定：フェーズ1実データ（香川県、175件）の分布に基づき設定。除外バグ修正後の実測ではデータ異常値を除き最大が金刀比羅宮=6580、次点が香川県立アリーナ3816・玉藻公園3789で、6000は金刀比羅宮のみをピンポイントで足切りする値。25000は実データでは0件しか除外できず機能していなかったため見直した",
+    "relative_ranking": true,
+    "relative_ranking_note": "検索結果内（駅の周辺スポット群）でページビュー数が低い順に優先表示"
+  },
+  "missing_pageview_data_treatment": "default_priority",
+  "missing_pageview_data_note": "ページビューデータが存在しない新設・低頻度記事は『隠れている扱い』として優先表示",
+  "tuning_plan": "フェーズ1デモ後、Wikidataから取得した実スポットデータを見ながら、absolute_threshold を実データに合わせて調整"
+}

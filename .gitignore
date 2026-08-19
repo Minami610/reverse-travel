@@ -1,0 +1,27 @@
+# ビルド時に自動取得・生成されるファイル
+data/raw-gtfs/
+data/derived/
+
+# Node.js
+node_modules/
+
+# IDE
+.vscode/
+.DS_Store
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment variables
+.env
+.env.local
+
+# ※ package-lock.json はコミットする（ビルド再現性）
+# ※ dist/index.html はコミットする（GitHub Pages デプロイ用）
