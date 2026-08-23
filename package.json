@@ -8,6 +8,8 @@
     "build": "node scripts/fetch-and-build.js",
     "bundle": "node scripts/bundle-html.js",
     "refresh-spots": "node scripts/build-pipeline/refresh-and-normalize-spots.js",
+    "generate-route-details": "node scripts/build-pipeline/generate-route-details.js",
+    "verify-render": "node scripts/verify-initial-render.js",
     "test:wikidata": "node scripts/test-wikidata.js",
     "test:spot-candidates": "node scripts/test-spot-candidates.js",
     "dev": "echo 'Open index.html with Live Server'"
@@ -24,6 +26,10 @@
   "dependencies": {
     "adm-zip": "^0.6.0",
     "csv-parse": "^5.4.1",
+    "leaflet": "^1.9.4",
     "node-fetch": "^3.3.1"
+  },
+  "devDependencies": {
+    "jsdom": "^30.0.1"
   }
 }

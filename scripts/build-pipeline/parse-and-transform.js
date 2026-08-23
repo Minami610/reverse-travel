@@ -68,10 +68,133 @@ export async function parseAndTransform() {
     throw new Error('GTFSパース結果が0件です。入力ファイルと展開状態を確認してください');
   }
 
+  // 実質同一地点だが表記が異なる停留所名を統合（鉄道↔バスの乗換拠点を増やすため）
+  mergeDuplicateStationNames(aggregated);
+
   // 派生JSONを生成
   saveDerivedData(aggregated);
 
   console.log('✅ GTFS パース完了\n');
+}
+
+/** 2点間の距離をメートルで返す（Haversine公式） */
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/** 「ことでん」「琴電」「ＪＲ」プレフィックス、「駅」「駅前」サフィックスを除いた基底名 */
+function stationBaseName(name) {
+  let n = name.replace(/^(ことでん|琴電|ＪＲ)/, '');
+  n = n.replace(/(駅前|駅)$/, '');
+  return n;
+}
+
+/**
+ * 実質同一地点なのに表記が異なる停留所名を統合する（例：「伏石」⇔「ことでん伏石駅」）。
+ *
+ * 【背景】鉄道駅とバス停で名前の付け方が異なるため、同じ場所でも別の停留所名として
+ * 扱われ、経路探索・アクセス駅選定の両方で本来の候補（例：鉄道ルート）が
+ * 名前の不一致だけで除外されてしまう問題があった。
+ *
+ * 【統合条件（意図的に厳しくしている）】
+ * 1. 基底名（上記プレフィックス/サフィックスを除いた名前）が完全一致すること
+ *    （部分一致・包含は使わない＝「東室新町」と「室新町」のような別停留所を
+ *    誤って同一視しないため）
+ * 2. かつ、実際の座標間の距離が200m以内であること
+ *    （基底名が同じでも、離れた場所にある別施設は統合しない。
+ *    例：「琴電屋島」「ことでん屋島駅」は40mで統合対象だが、
+ *    同じ「屋島」グループの「ＪＲ屋島駅」は約610m離れておりどちらとも
+ *    統合されない＝ペア単位で判定するため一部だけ統合できる）
+ *
+ * 正規名（統合後にどちらの表記を残すか）は、基底名そのままの表記があれば
+ * それを優先し、なければ文字数が短い方を採用する。
+ */
+function mergeDuplicateStationNames(aggregated) {
+  const stopsArray = Object.values(aggregated.stops);
+
+  const byBase = new Map();
+  for (const stop of stopsArray) {
+    const base = stationBaseName(stop.stop_name);
+    if (!byBase.has(base)) byBase.set(base, []);
+    byBase.get(base).push(stop);
+  }
+
+  let mergedGroupCount = 0;
+  let mergedStopCount = 0;
+
+  for (const [base, group] of byBase.entries()) {
+    const distinctNames = [...new Set(group.map((s) => s.stop_name))];
+    if (distinctNames.length < 2) continue;
+
+    const byName = new Map();
+    for (const stop of group) {
+      if (!byName.has(stop.stop_name)) byName.set(stop.stop_name, []);
+      byName.get(stop.stop_name).push(stop);
+    }
+    const centroids = [...byName.entries()].map(([name, stops]) => ({
+      name,
+      lat: stops.reduce((sum, s) => sum + s.stop_lat, 0) / stops.length,
+      lon: stops.reduce((sum, s) => sum + s.stop_lon, 0) / stops.length,
+    }));
+
+    // 200m以内のペアのみを辺として連結成分を求める（グループ内の全ペアではなく、
+    // ペア単位で判定することで「一部だけ統合」を可能にする）
+    const n = centroids.length;
+    const adjacency = Array.from({ length: n }, () => new Set());
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const distance = haversineMeters(
+          centroids[i].lat, centroids[i].lon, centroids[j].lat, centroids[j].lon
+        );
+        if (distance <= 200) {
+          adjacency[i].add(j);
+          adjacency[j].add(i);
+        }
+      }
+    }
+
+    const visited = new Array(n).fill(false);
+    for (let start = 0; start < n; start++) {
+      if (visited[start]) continue;
+      const component = [];
+      const queue = [start];
+      visited[start] = true;
+      while (queue.length > 0) {
+        const current = queue.shift();
+        component.push(current);
+        for (const next of adjacency[current]) {
+          if (!visited[next]) {
+            visited[next] = true;
+            queue.push(next);
+          }
+        }
+      }
+      if (component.length < 2) continue; // 統合相手なし
+
+      const namesInComponent = component.map((idx) => centroids[idx].name);
+      const canonical =
+        namesInComponent.find((name) => name === base) ||
+        [...namesInComponent].sort((a, b) => a.length - b.length || a.localeCompare(b))[0];
+      const aliases = namesInComponent.filter((name) => name !== canonical);
+
+      for (const stop of group) {
+        if (aliases.includes(stop.stop_name)) {
+          console.log(`    🔗 停留所名統合: ${stop.stop_name} → ${canonical} (${stop.stop_id}, ${stop.operator_id})`);
+          stop.stop_name = canonical;
+          mergedStopCount += 1;
+        }
+      }
+      mergedGroupCount += 1;
+    }
+  }
+
+  console.log(`  - 統合した停留所名グループ: ${mergedGroupCount}件（${mergedStopCount}停留所の表記を統合）`);
 }
 
 function parseGtfsFile(filePath, label) {

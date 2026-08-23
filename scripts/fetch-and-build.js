@@ -9,6 +9,7 @@
 
 import { fetchGTFS } from './build-pipeline/fetch-gtfs.js';
 import { parseAndTransform } from './build-pipeline/parse-and-transform.js';
+import { generateRouteDetails } from './build-pipeline/generate-route-details.js';
 import { generateSpots } from './build-pipeline/generate-spots.json.js';
 import { fileURLToPath } from 'url';
 
@@ -26,6 +27,10 @@ async function runBuild() {
     console.log('\n【ステップ2】GTFS をパース・変換');
     console.log('-------------------------------------');
     await parseAndTransform();
+
+    console.log('\n【ステップ2b】経路（路線・所要時間）情報を生成');
+    console.log('-------------------------------------');
+    await generateRouteDetails();
 
     console.log('\n【ステップ3】観光スポット情報を生成');
     console.log('-------------------------------------');

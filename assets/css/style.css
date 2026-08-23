@@ -14,6 +14,10 @@
   --color-bg: #F6FAF0;             /* 薄緑白 */
   --color-border: #D1D5DB;         /* ボーダー */
   --color-error: #DC2626;          /* エラー */
+  --color-route-rail: #2563EB;     /* 経路表示：電車（青） */
+  --color-route-bus: #2E9E44;      /* 経路表示：バス（緑） */
+  --color-hover: #5BA3D9;          /* 地図ピン・パネル：マウスオーバー中（薄い青） */
+  --color-selected: #1B5E9E;       /* 地図ピン・パネル：選択中（深い青） */
 }
 
 /* ========================================
@@ -31,42 +35,65 @@ html, body {
   background-color: var(--color-bg);
   color: var(--color-text);
   line-height: 1.6;
+  height: 100%;
 }
 
+/* アプリ全体を画面ぴったりに固定する「アプリシェル」構造。
+   body自体はスクロールさせず、ヘッダー（flex:0 0 auto）＋本体
+   （flex:1）の縦フレックスにする。本体の中でさらに左右カラムが
+   それぞれ独立してスクロールする（overflow-y:auto）。
+   このチェーンのどこかでmin-height:0を忘れると、flexの子が
+   縮まずに親を突き破ってページ全体がスクロールしてしまうため、
+   flex:1を指定する要素には必ずmin-height:0もセットすること。 */
 body {
-  padding: 0;
-  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
 }
 
 /* ========================================
-   ヘッダー
+   ヘッダー（約40px・1行に収める）
    ======================================== */
 
 header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
   background: linear-gradient(135deg, var(--color-main) 0%, var(--color-main-deep) 100%);
   color: white;
-  padding: 2rem 1rem;
+  padding: 0.4rem 1rem;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 header h1 {
-  font-size: 1.8rem;
-  margin-bottom: 0.5rem;
+  font-size: 1rem;
+  flex: 0 0 auto;
 }
 
 header p {
-  font-size: 0.9rem;
-  opacity: 0.95;
+  font-size: 0.75rem;
+  opacity: 0.9;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ========================================
-   コンテナ
+   コンテナ（本体：flex:1で残り高さ全部を使う）
    ======================================== */
 
 .container {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
   max-width: 1000px;
   margin: 0 auto;
-  padding: 2rem 1rem;
+  padding: 0.6rem 1rem;
 }
 
 /* ========================================
@@ -74,28 +101,53 @@ header p {
    ======================================== */
 
 #search-form {
+  flex: 0 0 auto;
   background: white;
   border-radius: 8px;
-  padding: 2rem;
+  padding: 0.85rem 1rem;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  margin-bottom: 2rem;
+  margin-bottom: 0.75rem;
 }
 
 .form-group {
-  margin-bottom: 1.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-start;
+  margin-bottom: 0.6rem;
+  max-width: 480px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.form-row .form-group {
+  margin-bottom: 0;
+}
+
+.form-group-departure {
+  flex: 1 1 220px;
+  min-width: 200px;
+}
+
+.form-group-budget {
+  flex: 0 0 220px;
 }
 
 .form-group label {
   display: block;
   font-weight: 600;
-  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
+  margin-bottom: 0.3rem;
   color: var(--color-text);
 }
 
-.form-group input[type="text"],
-.form-group input[type="range"] {
+.form-group input[type="text"] {
   width: 100%;
-  padding: 0.75rem;
+  padding: 0.55rem 0.75rem;
   border: 1px solid var(--color-border);
   border-radius: 4px;
   font-size: 1rem;
@@ -107,17 +159,59 @@ header p {
   box-shadow: 0 0 0 3px rgba(114, 176, 29, 0.1);
 }
 
-.form-group input[type="range"] {
-  padding: 0.5rem;
-  cursor: pointer;
-  accent-color: var(--color-main);
-}
-
 #budget-display {
   display: inline-block;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--color-main);
+  font-size: 0.95rem;
+}
+
+/* 予算ステッパー */
+.budget-stepper {
+  display: flex;
+  align-items: stretch;
+  gap: 0.4rem;
+}
+
+.budget-stepper button {
+  flex: 0 0 2rem;
+  border: 1px solid var(--color-border);
+  background-color: white;
+  color: var(--color-main-deep);
   font-size: 1.1rem;
+  font-weight: 700;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s, border-color 0.2s;
+}
+
+.budget-stepper button:hover:not(:disabled) {
+  background-color: var(--color-main-light);
+  border-color: var(--color-main);
+}
+
+.budget-stepper button:disabled {
+  color: var(--color-border);
+  cursor: not-allowed;
+}
+
+.budget-stepper input[type="number"] {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.25rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background-color: var(--color-main-light);
+  cursor: default;
+}
+
+.budget-stepper input[type="number"]::-webkit-inner-spin-button,
+.budget-stepper input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 /* 出発駅サジェスション */
@@ -150,12 +244,13 @@ header p {
 
 /* 検索ボタン */
 #search-btn {
+  flex: 0 0 auto;
   background: linear-gradient(135deg, var(--color-main) 0%, var(--color-main-deep) 100%);
   color: white;
   border: none;
-  padding: 0.75rem 2rem;
+  padding: 0.45rem 2rem;
   border-radius: 4px;
-  font-size: 1rem;
+  font-size: 0.95rem;
   font-weight: 600;
   cursor: pointer;
   width: 100%;
@@ -175,20 +270,350 @@ header p {
    結果一覧
    ======================================== */
 
-#results-container {
+/* ========================================
+   全体レイアウト（アプリシェル：PC二段組／スマホ：タブ切替）
+   ======================================== */
+
+/* #app-layoutは常に表示する（検索フォームまで一緒に隠さない。過去に
+   app-layoutごとhiddenにして検索フォームが消えた不具合の反省）。
+   本体（.container）のflex:1を受けて、#app-layout自身もflex:1＋
+   min-height:0で残り高さいっぱいに広がる。中身（左右カラム）が
+   それぞれ独立してoverflow-y:autoでスクロールする構造にすることで、
+   ページ全体（body）はスクロールさせない。 */
+.app-layout {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 検索フォーム＋地図（PC）／検索フォームのみ（スマホ）を格納する左カラム。
+   内部もflex-columnにして「検索フォームは自然な高さ、地図は残り全部」
+   という配分にする。min-height:0がないとflexの子（地図）が縮まず
+   高さが確定しない＝地図の枠が定まらない不具合の直接原因になる。 */
+.layout-left {
+  flex: 0 0 auto; /* スマホ：検索フォームだけなので自然な高さ */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* PCでは#spots-mapがここに入る。スマホでは空になるため高さ0に畳む */
+#map-slot-desktop {
+  flex: 0 0 auto;
+  height: 0;
+  overflow: hidden;
+}
+
+.mobile-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 0.5rem;
+  border: 1px solid var(--color-border);
+  background-color: white;
+  color: var(--color-text-sub);
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.tab-btn.active {
+  background-color: var(--color-main);
+  color: white;
+  border-color: var(--color-main);
+}
+
+/* 右カラム：スマホでは検索フォームの残り全部（flex:1）、
+   PCではグリッドの1カラム分。中はタブ＋タブパネルのflex-column。 */
+.layout-right {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tab-panel {
   display: none;
 }
 
-#results-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 1.5rem;
-  margin-bottom: 2rem;
+/* アクティブなタブパネルも「残り高さいっぱい」を引き継ぐflex-column
+   にする。中の要素（並び替えUIは自然な高さ、一覧本体はflex:1で
+   スクロール）がこれに乗る。 */
+.tab-panel.active {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
+/* スマホの「地図」タブ：パネルの残り高さいっぱいに広がる */
+#map-slot-mobile {
+  flex: 1;
+  min-height: 0;
+}
+
+/* 検索前は非表示。JSが#app-layoutに has-results クラスを付けたときのみ表示する。
+   data-view="results" の条件も含めることで、詳細画面表示中に
+   同時表示されることがないようにしている（!important不要）。 */
+#results-container {
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+#app-layout[data-view="results"].has-results #results-container {
+  display: flex;
+}
+
+/* 詳細画面表示中（#app-layout[data-view="detail"]）はタブ／一覧・地図タブパネルを隠し、
+   #detail-container を表示する。 */
+#detail-container {
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#app-layout[data-view="detail"] .mobile-tabs,
+#app-layout[data-view="detail"] .tab-panel {
+  display: none;
+}
+
+#app-layout[data-view="detail"] #detail-container {
+  display: flex;
+  flex: 1;
+}
+
+/* ブレークポイント：CSSピクセル基準のため高倍率ズームでは実効幅が縮む
+   （150%ズームなら実際の画面幅の2/3）。900pxだと125〜150%ズームで
+   簡単に下回ってしまうため760pxまで下げ、さらに左カラムをminmax()で
+   可変にすることで、より狭い実効幅でも二段組を維持できるようにする。
+   layout-controller.js の DESKTOP_QUERY もこの値と必ず一致させること。 */
+@media (min-width: 760px) {
+  .app-layout {
+    display: grid;
+    grid-template-columns: minmax(280px, 42%) 1fr;
+    gap: 1.25rem;
+    /* align-items未指定＝stretchで左右カラムを同じ高さに揃え、
+       それぞれの内部でoverflow-y:autoさせる */
+  }
+
+  .container {
+    max-width: 1200px;
+  }
+
+  /* PCでは地図を左カラムに表示するため、タブUIは不要 */
+  .mobile-tabs {
+    display: none;
+  }
+
+  .tab-panel[data-tab-panel="list"] {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .tab-panel[data-tab-panel="map"] {
+    display: none;
+  }
+
+  /* #app-layout[data-view="detail"] はID+属性2つでこれらより必ず優先される */
+  #app-layout[data-view="detail"] .tab-panel {
+    display: none;
+  }
+
+  /* PCでは左カラムが「検索フォーム＋地図」の2要素になる */
+  #map-slot-desktop {
+    flex: 1;
+    min-height: 200px;
+    height: auto;
+    margin-top: 0.75rem;
+    overflow: visible;
+  }
+
+  /* PC二段組では左カラム幅（minmax）自体が制約になるため、
+     縦積み用の最大幅指定は解除する */
+  .form-row {
+    max-width: none;
+    margin-left: 0;
+    margin-right: 0;
+  }
+}
+
+/* 並び替えUI（自然な高さ。一覧本体側がflex:1でスクロールする） */
+#sort-controls {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+}
+
+#sort-controls label {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+#sort-select {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  font-size: 0.9rem;
+  background-color: white;
+  cursor: pointer;
+}
+
+/* 結果一覧の地図（#spots-map自体はスロットいっぱいに広がる） */
+#spots-map {
+  width: 100%;
+  height: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.map-pin-wrapper {
+  background: none;
+  border: none;
+}
+
+.map-pin {
+  display: block;
+  box-sizing: border-box;
+  transition: transform 0.15s;
+}
+
+/* スポットのピン：小さめの点にして密集時の重なりを軽減 */
+.map-pin-spot {
+  width: 14px;
+  height: 14px;
+  background-color: var(--color-main);
+  border: 1.5px solid white;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+/* ホバーと選択は独立した状態として扱う（色・サイズ両方で段階を付け、
+   色覚特性のある方にも区別しやすくする）。選択中は最も目立たせたいため、
+   両方同時に付く場合に備えて選択のルールをホバーより後ろに置き、
+   選択の見た目が優先されるようにしている。 */
+.map-pin-spot.map-pin-hover {
+  width: 18px;
+  height: 18px;
+  margin: -2px 0 0 -2px;
+  background-color: var(--color-hover);
+  border-width: 2px;
+}
+
+.map-pin-spot.map-pin-selected {
+  width: 24px;
+  height: 24px;
+  margin: -5px 0 0 -5px;
+  background-color: var(--color-selected);
+  border-width: 2.5px;
+}
+
+/* 出発駅のピン：大きめのダイヤ形＋常時ラベルで一目で分かるように */
+.map-pin-departure {
+  width: 24px;
+  height: 24px;
+  background-color: var(--color-accent);
+  border: 3px solid white;
+  border-radius: 6px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+  transform: rotate(45deg);
+}
+
+.map-departure-tooltip {
+  background-color: var(--color-accent-deep);
+  color: white;
+  border: none;
+  font-weight: 700;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.6rem;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.map-departure-tooltip::before {
+  border-top-color: var(--color-accent-deep);
+}
+
+/* 地図ピンのポップアップ（スポット名・短い説明・詳細ボタン） */
+.map-popup {
+  min-width: 160px;
+}
+
+.map-popup-title {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--color-text);
+}
+
+.map-popup-description {
+  font-size: 0.85rem;
+  color: var(--color-text-sub);
+  margin-bottom: 0.5rem;
+}
+
+.popup-detail-btn {
+  width: 100%;
+  padding: 0.4rem;
+  background-color: var(--color-main);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.popup-detail-btn:hover {
+  background-color: var(--color-main-deep);
+}
+
+/* 固定ブレークポイントではなく実際のカラム幅（＝右カラムの実効幅）に
+   追従するauto-fillにしている。ビューポート幅そのものを基準にすると
+   高倍率ズームで右カラムが実際より広いと誤判定されるため。
+   flex:1 + min-height:0 + overflow-y:autoで、一覧の中だけが
+   独立してスクロールするようにしている（ページ全体はスクロールしない）。 */
+/* align-items: start が重要。デフォルトのstretchのままだと、
+   .spot-card が overflow:hidden を持つため（CSS仕様上「スクロール
+   コンテナ」として扱われ、自動最小サイズが0になる）、grid行の高さ計算と
+   ストレッチが噛み合わずカードが数pxに潰れる不具合が起きていた。
+   startにしてカード自身のmin-height/内容に応じた高さを優先させる。 */
+#results-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-auto-rows: min-content;
+  align-items: start;
+  align-content: start;
+  gap: 1rem;
+  padding-bottom: 0.5rem;
+}
+
+/* カード1枚 約280px（画像130 + タイトル24 + 説明2行 + 情報行20 + ボタン40）を
+   目安に圧縮。一覧は「比較して選ぶ」画面であり、説明文の全文は
+   詳細画面に譲る方針（2行で打ち切り、3行目以降は...で省略）。 */
 .spot-card {
   display: flex;
   flex-direction: column;
+  min-height: 280px;
   background: white;
   border-radius: 8px;
   overflow: hidden;
@@ -197,14 +622,29 @@ header p {
   cursor: pointer;
 }
 
+/* ホバーの浮き上がり効果はbox-shadow、色分けはoutlineと別プロパティに
+   分けているため、ホバーとの重なりでも競合しない。 */
 .spot-card:hover {
   transform: translateY(-4px);
   box-shadow: 0 8px 16px rgba(0, 0, 0, 0.15);
+  outline: 2px solid var(--color-hover);
+  outline-offset: -2px;
+}
+
+/* 地図のピン選択と連動するハイライト（クリックで選択したカード）。
+   マウスの位置（:hover）に関わらず常に表示され続ける必要があるため、
+   outlineプロパティを使い（box-shadowだとホバー時の浮き上がり用
+   box-shadowと競合し、ホバーが外れるまで選択枠が消えてしまっていた）、
+   さらに:hoverのoutlineより優先されるよう!importantで明示的に固定する。 */
+.spot-card-selected {
+  outline: 3px solid var(--color-selected) !important;
+  outline-offset: -3px;
 }
 
 .spot-image {
   width: 100%;
-  height: 200px;
+  height: 130px;
+  flex-shrink: 0;
   object-fit: cover;
 }
 
@@ -214,37 +654,52 @@ header p {
   align-items: center;
   justify-content: center;
   background-color: var(--color-main-light, #e8f5d0);
-  font-size: 3rem;
+  font-size: 2rem;
 }
 
 .spot-card h3 {
-  padding: 1rem 1rem 0.5rem;
-  font-size: 1.1rem;
+  padding: 0.5rem 0.75rem 0.2rem;
+  font-size: 1rem;
+  line-height: 1.25;
   color: var(--color-text);
 }
 
 .spot-description {
-  padding: 0 1rem;
-  font-size: 0.9rem;
+  padding: 0 0.75rem;
+  font-size: 0.82rem;
+  line-height: 1.3;
   color: var(--color-text-sub);
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.35rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .spot-pageviews,
 .spot-distance {
-  padding: 0 1rem;
-  font-size: 0.85rem;
+  padding: 0 0.75rem;
+  font-size: 0.8rem;
   color: var(--color-text-sub);
   margin-bottom: 0.25rem;
 }
 
+.spot-summary {
+  padding: 0 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-main-deep);
+  margin-bottom: 0.4rem;
+}
+
 .detail-btn {
   width: 100%;
-  padding: 0.75rem;
+  padding: 0.5rem;
   margin-top: auto;
   background-color: var(--color-main);
   color: white;
   border: none;
+  font-size: 0.9rem;
   cursor: pointer;
   font-weight: 600;
   transition: background-color 0.2s;
@@ -259,15 +714,11 @@ header p {
    ======================================== */
 
 #detail-container {
-  display: none;
   background: white;
   border-radius: 8px;
-  padding: 2rem;
+  padding: 1.5rem;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-}
-
-#detail-container.show {
-  display: block;
+  overflow-y: auto;
 }
 
 .detail-image {
@@ -296,6 +747,54 @@ header p {
 
 #back-btn:hover {
   background-color: var(--color-text);
+}
+
+/* 経路情報 */
+.route-info {
+  background-color: #FAFAFA;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin-top: 1.5rem;
+}
+
+.route-leg {
+  font-size: 0.95rem;
+  color: var(--color-text);
+  background-color: white;
+  border: 2px solid var(--color-border);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+}
+
+.route-leg-rail {
+  border-color: var(--color-route-rail);
+}
+
+.route-leg-bus {
+  border-color: var(--color-route-bus);
+}
+
+.route-transfer-note {
+  font-size: 0.85rem;
+  color: var(--color-text-sub);
+  margin: 0.25rem 0 0.25rem 1rem;
+}
+
+.route-total {
+  font-weight: 700;
+  color: var(--color-main-deep);
+  margin-top: 0.5rem;
+}
+
+.route-disclaimer {
+  font-size: 0.8rem;
+  color: var(--color-text-sub);
+  margin-top: 0.5rem;
+}
+
+.route-unresolved {
+  font-size: 0.9rem;
+  color: var(--color-text-sub);
 }
 
 /* リンク */
@@ -338,24 +837,22 @@ header p {
    レスポンシブ
    ======================================== */
 
-@media (max-width: 768px) {
-  header h1 {
-    font-size: 1.4rem;
-  }
-
+/* 760px未満（縦積みレイアウト）専用の調整。
+   ヘッダー・検索フォームの余白縮小はブレークポイントに関わらず常時
+   適用したいため、ここでは上書きしない（過去にここで元の大きい値へ
+   戻してしまい、縮小指示が効かなくなっていた反省を踏まえている）。 */
+@media (max-width: 759px) {
   .container {
-    padding: 1rem;
+    padding: 0.5rem 0.75rem;
   }
 
-  #search-form {
-    padding: 1.5rem;
+  .form-row {
+    flex-direction: column;
+    gap: 0.5rem;
   }
 
-  #results-list {
-    grid-template-columns: 1fr;
-  }
-
-  #detail-container {
-    padding: 1.5rem;
+  .form-group-budget {
+    flex: 0 0 auto;
+    width: 100%;
   }
 }

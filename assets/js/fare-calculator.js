@@ -13,6 +13,8 @@
  * フェーズ2以降：汎用グラフ探索（ダイクストラ法）へ移行予定
  */
 
+import { estimateSelectionMinutes, estimateRideMinutes } from './route-duration.js';
+
 const RAIL_OPERATOR_ID = 'kotoden';
 const BUS_OPERATOR_ID = 'kotoden-bus';
 
@@ -21,6 +23,7 @@ export class FareCalculator {
     this.fareData = data.fareData;
     this.stopsMetadata = data.stopsMetadata;
     this.routeInfo = data.routeInfo;
+    this.routeDetails = data.routeDetails;
     this.stationsByName = data.stationsByName;
     this.stopIdToName = new Map(
       this.stopsMetadata.map((s) => [s.stop_id, s.stop_name])
@@ -101,6 +104,7 @@ export class FareCalculator {
                 reachBy: 'transfer',
                 viaOperator: BUS_OPERATOR_ID,
                 transferAt: railStationName,
+                legFares: [railInfo.fare, busFare],
               });
               transferCount += 1;
             }
@@ -111,16 +115,24 @@ export class FareCalculator {
       console.log(`✅ 乗り継ぎ到達駅: ${transferCount}駅`);
 
       // 結果をリスト化（各駅名に属する全stop_idを付与＝スポット検索用）
+      // selectionTimeMin は「乗車時間＋期待待ち時間」（分）。アクセス駅選定（SpotFinder）で
+      // 「選定時間＋徒歩時間」の総所要時間を比較するために使う。
+      // rideDurationMin は乗車時間のみ（待ち時間を含まない）。カード・詳細画面の
+      // 所要時間表示に使う。どちらも経路が確定できない場合はnull。
       const result = Array.from(reachable.entries()).map(([stationName, info]) => {
         const station = this.stationsByName[stationName];
-        return {
+        const stationEntry = {
           stop_id: stationName,
           stop_name: stationName,
           stop_ids: station ? station.stops.map((s) => s.stop_id) : [],
           fare: info.fare,
           reachBy: info.reachBy,
           transferAt: info.transferAt || null,
+          legFares: info.legFares || null,
         };
+        stationEntry.selectionTimeMin = estimateSelectionMinutes(this.routeDetails, departureStationName, stationEntry);
+        stationEntry.rideDurationMin = estimateRideMinutes(this.routeDetails, departureStationName, stationEntry);
+        return stationEntry;
       });
 
       return result;

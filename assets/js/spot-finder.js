@@ -3,6 +3,13 @@
  * 到達可能な駅から周辺スポットを検索、知名度順にソート
  */
 
+// 徒歩速度（分速80m）。徒歩時間 = 距離(km) * 1000 / WALK_SPEED_M_PER_MIN
+const WALK_SPEED_M_PER_MIN = 80;
+
+function walkMinutes(distanceKm) {
+  return (distanceKm * 1000) / WALK_SPEED_M_PER_MIN;
+}
+
 export class SpotFinder {
   constructor(data) {
     this.spots = data.spots; // QID → スポット詳細の辞書
@@ -36,8 +43,11 @@ export class SpotFinder {
     try {
       // スポットはQID単位で最終的に1件だけ表示する。
       // 同じスポットが複数の到達駅の半径内に入ることがあるため、
-      // 「¥Xで行ける」が前提のこのアプリでは運賃が最も安い到達駅を採用する
-      // （同額の場合は距離が近い方を優先）。
+      // どの到達駅をアクセス駅として採用するかを決める必要がある。
+      // 運賃は「予算内かどうか」の制約としてすでにfare-calculator側で
+      // フィルタ済みのため、ここでの優劣判定は総所要時間
+      // （乗車時間＋徒歩時間）で行う。乗車時間が長くても徒歩0.1kmの駅が
+      // 乗車7分・徒歩0.5kmの駅に勝ってしまう、という問題を避けるため。
       const bestSpotByQid = new Map();
 
       for (const station of reachableStations) {
@@ -67,16 +77,18 @@ export class SpotFinder {
             source_station: station.stop_name,
             source_stop_id: station.stop_id,
             source_fare: station.fare,
+            source_reach_by: station.reachBy,
+            source_transfer_at: station.transferAt,
+            source_leg_fares: station.legFares,
+            source_ride_duration_min: station.rideDurationMin,
+            source_total_time_min:
+              (station.selectionTimeMin ?? Infinity) + walkMinutes(ref.distance),
           };
 
           const existing = bestSpotByQid.get(qid);
-          const isCheaper = !existing || candidate.source_fare < existing.source_fare;
-          const isSameFareButCloser =
-            existing &&
-            candidate.source_fare === existing.source_fare &&
-            candidate.distance < existing.distance;
+          const isFaster = !existing || candidate.source_total_time_min < existing.source_total_time_min;
 
-          if (isCheaper || isSameFareButCloser) {
+          if (isFaster) {
             bestSpotByQid.set(qid, candidate);
           }
         });

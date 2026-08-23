@@ -8,6 +8,7 @@ export class GTFSLoader {
     this.fareData = null;
     this.stopsMetadata = null;
     this.routeInfo = null;
+    this.routeDetails = null; // 出発駅名 → {到着駅名: RouteEntry}（経路・所要時間、詳細はgenerate-route-details.js）
     this.stationsByName = null; // 駅名 → {stop_name, stop_lat, stop_lon, stops: [{stop_id, operator_id}]}
     this.spots = null; // QID → スポット詳細の辞書
     this.spotsByStation = null; // stop_id → [{qid, distance}, ...] の参照配列
@@ -22,6 +23,7 @@ export class GTFSLoader {
         this.fareData = window.EMBEDDED_FARE_DATA;
         this.stopsMetadata = window.EMBEDDED_STOPS_METADATA;
         this.routeInfo = window.EMBEDDED_ROUTE_INFO;
+        this.routeDetails = window.EMBEDDED_ROUTE_DETAILS;
         this.stationsByName = window.EMBEDDED_STATIONS_BY_NAME;
         this.spots = window.EMBEDDED_SPOTS_BY_STATION.spots;
         this.spotsByStation = window.EMBEDDED_SPOTS_BY_STATION.stations;
@@ -29,12 +31,13 @@ export class GTFSLoader {
         // 開発時：埋め込みデータがないため data/derived/*.json を fetch で読み込む
         console.log('ℹ️ 埋め込みデータなし。data/derived/*.json を fetch で読み込みます（開発モード）');
         const derivedBase = 'data/derived/';
-        const [fareData, stopsMetadata, stationsByName, routeInfo, spotsData, rankingConfig] =
+        const [fareData, stopsMetadata, stationsByName, routeInfo, routeDetails, spotsData, rankingConfig] =
           await Promise.all([
             this.fetchJson(`${derivedBase}fare-lookup-tables.json`),
             this.fetchJson(`${derivedBase}stops-metadata.json`),
             this.fetchJson(`${derivedBase}stations-by-name.json`),
             this.fetchJson(`${derivedBase}route-info.json`),
+            this.fetchJson(`${derivedBase}route-details.json`),
             this.fetchJson(`${derivedBase}spots-by-station.json`),
             this.fetchJson('config/spot-ranking-config.json'),
           ]);
@@ -42,6 +45,7 @@ export class GTFSLoader {
         this.fareData = fareData;
         this.stopsMetadata = stopsMetadata;
         this.routeInfo = routeInfo;
+        this.routeDetails = routeDetails;
         this.stationsByName = stationsByName;
         this.spots = spotsData.spots;
         this.spotsByStation = spotsData.stations;
@@ -61,6 +65,7 @@ export class GTFSLoader {
         fareData: this.fareData,
         stopsMetadata: this.stopsMetadata,
         routeInfo: this.routeInfo,
+        routeDetails: this.routeDetails,
         stationsByName: this.stationsByName,
         spots: this.spots,
         spotsByStation: this.spotsByStation,

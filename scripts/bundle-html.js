@@ -6,10 +6,11 @@
  * 
  * 処理：
  * 1. index.html を読み込む
- * 2. assets/js の各スクリプトをインライン化
- * 3. assets/css をインライン化
- * 4. data/derived の JSON をJavaScriptオブジェクトリテラルとしてインライン化
- * 5. dist/index.html と docs/index.html に出力
+ * 2. assets/vendor/leaflet（地図ライブラリ）をインライン化
+ * 3. assets/js の各スクリプトをインライン化
+ * 4. assets/css をインライン化
+ * 5. data/derived の JSON をJavaScriptオブジェクトリテラルとしてインライン化
+ * 6. dist/index.html と docs/index.html に出力
  *    （GitHub Pages は main branch / docs folder を配信元に設定）
  */
 
@@ -25,6 +26,8 @@ const rootDir = path.join(__dirname, '..');
 const indexPath = path.join(rootDir, 'index.html');
 const cssPath = path.join(rootDir, 'assets/css/style.css');
 const jsDir = path.join(rootDir, 'assets/js');
+const leafletCssPath = path.join(rootDir, 'assets/vendor/leaflet/leaflet.css');
+const leafletJsPath = path.join(rootDir, 'assets/vendor/leaflet/leaflet.js');
 const derivedDir = path.join(rootDir, 'data/derived');
 const distDir = path.join(rootDir, 'dist');
 const distIndexPath = path.join(distDir, 'index.html');
@@ -47,7 +50,22 @@ async function bundleHTML() {
     console.log('📄 index.html を読み込み中...');
     let html = fs.readFileSync(indexPath, 'utf-8');
 
-    // 2. CSS をインライン化
+    // 2. Leaflet（地図ライブラリ）をインライン化
+    //    CDN参照ではなくバンドルに埋め込む方針のため、node_modulesからコピーして
+    //    リポジトリ管理下に置いた assets/vendor/leaflet/ を読み込む
+    console.log('🗺️  Leaflet をインライン化中...');
+    const leafletCss = fs.readFileSync(leafletCssPath, 'utf-8');
+    html = html.replace(
+      /<link rel="stylesheet" href="assets\/vendor\/leaflet\/leaflet\.css">/,
+      `<style>\n${leafletCss}\n</style>`
+    );
+    const leafletJs = fs.readFileSync(leafletJsPath, 'utf-8');
+    html = html.replace(
+      /<script src="assets\/vendor\/leaflet\/leaflet\.js"><\/script>/,
+      `<script>\n${leafletJs}\n</script>`
+    );
+
+    // 3. CSS をインライン化
     console.log('🎨 CSS をインライン化中...');
     const css = fs.readFileSync(cssPath, 'utf-8');
     html = html.replace(
@@ -55,25 +73,25 @@ async function bundleHTML() {
       `<style>\n${css}\n</style>`
     );
 
-    // 3. モジュールスクリプトを削除（後でインライン化）
+    // 4. モジュールスクリプトを削除（後でインライン化）
     html = html.replace(
       /<script type="module" src="assets\/js\/main\.js"><\/script>/,
       ''
     );
 
-    // 4. 派生JSONをインライン化
+    // 5. 派生JSONをインライン化
     console.log('💾 派生データをインライン化中...');
     const inlineDataScript = await generateInlineDataScript(derivedDir);
 
-    // 5. JavaScriptをインライン化
+    // 6. JavaScriptをインライン化
     console.log('⚙️  JavaScriptをインライン化中...');
     const inlineJSScript = await generateInlineJSScript(jsDir);
 
-    // 6. body 終了タグ直前に<script>を追加
+    // 7. body 終了タグ直前に<script>を追加
     const combinedScript = `<script>\n${inlineDataScript}\n${inlineJSScript}\n</script>`;
     html = html.replace('</body>', `  ${combinedScript}\n</body>`);
 
-    // 7. dist/index.html に保存
+    // 8. dist/index.html に保存
     fs.writeFileSync(distIndexPath, html);
 
     const fileSize = fs.statSync(distIndexPath).size;
@@ -83,7 +101,7 @@ async function bundleHTML() {
     console.log(`   出力: ${distIndexPath}`);
     console.log(`   サイズ: ${fileSizeKB} KB`);
 
-    // 8. docs/index.html にもコピー（GitHub Pages の配信元）
+    // 9. docs/index.html にもコピー（GitHub Pages の配信元）
     if (!fs.existsSync(docsDir)) {
       fs.mkdirSync(docsDir, { recursive: true });
     }
@@ -114,6 +132,7 @@ async function generateInlineDataScript(derivedDir) {
     'stops-metadata.json': 'EMBEDDED_STOPS_METADATA',
     'stations-by-name.json': 'EMBEDDED_STATIONS_BY_NAME',
     'route-info.json': 'EMBEDDED_ROUTE_INFO',
+    'route-details.json': 'EMBEDDED_ROUTE_DETAILS',
     'spots-by-station.json': 'EMBEDDED_SPOTS_BY_STATION',
   };
 
@@ -149,8 +168,12 @@ async function generateInlineDataScript(derivedDir) {
 async function generateInlineJSScript(jsDir) {
   const jsFiles = [
     'gtfs-loader.js',
+    'route-duration.js',
     'fare-calculator.js',
     'spot-finder.js',
+    'route-formatter.js',
+    'map-view.js',
+    'layout-controller.js',
     'main.js',
   ];
 

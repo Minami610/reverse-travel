@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>逆引き旅行アプリ - 予算から行き先を探す</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚌</text></svg>">
+  <link rel="stylesheet" href="assets/vendor/leaflet/leaflet.css">
+  <script src="assets/vendor/leaflet/leaflet.js"></script>
   <link rel="stylesheet" href="assets/css/style.css">
 </head>
 <body>
@@ -14,47 +16,89 @@
   </header>
 
   <div class="container">
-    <!-- 検索フォーム -->
-    <form id="search-form">
-      <div class="form-group">
-        <label for="departure-input">出発駅を選択</label>
-        <input
-          type="text"
-          id="departure-input"
-          placeholder="駅名を入力..."
-          autocomplete="off"
-          required
-        >
-        <div id="departure-suggestions"></div>
+    <!-- PC：左カラム（sticky）＝検索フォーム＋地図／右カラム＝並び替え＋一覧
+         スマホ：検索フォームのみ上部固定、その下は「一覧」「地図」タブ切替 -->
+    <div id="app-layout" class="app-layout" data-view="results">
+      <div class="layout-left">
+        <!-- 検索フォーム -->
+        <form id="search-form">
+          <div class="form-row">
+            <div class="form-group form-group-departure">
+              <label for="departure-input">出発駅を選択</label>
+              <input
+                type="text"
+                id="departure-input"
+                placeholder="駅名を入力..."
+                autocomplete="off"
+                required
+              >
+              <div id="departure-suggestions"></div>
+            </div>
+
+            <div class="form-group form-group-budget">
+              <label for="budget-input">
+                予算：<span id="budget-display">¥500</span>
+              </label>
+              <div class="budget-stepper">
+                <button type="button" id="budget-decrement" aria-label="予算を100円減らす">−</button>
+                <input
+                  type="number"
+                  id="budget-input"
+                  min="200"
+                  max="1000"
+                  step="100"
+                  value="500"
+                  readonly
+                >
+                <button type="button" id="budget-increment" aria-label="予算を100円増やす">＋</button>
+              </div>
+            </div>
+          </div>
+
+          <button type="submit" id="search-btn">検索</button>
+        </form>
+
+        <!-- PCではここに地図(#spots-map)が入る（sticky左カラムの一部） -->
+        <div id="map-slot-desktop" class="map-slot"></div>
       </div>
 
-      <div class="form-group">
-        <label for="budget-input">
-          予算：<span id="budget-display">¥500</span>
-        </label>
-        <input
-          type="range"
-          id="budget-input"
-          min="200"
-          max="1000"
-          step="100"
-          value="500"
-        >
+      <div class="layout-right">
+        <!-- スマホのみ表示：一覧／地図タブ -->
+        <div class="mobile-tabs">
+          <button type="button" class="tab-btn active" data-tab="list">一覧</button>
+          <button type="button" class="tab-btn" data-tab="map">地図</button>
+        </div>
+
+        <div class="tab-panel active" data-tab-panel="list">
+          <div id="results-container">
+            <div id="sort-controls">
+              <label for="sort-select">並び替え：</label>
+              <select id="sort-select">
+                <option value="recommended">おすすめ順</option>
+                <option value="price">価格が安い順</option>
+                <option value="duration">所要時間が短い順</option>
+                <option value="distance">距離が近い順</option>
+              </select>
+            </div>
+            <div id="results-list"></div>
+          </div>
+        </div>
+
+        <div class="tab-panel" data-tab-panel="map">
+          <!-- スマホの「地図」タブ選択時にここへ#spots-mapが移動する -->
+          <div id="map-slot-mobile" class="map-slot"></div>
+        </div>
+
+        <!-- スポット詳細表示エリア（一覧／地図タブと排他表示。data-view="detail"のときのみ表示） -->
+        <div id="detail-container">
+          <button id="back-btn">← 一覧に戻る</button>
+          <div id="detail-content"></div>
+        </div>
       </div>
-
-      <button type="submit" id="search-btn">検索</button>
-    </form>
-
-    <!-- 結果表示エリア -->
-    <div id="results-container">
-      <div id="results-list"></div>
     </div>
 
-    <!-- スポット詳細表示エリア -->
-    <div id="detail-container">
-      <button id="back-btn">← 一覧に戻る</button>
-      <div id="detail-content"></div>
-    </div>
+    <!-- 地図本体（PC/スマホどちらのスロットに入るかはJSが画面幅に応じて切り替える） -->
+    <div id="spots-map"></div>
   </div>
 
   <!-- ES6モジュール：開発環境用 -->
@@ -67,6 +111,7 @@
       window.EMBEDDED_STOPS_METADATA = [ ... ];
       window.EMBEDDED_STATIONS_BY_NAME = { ... };
       window.EMBEDDED_ROUTE_INFO = { ... };
+      window.EMBEDDED_ROUTE_DETAILS = { ... };
       window.EMBEDDED_SPOTS_BY_STATION = { ... };
       window.EMBEDDED_SPOT_RANKING_CONFIG = { ... };
     </script>
