@@ -84,9 +84,48 @@ const municipalityTablePath = path.join(
   __dirname,
   '../../data/derived/national/municipality-to-pref.json'
 );
-const municipalityTable = fs.existsSync(municipalityTablePath)
-  ? JSON.parse(fs.readFileSync(municipalityTablePath, 'utf-8'))
-  : null;
+const PREF_NAMES = [
+  '北海道', '青森県', '岩手県', '宮城県', '秋田県', '山形県', '福島県',
+  '茨城県', '栃木県', '群馬県', '埼玉県', '千葉県', '東京都', '神奈川県',
+  '新潟県', '富山県', '石川県', '福井県', '山梨県', '長野県', '岐阜県',
+  '静岡県', '愛知県', '三重県', '滋賀県', '京都府', '大阪府', '兵庫県',
+  '奈良県', '和歌山県', '鳥取県', '島根県', '岡山県', '広島県', '山口県',
+  '徳島県', '香川県', '愛媛県', '高知県', '福岡県', '佐賀県', '長崎県',
+  '熊本県', '大分県', '宮崎県', '鹿児島県', '沖縄県',
+];
+const GENERATE_MUNICIPALITY_TABLE_HINT =
+  '以下を実行して対応表を生成してください:\n  node scripts/build-pipeline/generate-municipality-table.js';
+
+/**
+ * 市区町村→都道府県対応表を読み込む。
+ *
+ * 【背景】このファイルはdata/derived/配下にあり.gitignore対象のため、gitには
+ * 追跡されない。未生成のまま気づかずビルドすると、resolvePrefecture()が
+ * 常にpref:nullを返し、全項目がbboxベースのフォールバックに静かに流れる
+ * （フォールバック率100%）。「各段階で件数をログし、0件なら失敗させる」
+ * 方針に基づき、ファイル欠如・47都道府県のいずれかが欠落、のどちらも
+ * 警告ではなく即座にエラーで停止させる。
+ */
+function loadMunicipalityTable() {
+  if (!fs.existsSync(municipalityTablePath)) {
+    throw new Error(
+      `【致命的エラー】市区町村→都道府県対応表が見つかりません: ${municipalityTablePath}\n${GENERATE_MUNICIPALITY_TABLE_HINT}`
+    );
+  }
+  const table = JSON.parse(fs.readFileSync(municipalityTablePath, 'utf-8'));
+  const presentPrefs = new Set(Object.values(table));
+  const missing = PREF_NAMES.filter((pref) => !presentPrefs.has(pref));
+  if (missing.length > 0) {
+    throw new Error(
+      `【致命的エラー】市区町村→都道府県対応表に以下の都道府県が見つかりません: ${missing.join(', ')}\n` +
+        `対応表が壊れているか古い可能性があります。${GENERATE_MUNICIPALITY_TABLE_HINT}`
+    );
+  }
+  console.log(`✅ 市区町村→都道府県対応表を読み込み（${Object.keys(table).length}エントリ、47都道府県すべて確認済み）`);
+  return table;
+}
+
+const municipalityTable = loadMunicipalityTable();
 
 /**
  * P131の1〜2ホップ先の地名ラベルから都道府県を判定する。
@@ -105,29 +144,95 @@ const municipalityTable = fs.existsSync(municipalityTablePath)
  *   hops=2: P131の1段目が町丁等で不明、2段目で市区町村テーブルにより解決
  *   pref=null: いずれも解決できず、呼び出し側でbboxベースにフォールバックする
  */
-export function resolvePrefecture(item) {
-  const PREF_NAME_SET = new Set([
-    '北海道', '青森県', '岩手県', '宮城県', '秋田県', '山形県', '福島県',
-    '茨城県', '栃木県', '群馬県', '埼玉県', '千葉県', '東京都', '神奈川県',
-    '新潟県', '富山県', '石川県', '福井県', '山梨県', '長野県', '岐阜県',
-    '静岡県', '愛知県', '三重県', '滋賀県', '京都府', '大阪府', '兵庫県',
-    '奈良県', '和歌山県', '鳥取県', '島根県', '岡山県', '広島県', '山口県',
-    '徳島県', '香川県', '愛媛県', '高知県', '福岡県', '佐賀県', '長崎県',
-    '熊本県', '大分県', '宮崎県', '鹿児島県', '沖縄県',
-  ]);
+const PREF_NAME_SET = new Set(PREF_NAMES);
 
+export function resolvePrefecture(item) {
   for (const label of item.loc1Labels || []) {
     if (PREF_NAME_SET.has(label)) return { pref: label, hops: 0 };
   }
-  if (municipalityTable) {
-    for (const label of item.loc1Labels || []) {
-      if (municipalityTable[label]) return { pref: municipalityTable[label], hops: 1 };
-    }
-    for (const label of item.loc2Labels || []) {
-      if (municipalityTable[label]) return { pref: municipalityTable[label], hops: 2 };
-    }
+  for (const label of item.loc1Labels || []) {
+    if (municipalityTable[label]) return { pref: municipalityTable[label], hops: 1 };
+  }
+  for (const label of item.loc2Labels || []) {
+    if (municipalityTable[label]) return { pref: municipalityTable[label], hops: 2 };
   }
   return { pref: null, hops: null };
+}
+
+/**
+ * hop0/hop1で都道府県が確定しなかった項目だけを対象に、P131をもう1段だけ
+ * 追加クエリで辿る（石引→金沢市のように町丁レベルの1段先で解決するケース）。
+ *
+ * 【背景】主クエリ自体にP131を2ホップ分組み込むと、bbox一括取得の対象が
+ * 数百〜千件規模のため負荷が大きく、富山県で主クエリが57秒→予防的分割で
+ * 114秒に倍増した（全国では京都・大阪等の密集県でさらに悪化する）。
+ * 一方、この追加クエリは「未解決だった項目（実測: 富山県で約20%）」だけを
+ * 対象にするため、件数が絞られ高速に完了する。QID重複排除
+ * （mergeIndexedSpotRegions）が既にある前提では、ここで一部が解決できなくても
+ * 実害はフォールバック配置される程度に留まるため、主クエリを重くしてまで
+ * 全件に2ホップ目を組み込む必要はない。
+ */
+export async function resolveUnresolvedPrefecturesViaFollowUp(items) {
+  const targets = items.filter((item) => {
+    if ((item.loc1Labels || []).length === 0) return false; // P131が0件はそもそも追加クエリでも解決しない
+    return resolvePrefecture(item).pref === null;
+  });
+
+  if (targets.length === 0) {
+    console.log('   → 県判定の追加クエリ: 対象0件のためスキップ');
+    return { targetCount: 0, resolvedCount: 0, elapsedMs: 0 };
+  }
+
+  console.log(`   → 県判定の追加クエリ実行中... (対象${targets.length}件)`);
+  const values = targets.map((item) => `wd:${item.id}`).join(' ');
+  const query = `
+    PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+    PREFIX wd: <http://www.wikidata.org/entity/>
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    SELECT ?item (GROUP_CONCAT(DISTINCT ?loc2Label; separator="|") AS ?loc2Labels) WHERE {
+      VALUES ?item { ${values} }
+      ?item wdt:P131 ?loc1.
+      ?loc1 wdt:P131 ?loc2.
+      ?loc2 rdfs:label ?loc2Label. FILTER(LANG(?loc2Label) = "ja")
+    }
+    GROUP BY ?item
+  `;
+
+  const t0 = Date.now();
+  const params = new URLSearchParams({ query, format: 'json' });
+  const response = await fetch(WIKIDATA_SPARQL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/sparql-results+json',
+      'User-Agent': WIKIDATA_USER_AGENT,
+    },
+    body: params,
+    signal: AbortSignal.timeout(BOX_QUERY_TIMEOUT_MS),
+  });
+  const elapsedMs = Date.now() - t0;
+
+  if (!response.ok) {
+    console.warn(`   ⚠️  県判定の追加クエリ失敗: HTTP ${response.status}（${elapsedMs}ms、フォールバックのまま続行）`);
+    return { targetCount: targets.length, resolvedCount: 0, elapsedMs };
+  }
+
+  const data = await response.json();
+  const loc2ByQid = new Map();
+  for (const binding of data.results.bindings) {
+    loc2ByQid.set(qidFromUri(binding.item.value), splitConcat(binding.loc2Labels?.value));
+  }
+
+  let resolvedCount = 0;
+  for (const item of targets) {
+    item.loc2Labels = loc2ByQid.get(item.id) || [];
+    if (resolvePrefecture(item).pref !== null) resolvedCount += 1;
+  }
+
+  console.log(
+    `   → 県判定の追加クエリ完了: 対象${targets.length}件中${resolvedCount}件を追加解決 (${elapsedMs}ms)`
+  );
+  return { targetCount: targets.length, resolvedCount, elapsedMs };
 }
 
 // WDQSのサーバー側クエリタイムアウトは60秒。それより長めに取り、
@@ -203,10 +308,6 @@ function boxQueryCommonPattern(bbox) {
       OPTIONAL {
         ?item wdt:P131 ?loc1.
         ?loc1 rdfs:label ?loc1Label. FILTER(LANG(?loc1Label) = "ja")
-        OPTIONAL {
-          ?loc1 wdt:P131 ?loc2.
-          ?loc2 rdfs:label ?loc2Label. FILTER(LANG(?loc2Label) = "ja")
-        }
       }
   `;
 }
@@ -249,7 +350,6 @@ function buildBoxQuery(bbox) {
       (GROUP_CONCAT(DISTINCT ?article; separator="|") AS ?articles)
       (GROUP_CONCAT(DISTINCT ?instanceOf; separator="|") AS ?instanceOfs)
       (GROUP_CONCAT(DISTINCT ?loc1Label; separator="|") AS ?loc1Labels)
-      (GROUP_CONCAT(DISTINCT ?loc2Label; separator="|") AS ?loc2Labels)
     WHERE {
       ${boxQueryCommonPattern(bbox)}
       FILTER (
@@ -361,7 +461,6 @@ function parseBoxResultItems(bindings) {
     const articles = splitConcat(binding.articles?.value).sort();
     const instanceOfQids = splitConcat(binding.instanceOfs?.value).map(qidFromUri);
     const loc1Labels = splitConcat(binding.loc1Labels?.value);
-    const loc2Labels = splitConcat(binding.loc2Labels?.value);
 
     items.push({
       id: qid,
@@ -372,7 +471,7 @@ function parseBoxResultItems(bindings) {
       sitelinks: binding.sitelinks?.value ? parseInt(binding.sitelinks.value, 10) : null,
       instanceOfQids,
       loc1Labels,
-      loc2Labels,
+      loc2Labels: [], // resolveUnresolvedPrefecturesViaFollowUp() が後追いで埋める
       latitude,
       longitude,
     });
@@ -839,6 +938,8 @@ export async function generateSpotsForRegion(stops, options = {}) {
   if (failLog.length > 0) {
     console.warn(`   ⚠️  取得を諦めた範囲: ${failLog.length}件（要確認）`);
   }
+
+  await resolveUnresolvedPrefecturesViaFollowUp(regionItems);
 
   const excludedItems = await fetchExcludedItemsForLogging(bbox, { label: `${label} 除外統計` });
   logExclusionStats(regionItems, excludedItems, label);
