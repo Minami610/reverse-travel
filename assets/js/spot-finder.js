@@ -27,8 +27,8 @@ export class SpotFinder {
     } else {
       console.warn('⚠️ スポットランキング設定が埋め込まれていません。デフォルト値を使用');
       this.rankingConfig = {
-        pageview_thresholds: {
-          absolute_threshold: 25000,
+        sitelinks_threshold: {
+          absolute_threshold: 10,
         },
       };
     }
@@ -98,11 +98,11 @@ export class SpotFinder {
       console.log(`📍 収集スポット数（QID重複排除後）: ${allSpots.length}`);
 
       // フィルタリング：知名度が高すぎるものを除外
-      const filtered = this.filterByPageviews(allSpots);
+      const filtered = this.filterBySitelinks(allSpots);
       console.log(`✂️ フィルタ後: ${filtered.length}スポット`);
 
-      // 知名度の低い順（「隠れた」スポット優先）にソート
-      const sorted = this.sortByPageviews(filtered);
+      // 情報充実度（説明文の長さ・画像有無）順にソート
+      const sorted = this.sortByInformativeness(filtered);
 
       return sorted;
     } catch (error) {
@@ -112,44 +112,42 @@ export class SpotFinder {
   }
 
   /**
-   * 絶対値閾値で超有名スポットを除外
+   * 絶対値閾値で超有名スポットを除外（Wikidataのsitelinks=他言語版記事数を使用）。
+   * sitelinksは同順位が多発する（低い値に密集）ため足切り専用とし、順位付けには使わない。
    * @private
    */
-  filterByPageviews(spots) {
-    const threshold =
-      this.rankingConfig.pageview_thresholds.absolute_threshold || 25000;
+  filterBySitelinks(spots) {
+    const threshold = this.rankingConfig.sitelinks_threshold?.absolute_threshold ?? 10;
 
     return spots.filter((spot) => {
-      if (!spot.pageviews) {
-        // ページビューデータがない場合は「隠れている」と見なして通す
+      if (spot.sitelinks === undefined || spot.sitelinks === null) {
+        // sitelinksデータがない場合は「隠れている」と見なして通す
         return true;
       }
-      return spot.pageviews < threshold;
+      return spot.sitelinks < threshold;
     });
   }
 
   /**
-   * 情報充実度（説明文＋写真の有無）を優先グループとし、
-   * 各グループ内でページビュー数が低い順にソートする。
+   * 情報充実度（説明文の文字数・画像の有無）順にソートする。
    * 「知られていないが、ちゃんと魅力が伝わる場所」を上位に出すための措置。
-   * 説明文・写真が両方揃っているスポットが記事未整備のスポットより先に来る。
+   * 主軸はWikipedia本文(description)の文字数（多い順）、同点の場合のみ画像の有無で判定する。
+   * sitelinksは同順位が多発し順位付けの主軸にできないため、情報充実度そのものを主軸にする。
    * @private
    */
-  sortByPageviews(spots) {
-    const isWellDocumented = (spot) => Boolean(spot.description) && Boolean(spot.image);
+  sortByInformativeness(spots) {
+    const descriptionLength = (spot) => (spot.description !== undefined && spot.description !== null ? spot.description.length : 0);
+    const hasImage = (spot) => spot.image !== undefined && spot.image !== null;
 
     return spots.sort((a, b) => {
-      const aDocumented = isWellDocumented(a);
-      const bDocumented = isWellDocumented(b);
-      if (aDocumented !== bDocumented) {
-        return aDocumented ? -1 : 1;
-      }
+      const lengthDiff = descriptionLength(b) - descriptionLength(a);
+      if (lengthDiff !== 0) return lengthDiff;
 
-      // ページビューデータなし → 優先（0として扱う）
-      const aPageviews = a.pageviews || 0;
-      const bPageviews = b.pageviews || 0;
+      const aHasImage = hasImage(a);
+      const bHasImage = hasImage(b);
+      if (aHasImage !== bHasImage) return aHasImage ? -1 : 1;
 
-      return aPageviews - bPageviews;
+      return 0;
     });
   }
 

@@ -1,12 +1,20 @@
 {
-  "pageview_thresholds": {
-    "description": "観光スポットの『知られていない度』判定基準（実データ取得後に調整予定）",
-    "absolute_threshold": 6000,
-    "absolute_threshold_note": "2026-08-19確定：フェーズ1実データ（香川県、175件）の分布に基づき設定。除外バグ修正後の実測ではデータ異常値を除き最大が金刀比羅宮=6580、次点が香川県立アリーナ3816・玉藻公園3789で、6000は金刀比羅宮のみをピンポイントで足切りする値。25000は実データでは0件しか除外できず機能していなかったため見直した",
-    "relative_ranking": true,
-    "relative_ranking_note": "検索結果内（駅の周辺スポット群）でページビュー数が低い順に優先表示"
+  "sitelinks_threshold": {
+    "description": "観光スポットの『知名度が高すぎる』判定基準（Wikidataのsitelinks=他言語版記事数）",
+    "absolute_threshold": 10,
+    "absolute_threshold_note": "2026-09-07確定：pageviewsは在校生アクセス等（実例：石川県立金沢二水高等学校がpageviews=1479で県内最高値級）により観光地としての知名度を正しく反映しないことが検証で判明したため、Wikidataのsitelinks（他言語版記事数）に切り替えた。sitelinksは低い値に密集する（実測：富山県候補1,464件中55.1%がsitelinks=1）ため精密な順位付けには使えないが、『有名すぎるものを弾く』粗い足切りには十分。誤りのコストが非対称（無名を弾く誤検出は致命的、有名を弾けない取りこぼしは軽微）なため閾値は保守的に高めの10とし、国際的知名度が明確なものだけを弾く。",
+    "relative_ranking": false,
+    "relative_ranking_note": "sitelinksは順位付けの主軸には使わない（同順位多発のため）。secondary_sort（情報充実度）を主軸とする"
   },
-  "missing_pageview_data_treatment": "default_priority",
-  "missing_pageview_data_note": "ページビューデータが存在しない新設・低頻度記事は『隠れている扱い』として優先表示",
-  "tuning_plan": "フェーズ1デモ後、Wikidataから取得した実スポットデータを見ながら、absolute_threshold を実データに合わせて調整"
+  "missing_sitelinks_data_treatment": "default_priority",
+  "missing_sitelinks_data_note": "sitelinksデータが存在しない場合は『隠れている扱い』として優先表示（フィルタで弾かない）",
+  "secondary_sort": {
+    "description": "『知られていないが、ちゃんと魅力が伝わる場所』を上位に出すためのソート基準。sitelinksによる知名度の細かい順位付けをやめた代わりに、情報充実度そのものを主軸にする",
+    "primary_key": "description_length",
+    "primary_key_note": "Wikipedia本文(extract)の文字数が多い順。バッチ取得時に既に取得済みのデータで追加コストゼロ",
+    "secondary_key": "has_image",
+    "secondary_key_note": "画像の有無（ありを優先）。追加コストゼロ",
+    "order_note": "文字数で同点の場合のみ画像有無で判定する"
+  },
+  "tuning_plan": "全国データ生成後、実データを見ながらsitelinks_threshold.absolute_thresholdを調整"
 }

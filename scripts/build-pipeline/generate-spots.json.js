@@ -56,7 +56,7 @@ function getPageviewsDateRange(referenceDate = new Date()) {
 
 const PAGEVIEWS_DATE_RANGE = getPageviewsDateRange();
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+async function fetchWithTimeout(url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS, apiLabel = '不明API') {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
     let response;
     try {
@@ -68,7 +68,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = REQUEST_TIMEOUT_M
       if (attempt === MAX_RETRIES) throw error;
       const backoffMs = 2000 * 2 ** attempt;
       console.warn(
-        `API ${error.name}: ${backoffMs}ms 待機後に再試行 (${attempt + 1}/${MAX_RETRIES})`
+        `${apiLabel} ${error.name}: ${backoffMs}ms 待機後に再試行 (${attempt + 1}/${MAX_RETRIES})`
       );
       await sleep(backoffMs);
       continue;
@@ -84,7 +84,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = REQUEST_TIMEOUT_M
       ? Math.min(retryAfter * 1000, 30000)
       : 2000 * 2 ** attempt;
     console.warn(
-      `Wikidata ${response.status}: ${backoffMs}ms 待機後に再試行 (${attempt + 1}/${MAX_RETRIES})`
+      `${apiLabel} ${response.status}: ${backoffMs}ms 待機後に再試行 (${attempt + 1}/${MAX_RETRIES})`
     );
     await sleep(backoffMs);
   }
@@ -155,7 +155,7 @@ export async function fetchWikidataResponse(
       Accept: 'application/sparql-results+json',
       'User-Agent': WIKIDATA_USER_AGENT,
     },
-  }, timeoutMs);
+  }, timeoutMs, 'Wikidata SPARQL(近傍検索)');
   const nearbyBody = await nearbyResponse.text();
   if (!nearbyResponse.ok) {
     return { url: nearbyUrl, status: nearbyResponse.status, ok: false, body: nearbyBody };
@@ -181,7 +181,7 @@ export async function fetchWikidataResponse(
       Accept: 'application/sparql-results+json',
       'User-Agent': WIKIDATA_USER_AGENT,
     },
-  }, timeoutMs);
+  }, timeoutMs, 'Wikidata SPARQL(詳細)');
   const body = await response.text();
   return { url, status: response.status, ok: response.ok, body, nearbyItems: items };
 }
@@ -373,7 +373,7 @@ async function searchSpotsAroundStation(stop, radiusKm, spotDetailsCache = {}) {
 // 実際の景色写真ではないため、旅行アプリの体験を損なう画像として除外する。
 const PROBLEMATIC_IMAGE_PATTERN = /map|locator|relief|g[ée]olocalisation|gthumb/i;
 
-function isProblematicImage(imageUrl) {
+export function isProblematicImage(imageUrl) {
   const filename = decodeURIComponent(imageUrl.split('/').pop().split('?')[0]);
   return PROBLEMATIC_IMAGE_PATTERN.test(filename);
 }
@@ -411,7 +411,9 @@ export async function enrichSpotWithWikipedia(spot) {
       `${WIKIPEDIA_API}?${pageParams}`,
       {
         headers: { 'User-Agent': WIKIDATA_USER_AGENT },
-      }
+      },
+      REQUEST_TIMEOUT_MS,
+      'Wikipedia API'
     );
 
     if (!pageResponse.ok) return;
@@ -447,7 +449,7 @@ export async function enrichSpotWithWikipedia(spot) {
 
       const pageviewsResponse = await fetchWithTimeout(pageviewsUrl, {
         headers: { 'User-Agent': WIKIDATA_USER_AGENT },
-      });
+      }, REQUEST_TIMEOUT_MS, 'Pageviews API');
 
       if (pageviewsResponse.ok) {
         const pageviewsData = await pageviewsResponse.json();
@@ -467,10 +469,142 @@ export async function enrichSpotWithWikipedia(spot) {
   }
 }
 
+// MediaWiki API の titles= パラメータは1リクエストで最大50件までまとめられる
+const WIKIPEDIA_BATCH_SIZE = 50;
+// pageviews API はバッチ非対応のため1件ずつ呼ぶ。バーストで429を連発すると
+// Retry-Afterの待機（実測30秒前後）が総時間を支配してしまうため、
+// あらかじめ429が出ない程度の定速（1件/秒強）で流す。
+export const PAGEVIEWS_INTERVAL_MS = 1000;
+
+function extractPageTitle(spot) {
+  const pageTitle = decodeURIComponent(spot.wikipedia_url.split('/wiki/').pop()).replace(/_/g, ' ');
+  if (pageTitle.includes('曖昧さ回避')) {
+    console.warn(`    ⚠️  曖昧さ回避ページの疑い（タイトル）: ${spot.name} → ${pageTitle}`);
+  }
+  return pageTitle;
+}
+
+/**
+ * ページ本文・画像（extracts|pageimages|pageprops）を最大50件ずつまとめて取得する。
+ * pageviewsはここでは取得しない（バッチ非対応のため別関数で定速取得する）。
+ */
+async function fetchWikipediaPageBatch(titles, titleToSpot) {
+  const params = new URLSearchParams({
+    action: 'query',
+    format: 'json',
+    titles: titles.join('|'),
+    prop: 'extracts|pageimages|pageprops',
+    exintro: 1,
+    explaintext: 1,
+    pithumbsize: 300,
+  });
+
+  const response = await fetchWithTimeout(`${WIKIPEDIA_API}?${params}`, {
+    headers: { 'User-Agent': WIKIDATA_USER_AGENT },
+  }, REQUEST_TIMEOUT_MS, 'Wikipedia API(バッチ)');
+  if (!response.ok) {
+    console.warn(`    ⚠️  Wikipediaバッチ取得失敗: HTTP ${response.status}`);
+    return;
+  }
+
+  const data = await response.json();
+  // MediaWikiがタイトルを正規化する場合があるため、正規化前タイトルへ引き戻す対応表を作る
+  const normalizedToOriginal = new Map();
+  for (const n of data.query?.normalized || []) {
+    normalizedToOriginal.set(n.to, n.from);
+  }
+
+  for (const page of Object.values(data.query?.pages || {})) {
+    const originalTitle = normalizedToOriginal.get(page.title) || page.title;
+    const spot = titleToSpot.get(originalTitle);
+    if (!spot) continue;
+
+    if (page.pageprops && 'disambiguation' in page.pageprops) {
+      console.warn(`    ⚠️  曖昧さ回避ページを検出、スキップ: ${spot.name} → ${originalTitle}`);
+      spot.is_disambiguation = true;
+      continue;
+    }
+    spot.description = page.extract || '';
+    if (page.thumbnail?.source && !isProblematicImage(page.thumbnail.source)) {
+      spot.image = page.thumbnail.source;
+    }
+  }
+}
+
+async function fetchPageviewsForSpot(spot, pageTitle) {
+  try {
+    const pageviewsUrl = [
+      PAGEVIEWS_API,
+      'all-access',
+      'all-agents',
+      encodeURIComponent(pageTitle),
+      'monthly',
+      PAGEVIEWS_DATE_RANGE.start,
+      PAGEVIEWS_DATE_RANGE.end,
+    ].join('/');
+
+    const response = await fetchWithTimeout(pageviewsUrl, {
+      headers: { 'User-Agent': WIKIDATA_USER_AGENT },
+    }, REQUEST_TIMEOUT_MS, 'Pageviews API');
+    if (!response.ok) return;
+
+    const data = await response.json();
+    const items = data.items || [];
+    if (items.length > 0) {
+      const total = items.reduce((sum, item) => sum + item.views, 0);
+      spot.pageviews = Math.round(total / items.length);
+    }
+  } catch (error) {
+    console.warn(`    ⚠️  ページビュー取得失敗: ${pageTitle}`);
+  }
+}
+
+/**
+ * 大量のスポットをまとめてWikipedia拡張する（地域一括取得方式向け）。
+ * - ページ本文・画像は50件ずつバッチ取得（リクエスト数を1/50に削減）
+ * - pageviewsはバッチ非対応で1件ずつ定速取得が必要になり、知名度指標を
+ *   Wikidataのsitelinks（bboxクエリで無料取得済み）に切り替えたことで
+ *   不要になった（実測: 富山県950件で174分かかっていたボトルネックの正体）。
+ *   デフォルトでは取得しない。fetchPageviews:trueを指定した場合のみ、
+ *   従来通り定速（PAGEVIEWS_INTERVAL_MS間隔）で取得する。
+ */
+export async function enrichSpotsBatchWithWikipedia(spots, { fetchPageviews = false } = {}) {
+  const withArticle = spots.filter((s) => s.wikipedia_url);
+  const titleToSpot = new Map();
+  for (const spot of withArticle) {
+    const pageTitle = extractPageTitle(spot);
+    spot._pageTitle = pageTitle;
+    titleToSpot.set(pageTitle, spot);
+  }
+
+  const titles = [...titleToSpot.keys()];
+  console.log(
+    `  📚 Wikipediaページ情報をバッチ取得中... (${titles.length}件をバッチサイズ${WIKIPEDIA_BATCH_SIZE}で処理)`
+  );
+  for (let i = 0; i < titles.length; i += WIKIPEDIA_BATCH_SIZE) {
+    const batch = titles.slice(i, i + WIKIPEDIA_BATCH_SIZE);
+    await fetchWikipediaPageBatch(batch, titleToSpot);
+    if (i + WIKIPEDIA_BATCH_SIZE < titles.length) await sleep(REQUEST_INTERVAL_MS);
+  }
+
+  if (!fetchPageviews) {
+    for (const spot of withArticle) delete spot._pageTitle;
+    return;
+  }
+
+  console.log(`  📈 pageviewsを定速取得中... (${withArticle.length}件、${PAGEVIEWS_INTERVAL_MS}ms間隔)`);
+  for (let i = 0; i < withArticle.length; i += 1) {
+    const spot = withArticle[i];
+    await fetchPageviewsForSpot(spot, spot._pageTitle);
+    delete spot._pageTitle;
+    if (i < withArticle.length - 1) await sleep(PAGEVIEWS_INTERVAL_MS);
+  }
+}
+
 /**
  * 2点間の距離を計算（Haversine公式）
  */
-function calculateDistance(lat1, lon1, lat2, lon2) {
+export function calculateDistance(lat1, lon1, lat2, lon2) {
   const R = 6371; // 地球半径（km）
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLon = ((lon2 - lon1) * Math.PI) / 180;
