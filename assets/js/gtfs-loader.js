@@ -3,6 +3,40 @@
  * ビルド時に生成された JSON をブラウザメモリにロード
  */
 
+/**
+ * 1つ以上の地域（都道府県）のインデックス化済みスポットデータ
+ * （{spotsIndex, spots, stations}、generate-spots-by-region.jsのbuildIndexedSpotsOutput参照）を
+ * QIDで重複排除しながら1つの{spots:{qid:詳細}, spotsByStation:{stop_id:[{qid,distance}]}}にまとめる。
+ *
+ * 【背景】隣接県を同時ロードする設計のため、同じQIDが複数回登場しうる：
+ * (1) 山脈等、地理的に複数県にまたがり意図的に両県のファイルへ重複登録されている
+ *     スポット（実測: 全体の0.9%程度）
+ * (2) 県判定（P131）を誤ってどちらかの県ファイルへフォールバック配置された項目
+ * どちらもQIDで一意化すれば実害なく解決するため（最初に読み込んだ地域の詳細情報を
+ * 正として採用、後続で同じQIDが来ても上書きしない）、県判定の精度そのものは
+ * 「多少ずれても実害がない」問題に格下げされる。
+ * regionsが1件（単一県のみロード）の場合は単純な形式変換として働く。
+ */
+export function mergeIndexedSpotRegions(regions) {
+  const spots = {};
+  const spotsByStation = {};
+
+  for (const region of regions) {
+    const { spotsIndex, spots: spotDetails, stations } = region;
+    for (const stopId of Object.keys(stations)) {
+      spotsByStation[stopId] = stations[stopId].map(([index, distance]) => {
+        const qid = spotsIndex[index];
+        if (spots[qid] === undefined) {
+          spots[qid] = spotDetails[index];
+        }
+        return { qid, distance };
+      });
+    }
+  }
+
+  return { spots, spotsByStation };
+}
+
 export class GTFSLoader {
   constructor() {
     this.fareData = null;
@@ -25,8 +59,11 @@ export class GTFSLoader {
         this.routeInfo = window.EMBEDDED_ROUTE_INFO;
         this.routeDetails = window.EMBEDDED_ROUTE_DETAILS;
         this.stationsByName = window.EMBEDDED_STATIONS_BY_NAME;
-        this.spots = window.EMBEDDED_SPOTS_BY_STATION.spots;
-        this.spotsByStation = window.EMBEDDED_SPOTS_BY_STATION.stations;
+        // EMBEDDED_SPOTS_BY_STATIONは{spotsIndex, spots, stations}のインデックス化済み形式
+        // （県ごとに1つ）。将来、隣接県を同時ロードする際は配列で複数地域分渡す。
+        const merged = mergeIndexedSpotRegions([window.EMBEDDED_SPOTS_BY_STATION]);
+        this.spots = merged.spots;
+        this.spotsByStation = merged.spotsByStation;
       } else {
         // 開発時：埋め込みデータがないため data/derived/*.json を fetch で読み込む
         console.log('ℹ️ 埋め込みデータなし。data/derived/*.json を fetch で読み込みます（開発モード）');
@@ -47,8 +84,10 @@ export class GTFSLoader {
         this.routeInfo = routeInfo;
         this.routeDetails = routeDetails;
         this.stationsByName = stationsByName;
-        this.spots = spotsData.spots;
-        this.spotsByStation = spotsData.stations;
+        // spots-by-station.jsonは{spotsIndex, spots, stations}のインデックス化済み形式
+        const merged = mergeIndexedSpotRegions([spotsData]);
+        this.spots = merged.spots;
+        this.spotsByStation = merged.spotsByStation;
         // spot-finder.js は window.EMBEDDED_SPOT_RANKING_CONFIG を同期的に参照するため、
         // 本番ビルドと同じ経路で読めるようにここでセットしておく
         window.EMBEDDED_SPOT_RANKING_CONFIG = rankingConfig;
