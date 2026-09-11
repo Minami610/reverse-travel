@@ -1,7 +1,7 @@
 {
   "name": "reverse-travel",
   "version": "0.1.0",
-  "description": "逆引き旅行アプリ - 予算を入れたら、行ける場所が出てくる（フェーズ1：香川県対応）",
+  "description": "逆引き旅行アプリ - 予算を入れたら、行ける場所が出てくる（香川県版公開済み、全国対応へ移行中）",
   "main": "index.html",
   "type": "module",
   "scripts": {
