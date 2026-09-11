@@ -7,7 +7,14 @@
       "gtfs_url": "https://www.kotoden.co.jp/publichtm/gtfs/gtfsdata/gtfs_kd.zip",
       "fare_type": "od_table",
       "fare_type_note": "想定値。実装では fare_rules.txt から自動判定を優先",
-      "description": "OD運賃表型、データ整備完全。53駅の運賃データを保有"
+      "description": "OD運賃表型、データ整備完全。53駅の運賃データを保有",
+      "source_category": "operator-direct",
+      "source_category_label": "事業者公式サイトから直接取得",
+      "source_category_note": "現時点では公共交通オープンデータセンター／gtfs-data.jpのカタログ経由ではなく、事業者サイトから直接取得している。応募条件上は他データソースの併用として許容されるが、主たるデータ源はgtfs-data.jp API v2への移行を予定（段階2）。",
+      "license_label": "CC BY 4.0（クリエイティブ・コモンズ 表示 4.0 国際）",
+      "license_url": "http://creativecommons.org/licenses/by/4.0/deed.ja",
+      "license_source_url": "https://www.kotoden.co.jp/publichtm/gtfs/index.html",
+      "license_source_note": "feed_info.txtにはライセンス項目がないため記載なし。GTFS公開ページ（https://www.kotoden.co.jp/publichtm/gtfs/index.html）にCC BY 4.0での提供と免責事項の記載を確認（2026-09-12確認、電車・バス両データ共通）。"
     },
     {
       "id": "kotoden-bus",
@@ -15,7 +22,14 @@
       "gtfs_url": "https://www.kotoden.co.jp/publichtm/gtfs/gtfsdata/latest/gtfs_kb.zip",
       "fare_type": "uniform",
       "fare_type_note": "【未検証】高松市内の路線バスは距離制の可能性あり。実装では fare_rules.txt から自動判定を優先。想定値と異なったら警告出力",
-      "description": "琴電と同一グループ、接続駅確実"
+      "description": "琴電と同一グループ、接続駅確実",
+      "source_category": "operator-direct",
+      "source_category_label": "事業者公式サイトから直接取得",
+      "source_category_note": "kotodenと同じくgtfs-data.jp未経由の直接取得。",
+      "license_label": "CC BY 4.0（クリエイティブ・コモンズ 表示 4.0 国際）",
+      "license_url": "http://creativecommons.org/licenses/by/4.0/deed.ja",
+      "license_source_url": "https://www.kotoden.co.jp/publichtm/gtfs/index.html",
+      "license_source_note": "feed_info.txtにはライセンス項目がないため記載なし。GTFS公開ページ（https://www.kotoden.co.jp/publichtm/gtfs/index.html）にCC BY 4.0での提供と免責事項の記載を確認（2026-09-12確認、電車・バス両データ共通）。"
     }
   ],
   "phase1_note": "琴電グループ内の2社に限定。同一地域・同一グループなので接続が確実で、GTFSの定期更新も期待できる。実ユースケース『琴電で移動 → バスでラストワンマイル』を再現可能。フェーズ2以降で他の香川県内バスを追加予定",

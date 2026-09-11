@@ -11,6 +11,7 @@ import { fetchGTFS } from './build-pipeline/fetch-gtfs.js';
 import { parseAndTransform } from './build-pipeline/parse-and-transform.js';
 import { generateRouteDetails } from './build-pipeline/generate-route-details.js';
 import { generateSpots } from './build-pipeline/generate-spots.json.js';
+import { generateDataSourcesManifest } from './build-pipeline/generate-data-sources-manifest.js';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -23,6 +24,10 @@ async function runBuild() {
     console.log('【ステップ1】GTFSデータをダウンロード');
     console.log('-------------------------------------');
     await fetchGTFS();
+
+    console.log('\n【ステップ1b】データ出典マニフェストを生成（アプリ画面の出典表示用）');
+    console.log('-------------------------------------');
+    generateDataSourcesManifest();
 
     console.log('\n【ステップ2】GTFS をパース・変換');
     console.log('-------------------------------------');

@@ -46,7 +46,12 @@ class ReverseTravel {
       resultsList: document.getElementById('results-list'),
       detailContent: document.getElementById('detail-content'),
       backBtn: document.getElementById('back-btn'),
+      aboutBtn: document.getElementById('about-data-btn'),
+      aboutModal: document.getElementById('about-modal'),
+      aboutModalClose: document.getElementById('about-modal-close'),
     };
+
+    this.initAboutModal();
 
     this.layoutController = new LayoutController({
       mapEl: document.getElementById('spots-map'),
@@ -116,6 +121,106 @@ class ReverseTravel {
         this.mapView.unhighlightSpot(card.getAttribute('data-spot-id'));
       }
     });
+  }
+
+  /**
+   * 「出典の詳細・免責・お問い合わせ」モーダルの開閉。
+   * 必須表示3点の要約はフッターに常時出しており、ここは全文表示用。
+   * hidden属性で表示/非表示を切り替える（[hidden]{display:none!important}）。
+   */
+  initAboutModal() {
+    const { aboutBtn, aboutModal, aboutModalClose } = this.elements;
+    if (!aboutBtn || !aboutModal) return;
+
+    const open = () => {
+      aboutModal.hidden = false;
+    };
+    const close = () => {
+      aboutModal.hidden = true;
+    };
+
+    aboutBtn.addEventListener('click', open);
+    aboutModalClose?.addEventListener('click', close);
+    // オーバーレイ背景クリックで閉じる（パネル内クリックは伝播で除外）
+    aboutModal.addEventListener('click', (e) => {
+      if (e.target === aboutModal) close();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !aboutModal.hidden) close();
+    });
+
+    this.renderDataSources();
+  }
+
+  /**
+   * フィード出典一覧（#about-feed-list）を、ビルド時生成の
+   * data-sources.json（generate-data-sources-manifest.js参照）から描画する。
+   * ここに固定文言をハードコードしない。実際に使ったフィードの情報だけを
+   * そのまま表示することで、表示内容と実データの食い違いを構造的に防ぐ。
+   *
+   * 本番ビルドは window.EMBEDDED_DATA_SOURCES に埋め込み済み（同期）。
+   * 開発モード（index.htmlを直接開く場合）はデータが埋め込まれないため
+   * fetchでフォールバックする（gtfs-loader.js の開発モード分岐と同じ考え方）。
+   */
+  renderDataSources() {
+    if (typeof window.EMBEDDED_DATA_SOURCES !== 'undefined') {
+      this.populateDataSources(window.EMBEDDED_DATA_SOURCES);
+      return;
+    }
+    fetch('data/derived/data-sources.json')
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
+      .then((data) => this.populateDataSources(data))
+      .catch((error) => {
+        console.error('データ出典マニフェストの取得に失敗:', error);
+        this.populateDataSources(null);
+      });
+  }
+
+  populateDataSources(manifest) {
+    const listEl = document.getElementById('about-feed-list');
+    const summaryEl = document.getElementById('about-feed-summary');
+    const footerEl = document.getElementById('footer-data-sources');
+
+    const feeds = manifest?.feeds;
+    if (!Array.isArray(feeds) || feeds.length === 0) {
+      if (summaryEl) summaryEl.textContent = '';
+      if (listEl) listEl.innerHTML = '<li>データ出典情報を生成できませんでした。ビルドをご確認ください。</li>';
+      if (footerEl) footerEl.textContent = '出典情報を取得できませんでした';
+      return;
+    }
+
+    if (footerEl) footerEl.textContent = formatPublisherList(feeds);
+    if (!listEl || !summaryEl) return;
+
+    summaryEl.textContent = `現在このアプリが使用しているフィードは${feeds.length}件です。`;
+
+    listEl.innerHTML = feeds
+      .map((feed) => {
+        const publisher = feed.feed_publisher_name || feed.operator_name;
+        const period =
+          feed.feed_start_date && feed.feed_end_date
+            ? `${formatGtfsDate(feed.feed_start_date)}〜${formatGtfsDate(feed.feed_end_date)}`
+            : '不明';
+        const fetchedAt = feed.fetched_at
+          ? new Date(feed.fetched_at).toLocaleDateString('ja-JP')
+          : '不明';
+        const publisherLink = feed.feed_publisher_url
+          ? `<a href="${feed.feed_publisher_url}" target="_blank" rel="noopener">${feed.feed_publisher_url}</a>`
+          : '不明';
+        const licenseText = feed.license_url
+          ? `<a href="${feed.license_url}" target="_blank" rel="noopener">${feed.license_label}</a>`
+          : feed.license_label;
+
+        return `
+          <li>
+            <strong>${publisher}</strong>（${feed.source_category_label}）
+            <span class="feed-meta">公開元サイト：${publisherLink}</span>
+            <span class="feed-meta">フィード版：${feed.feed_version || '不明'} ／ 対象期間：${period}</span>
+            <span class="feed-meta">取得日：${fetchedAt} ／ ライセンス：${licenseText}</span>
+          </li>
+        `;
+      })
+      .join('');
   }
 
   stepBudget(delta) {
@@ -413,6 +518,28 @@ class ReverseTravel {
     this.elements.detailContent.innerHTML = html;
     this.elements.appLayout.setAttribute('data-view', 'detail');
   }
+}
+
+/** GTFSの日付形式（YYYYMMDD）を "YYYY-MM-DD" に整形する */
+function formatGtfsDate(yyyymmdd) {
+  if (!yyyymmdd || yyyymmdd.length !== 8) return yyyymmdd || '不明';
+  return `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
+}
+
+/**
+ * フッターの「データ出典：」に載せる公開元名の一覧を、実際に使用したフィードの
+ * feed_publisher_name から重複除去して組み立てる（固定文言のハードコード禁止）。
+ * 3件を超える場合は「A、B、C ほかN件」に省略する。
+ */
+function formatPublisherList(feeds) {
+  const names = [];
+  for (const feed of feeds) {
+    const name = feed.feed_publisher_name || feed.operator_name;
+    if (name && !names.includes(name)) names.push(name);
+  }
+  if (names.length === 0) return '出典情報を取得できませんでした';
+  if (names.length <= 3) return names.join('、');
+  return `${names.slice(0, 3).join('、')} ほか${names.length - 3}件`;
 }
 
 // アプリ起動

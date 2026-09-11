@@ -101,6 +101,61 @@
     <div id="spots-map"></div>
   </div>
 
+  <!-- 応募条件で必須の表示3点（出典／正確性の非保証／問い合わせ先）。
+       アプリシェル（body: flex-column, height:100vh）の最下段に flex:0 0 auto で
+       常時表示し、PC・スマホどちらのレイアウトでも見えるようにする。
+       詳細（フィード別ライセンス・免責の全文・問い合わせ）はモーダルに送る。 -->
+  <footer id="app-footer">
+    <p class="footer-summary">
+      データ出典：<span id="footer-data-sources">読み込み中…</span>、
+      地図：<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院</a>、
+      観光情報：Wikipedia／Wikidata。
+      表示内容の正確性・完全性は保証されません。
+      <button type="button" id="about-data-btn">出典の詳細・免責・お問い合わせ</button>
+    </p>
+  </footer>
+
+  <div id="about-modal" class="modal-overlay" hidden>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="about-modal-title">
+      <button type="button" id="about-modal-close" aria-label="閉じる">×</button>
+      <h2 id="about-modal-title">このアプリのデータについて</h2>
+
+      <h3>1. データの出典</h3>
+      <p>
+        運賃・所要時間・経路・停留所のデータは、以下の GTFS／GTFS-JP フィードから取得しています。
+        各フィードの著作権は公開元に帰属します。
+      </p>
+      <p id="about-feed-summary" class="about-feed-summary">読み込み中…</p>
+      <ul id="about-feed-list">
+        <li>読み込み中…</li>
+      </ul>
+      <p>
+        地図には<strong>国土地理院</strong>の地理院タイル（標準地図）を使用しています。<br>
+        観光地の説明・画像・座標は <strong>Wikipedia 日本語版</strong>および <strong>Wikidata</strong>
+        （<a href="https://creativecommons.org/licenses/by-sa/4.0/deed.ja" target="_blank" rel="noopener">CC BY-SA 4.0</a>）に基づきます。
+      </p>
+
+      <h3>2. データの正確性・完全性について</h3>
+      <p>
+        このアプリが表示する運賃・所要時間・経路・観光情報は、オープンデータおよび
+        Wikipedia／Wikidata をもとに<strong>自動生成したもの</strong>であり、
+        正確性・完全性・最新性は保証されません。ダイヤ改正・運賃改定・運休等が
+        反映されていない場合があります。おでかけの前に、必ず各交通事業者・施設の
+        公式情報をご確認ください。
+      </p>
+
+      <h3>3. お問い合わせ先</h3>
+      <p>
+        本アプリの表示内容・データに関するお問い合わせは、開発者までお願いします。<br>
+        <strong>お問い合わせ先：<a id="about-contact" href="mailto:y.minami@kimu-taku.co.jp">y.minami@kimu-taku.co.jp</a></strong>
+      </p>
+      <p>
+        各交通事業者・データ公開元へ直接お問い合わせなさらないようお願いいたします。
+        データの誤りや不具合は、まず開発者までご連絡ください。
+      </p>
+    </div>
+  </div>
+
   <!-- ES6モジュール：開発環境用 -->
   <script type="module" src="assets/js/main.js"></script>
 

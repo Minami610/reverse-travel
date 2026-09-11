@@ -134,6 +134,7 @@ async function generateInlineDataScript(derivedDir) {
     'route-info.json': 'EMBEDDED_ROUTE_INFO',
     'route-details.json': 'EMBEDDED_ROUTE_DETAILS',
     'spots-by-station.json': 'EMBEDDED_SPOTS_BY_STATION',
+    'data-sources.json': 'EMBEDDED_DATA_SOURCES',
   };
 
   let script = '// ========== 埋め込みデータ ==========\n';

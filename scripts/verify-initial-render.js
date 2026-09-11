@@ -110,11 +110,72 @@ async function checkVisible(html, matches, label) {
     hiddenAncestors.forEach((i) => console.log('  - ' + i));
   }
 
-  const ok = searchFormDisplay !== 'none' && hiddenAncestors.length === 0;
-  console.log(ok ? '✅ #search-form は表示状態です' : '❌ #search-form は非表示になっています');
+  const formOk = searchFormDisplay !== 'none' && hiddenAncestors.length === 0;
+  console.log(formOk ? '✅ #search-form は表示状態です' : '❌ #search-form は非表示になっています');
+
+  // 応募条件で必須の表示3点（フッター）が、このレイアウト幅で実際に見える状態か。
+  // 「構文が通っても画面は壊れる」ため、DOM存在だけでなく祖先のdisplay:noneも辿る。
+  const footer = doc.getElementById('app-footer');
+  let footerOk = false;
+  if (!footer) {
+    console.log('❌ #app-footer（必須表示3点）がDOM上に見つかりません');
+  } else {
+    const footerDisplay = window.getComputedStyle(footer).display;
+    const footerHiddenAncestors = findHiddenAncestors(window, footer);
+    const aboutBtn = doc.getElementById('about-data-btn');
+    // データ出典部分（#footer-data-sources）はマニフェストからJSが描画するため、
+    // 初期HTMLの「読み込み中…」プレースホルダーのまま残っていないかも確認する
+    // （残っていれば描画が走らなかった、または失敗した証拠）。
+    const footerSourcesRendered = !/読み込み中/.test(footer.textContent);
+    footerOk =
+      footerDisplay !== 'none' &&
+      footerHiddenAncestors.length === 0 &&
+      !!aboutBtn &&
+      /出典/.test(footer.textContent) &&
+      /保証されません/.test(footer.textContent) &&
+      footerSourcesRendered;
+    if (footerHiddenAncestors.length > 0) {
+      console.log('❌ #app-footer の非表示の祖先要素:');
+      footerHiddenAncestors.forEach((i) => console.log('  - ' + i));
+    }
+    console.log(
+      footerOk
+        ? `✅ #app-footer（出典・免責・問い合わせ導線）は表示状態です: 「${footer.textContent.replace(/\s+/g, ' ').trim()}」`
+        : `❌ #app-footer が要件を満たしません（display=${footerDisplay}, about-btn=${!!aboutBtn}, 出典描画=${footerSourcesRendered}）`
+    );
+  }
+
+  // モーダルは初期状態で非表示、ボタン押下で開くこと
+  const modal = doc.getElementById('about-modal');
+  let modalOk = false;
+  if (!modal) {
+    console.log('❌ #about-modal が見つかりません');
+  } else {
+    const initiallyHidden = window.getComputedStyle(modal).display === 'none';
+    doc.getElementById('about-data-btn')?.dispatchEvent(
+      new window.Event('click', { bubbles: true })
+    );
+    const opensOnClick = window.getComputedStyle(modal).display !== 'none';
+    const hasContact = /お問い合わせ先/.test(modal.textContent) && /@/.test(modal.textContent);
+
+    // 出典一覧はビルド時生成の data-sources.json から描画される（ハードコード禁止）。
+    // 「読み込み中」「準備中」のプレースホルダーのまま残っていないか＝実際に
+    // 描画が走ったかを確認する。
+    const feedListItems = [...doc.querySelectorAll('#about-feed-list li')];
+    const feedListText = doc.getElementById('about-feed-list')?.textContent || '';
+    const feedListRendered =
+      feedListItems.length > 0 && !/読み込み中|準備中/.test(feedListText);
+
+    modalOk = initiallyHidden && opensOnClick && hasContact && feedListRendered;
+    console.log(
+      modalOk
+        ? `✅ #about-modal は初期非表示→ボタンで開き、問い合わせ先とフィード出典一覧（${feedListItems.length}件）を含みます`
+        : `❌ #about-modal 挙動NG（初期非表示=${initiallyHidden}, クリックで開く=${opensOnClick}, 問い合わせ先=${hasContact}, フィード一覧描画=${feedListRendered}）`
+    );
+  }
 
   window.close();
-  return ok;
+  return formOk && footerOk && modalOk;
 }
 
 /** 条件が満たされるまでポーリングする（jsdomにはMutationObserverの完全な非同期解決保証がないため） */
