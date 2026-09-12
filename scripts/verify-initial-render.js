@@ -174,8 +174,30 @@ async function checkVisible(html, matches, label) {
     );
   }
 
+  // 「使い方」モーダル（アプリ内マニュアル）も同じ開閉の仕組みで実装している。
+  // カバレッジ表記（#howto-coverage）はdata-sources.jsonのcoverageから描画される
+  // ため、手書きのプレースホルダー（「読み込み中」）が残っていないかを確認する。
+  const howtoModal = doc.getElementById('howto-modal');
+  let howtoOk = false;
+  if (!howtoModal) {
+    console.log('❌ #howto-modal（使い方）が見つかりません');
+  } else {
+    const initiallyHidden = window.getComputedStyle(howtoModal).display === 'none';
+    doc.getElementById('howto-btn')?.dispatchEvent(new window.Event('click', { bubbles: true }));
+    const opensOnClick = window.getComputedStyle(howtoModal).display !== 'none';
+    const coverageText = doc.getElementById('howto-coverage')?.textContent || '';
+    const coverageRendered = coverageText.length > 0 && !/読み込み中/.test(coverageText);
+
+    howtoOk = initiallyHidden && opensOnClick && coverageRendered;
+    console.log(
+      howtoOk
+        ? `✅ #howto-modal は初期非表示→ボタンで開き、対応地域「${coverageText}」を含みます`
+        : `❌ #howto-modal 挙動NG（初期非表示=${initiallyHidden}, クリックで開く=${opensOnClick}, カバレッジ描画=${coverageRendered}）`
+    );
+  }
+
   window.close();
-  return formOk && footerOk && modalOk;
+  return formOk && footerOk && modalOk && howtoOk;
 }
 
 /** 条件が満たされるまでポーリングする（jsdomにはMutationObserverの完全な非同期解決保証がないため） */

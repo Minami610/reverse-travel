@@ -111,9 +111,51 @@
       地図：<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院</a>、
       観光情報：Wikipedia／Wikidata。
       表示内容の正確性・完全性は保証されません。
+      <button type="button" id="howto-btn">使い方</button>
       <button type="button" id="about-data-btn">出典の詳細・免責・お問い合わせ</button>
     </p>
   </footer>
+
+  <!-- アプリ内マニュアル。応募フォームの「マニュアルURL」欄は作品に埋め込み済みの
+       場合は不要とされているため、外部ドキュメントを別途用意する代わりにここへ集約する。
+       初回訪問時の自動表示はせず、フッターからいつでも開ける形にとどめる。 -->
+  <div id="howto-modal" class="modal-overlay" hidden>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="howto-modal-title">
+      <button type="button" id="howto-modal-close" aria-label="閉じる">×</button>
+      <h2 id="howto-modal-title">使い方</h2>
+
+      <p>
+        出発駅と予算を入れると、その予算内で<strong>公共交通機関（電車・バス）だけ</strong>で
+        日帰りで行ける、あまり知られていない景勝地を提案するアプリです。
+      </p>
+
+      <h3>使い方の手順</h3>
+      <ol>
+        <li>「出発駅を選択」欄に駅名を入力し、候補から選びます。</li>
+        <li>予算を <strong>－／＋</strong> ボタンで設定します（¥200〜¥1000、100円刻み）。</li>
+        <li>「検索」を押すと、その予算内で行ける景勝地の一覧と地図が表示されます。</li>
+      </ol>
+
+      <h3>地図と一覧の連動</h3>
+      <p>
+        地図上の <span class="howto-pin howto-pin-departure" aria-hidden="true"></span>
+        （オレンジのひし形）が出発駅、
+        <span class="howto-pin howto-pin-spot" aria-hidden="true"></span>
+        （緑の丸）がスポットです。ピンをクリックすると一覧の対応するカードがハイライトされ、
+        一覧のカードをクリックするとスポットの詳細画面が開きます。
+      </p>
+
+      <h3>予算に含まれるもの・含まれないもの</h3>
+      <p>
+        予算は<strong>出発駅からスポット最寄り駅までの片道の交通費のみ</strong>を対象とし、
+        日帰り利用を前提としています。宿泊費・飲食費・施設の入場料・帰りの交通費は
+        含まれません。
+      </p>
+
+      <h3>現在の対応地域</h3>
+      <p id="howto-coverage">読み込み中…</p>
+    </div>
+  </div>
 
   <div id="about-modal" class="modal-overlay" hidden>
     <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="about-modal-title">

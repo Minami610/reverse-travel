@@ -98,6 +98,16 @@ export function generateDataSourcesManifest() {
   }, {});
   const odptOrGtfsDataJpCount = feeds.filter((f) => ODPT_OR_GTFS_DATA_JP.has(f.source_category)).length;
 
+  // 対応地域（アプリ内マニュアルの「現在の対応地域」表示用）。現状は
+  // target-operators.json の phase1_region（香川県）をそのまま反映する。
+  // 全国対応パイプライン移行後は、都道府県別のcoverage-manifest.json
+  // （段階2で生成予定）に置き換わる想定のため、ここではハードコードせず
+  // configから読む形にしている。
+  const coverage = {
+    prefectures: config.phase1_region ? [config.phase1_region] : [],
+    note: config.phase1_note || null,
+  };
+
   const manifest = {
     generated_at: new Date().toISOString(),
     feeds,
@@ -106,6 +116,7 @@ export function generateDataSourcesManifest() {
       by_category: byCategory,
       odpt_or_gtfs_data_jp_count: odptOrGtfsDataJpCount,
     },
+    coverage,
   };
 
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -123,6 +134,7 @@ export function generateDataSourcesManifest() {
       '他データソースの併用自体は応募条件違反ではないが、gtfs-data.jp API v2への移行を段階2で実施予定）。'
     );
   }
+  console.log(`  - 対応地域: ${coverage.prefectures.join('、') || '(未設定)'}`);
   console.log(`✅ データ出典マニフェストを生成: ${outputPath}\n`);
 
   return manifest;

@@ -864,7 +864,8 @@ header p {
   color: var(--color-main-deep);
 }
 
-#about-data-btn {
+#about-data-btn,
+#howto-btn {
   background: none;
   border: none;
   padding: 0;
@@ -920,13 +921,40 @@ header p {
   margin-bottom: 0.55rem;
 }
 
-.modal-panel ul {
+.modal-panel ul,
+.modal-panel ol {
   margin: 0 0 0.55rem 1.25rem;
   font-size: 0.85rem;
 }
 
-.modal-panel ul li {
+.modal-panel ul li,
+.modal-panel ol li {
   margin-bottom: 0.6rem;
+}
+
+/* 使い方モーダルのピン凡例。地図実物（map-view.js）のdivIconと同じ色・形を
+   静的なspanで再現する（Leafletを介さないため寸法をここで個別に指定）。 */
+.howto-pin {
+  display: inline-block;
+  vertical-align: middle;
+  width: 14px;
+  height: 14px;
+  margin: 0 0.2rem;
+}
+
+.howto-pin-departure {
+  background-color: var(--color-accent);
+  border: 2px solid white;
+  outline: 1px solid var(--color-border);
+  border-radius: 4px;
+  transform: rotate(45deg);
+}
+
+.howto-pin-spot {
+  background-color: var(--color-main);
+  border: 1.5px solid white;
+  outline: 1px solid var(--color-border);
+  border-radius: 50%;
 }
 
 .about-feed-summary {

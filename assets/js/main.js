@@ -49,9 +49,14 @@ class ReverseTravel {
       aboutBtn: document.getElementById('about-data-btn'),
       aboutModal: document.getElementById('about-modal'),
       aboutModalClose: document.getElementById('about-modal-close'),
+      howtoBtn: document.getElementById('howto-btn'),
+      howtoModal: document.getElementById('howto-modal'),
+      howtoModalClose: document.getElementById('howto-modal-close'),
     };
 
-    this.initAboutModal();
+    this.initModal(this.elements.aboutBtn, this.elements.aboutModal, this.elements.aboutModalClose);
+    this.initModal(this.elements.howtoBtn, this.elements.howtoModal, this.elements.howtoModalClose);
+    this.renderDataSources();
 
     this.layoutController = new LayoutController({
       mapEl: document.getElementById('spots-map'),
@@ -124,32 +129,29 @@ class ReverseTravel {
   }
 
   /**
-   * 「出典の詳細・免責・お問い合わせ」モーダルの開閉。
-   * 必須表示3点の要約はフッターに常時出しており、ここは全文表示用。
-   * hidden属性で表示/非表示を切り替える（[hidden]{display:none!important}）。
+   * フッターのボタンから開く軽量モーダル（出典・免責・問い合わせ／使い方）
+   * 共通の開閉ロジック。hidden属性で表示/非表示を切り替える
+   * （[hidden]{display:none!important}）。
    */
-  initAboutModal() {
-    const { aboutBtn, aboutModal, aboutModalClose } = this.elements;
-    if (!aboutBtn || !aboutModal) return;
+  initModal(triggerBtn, modal, closeBtn) {
+    if (!triggerBtn || !modal) return;
 
     const open = () => {
-      aboutModal.hidden = false;
+      modal.hidden = false;
     };
     const close = () => {
-      aboutModal.hidden = true;
+      modal.hidden = true;
     };
 
-    aboutBtn.addEventListener('click', open);
-    aboutModalClose?.addEventListener('click', close);
+    triggerBtn.addEventListener('click', open);
+    closeBtn?.addEventListener('click', close);
     // オーバーレイ背景クリックで閉じる（パネル内クリックは伝播で除外）
-    aboutModal.addEventListener('click', (e) => {
-      if (e.target === aboutModal) close();
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) close();
     });
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && !aboutModal.hidden) close();
+      if (e.key === 'Escape' && !modal.hidden) close();
     });
-
-    this.renderDataSources();
   }
 
   /**
@@ -180,6 +182,17 @@ class ReverseTravel {
     const listEl = document.getElementById('about-feed-list');
     const summaryEl = document.getElementById('about-feed-summary');
     const footerEl = document.getElementById('footer-data-sources');
+    const coverageEl = document.getElementById('howto-coverage');
+
+    // 対応地域（使い方モーダル）はフィード一覧と独立した項目のため、
+    // フィードが読めなかった場合でも可能な限り描画する。
+    if (coverageEl) {
+      const prefectures = manifest?.coverage?.prefectures;
+      coverageEl.textContent =
+        Array.isArray(prefectures) && prefectures.length > 0
+          ? `現在は${prefectures.join('・')}に対応しています（全国対応へ拡大予定）。`
+          : '対応地域の情報を取得できませんでした。';
+    }
 
     const feeds = manifest?.feeds;
     if (!Array.isArray(feeds) || feeds.length === 0) {
