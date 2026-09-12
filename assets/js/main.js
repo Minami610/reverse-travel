@@ -382,7 +382,7 @@ class ReverseTravel {
     const spots = [...this.currentSpots];
     switch (this.currentSortOrder) {
       case 'price':
-        return spots.sort((a, b) => a.source_fare - b.source_fare);
+        return spots.sort((a, b) => a.source_round_trip_fare - b.source_round_trip_fare);
       case 'duration':
         return spots.sort(
           (a, b) => (a.source_ride_duration_min ?? Infinity) - (b.source_ride_duration_min ?? Infinity)
@@ -433,11 +433,12 @@ class ReverseTravel {
   }
 
   /**
-   * カードの「¥200・約12分・0.5km」形式の要約行。
+   * カードの「往復¥400・約12分・0.5km」形式の要約行。
+   * 予算は往復の交通費（帰りも同額と仮定）なので、比較対象と揃えて往復額を表示する。
    * 所要時間が経路未確定でnullの場合は運賃・距離のみ表示する。
    */
   formatSpotSummary(spot) {
-    const parts = [`¥${spot.source_fare}`];
+    const parts = [`往復¥${spot.source_round_trip_fare}`];
     if (typeof spot.source_ride_duration_min === 'number') {
       parts.push(`約${spot.source_ride_duration_min}分`);
     }

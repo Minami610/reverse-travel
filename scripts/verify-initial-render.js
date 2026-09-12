@@ -188,11 +188,16 @@ async function checkVisible(html, matches, label) {
     const coverageText = doc.getElementById('howto-coverage')?.textContent || '';
     const coverageRendered = coverageText.length > 0 && !/読み込み中/.test(coverageText);
 
-    howtoOk = initiallyHidden && opensOnClick && coverageRendered;
+    // 予算は往復基準（2026-09-12決定）。「帰りの交通費は含まれません」という
+    // 片道基準時代の記述が戻っていないか、往復である旨の説明があるかを確認する。
+    const modalText = howtoModal.textContent;
+    const roundTripWordingOk = /往復/.test(modalText) && !/帰りの交通費は含まれません/.test(modalText);
+
+    howtoOk = initiallyHidden && opensOnClick && coverageRendered && roundTripWordingOk;
     console.log(
       howtoOk
-        ? `✅ #howto-modal は初期非表示→ボタンで開き、対応地域「${coverageText}」を含みます`
-        : `❌ #howto-modal 挙動NG（初期非表示=${initiallyHidden}, クリックで開く=${opensOnClick}, カバレッジ描画=${coverageRendered}）`
+        ? `✅ #howto-modal は初期非表示→ボタンで開き、対応地域「${coverageText}」・往復基準の説明を含みます`
+        : `❌ #howto-modal 挙動NG（初期非表示=${initiallyHidden}, クリックで開く=${opensOnClick}, カバレッジ描画=${coverageRendered}, 往復表記=${roundTripWordingOk}）`
     );
   }
 
@@ -280,7 +285,11 @@ async function checkResultCards(html) {
     const hasDescription = !!card.querySelector('.spot-description');
     const hasSummary = !!card.querySelector('.spot-summary');
     const hasButton = !!card.querySelector('.detail-btn');
-    const structureOk = hasImage && hasTitle && hasDescription && hasSummary && hasButton;
+    // 予算は往復基準（2026-09-12決定）。カード要約が往復額を表示しているか、
+    // 「往復¥」表記の有無で確認する（片道額のまま出戻っていないかの検出）。
+    const summaryText = card.querySelector('.spot-summary')?.textContent || '';
+    const hasRoundTripLabel = /往復¥\d/.test(summaryText);
+    const structureOk = hasImage && hasTitle && hasDescription && hasSummary && hasButton && hasRoundTripLabel;
 
     const cardStyle = window.getComputedStyle(card);
     const imgStyle = window.getComputedStyle(card.querySelector('.spot-image'));
@@ -294,7 +303,7 @@ async function checkResultCards(html) {
 
     if (!structureOk || !styleOk) {
       ok = false;
-      console.log(`  ❌ カード[${i}]: 構造=${structureOk ? 'OK' : 'NG'} (image=${hasImage},title=${hasTitle},description=${hasDescription},summary=${hasSummary},button=${hasButton}) / スタイル=${styleOk ? 'OK' : 'NG'} (display=${cardStyle.display}, min-height=${cardStyle.minHeight}, img.height=${imgStyle.height}, img.flex-shrink=${imgStyle.flexShrink})`);
+      console.log(`  ❌ カード[${i}]: 構造=${structureOk ? 'OK' : 'NG'} (image=${hasImage},title=${hasTitle},description=${hasDescription},summary=${hasSummary},button=${hasButton},往復表記=${hasRoundTripLabel}) / スタイル=${styleOk ? 'OK' : 'NG'} (display=${cardStyle.display}, min-height=${cardStyle.minHeight}, img.height=${imgStyle.height}, img.flex-shrink=${imgStyle.flexShrink})`);
     }
   }
 

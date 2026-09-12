@@ -796,6 +796,16 @@ header p {
   margin-top: 0.5rem;
 }
 
+/* 往復運賃の注記。片道の内訳・合計（route-total）とは別立てで、
+   予算と比較すべき実際の負担額であることが分かるよう視覚的に区別する。 */
+.route-round-trip {
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--color-border);
+  font-size: 0.95rem;
+  color: var(--color-accent-deep);
+}
+
 .route-unresolved {
   font-size: 0.9rem;
   color: var(--color-text-sub);

@@ -49,25 +49,26 @@ export class RouteFormatter {
 
   /**
    * @param {string} departureStationName
-   * @param {object} spot - source_station / source_fare / source_reach_by /
-   *                         source_transfer_at / source_leg_fares を持つスポット候補
+   * @param {object} spot - source_station / source_fare / source_round_trip_fare /
+   *                         source_reach_by / source_transfer_at / source_leg_fares を持つスポット候補
    * @returns {string} 経路情報HTML
    */
   format(departureStationName, spot) {
-    const destName = spot.source_station;
-    const fare = spot.source_fare;
-
     if (spot.source_reach_by === 'transfer' && spot.source_transfer_at) {
       return this.formatCrossOperatorTransfer(departureStationName, spot);
     }
 
+    const destName = spot.source_station;
+    const fare = spot.source_fare;
+    const roundTripNote = this.renderRoundTripNote(spot.source_round_trip_fare);
+
     const parsed = this.parseEntry(this.lookup(departureStationName, destName));
     if (!parsed) {
-      return this.renderUnresolved(fare);
+      return this.renderUnresolved(spot);
     }
 
     if (parsed.type === 'direct') {
-      return `<div class="route-info">${this.renderLegLine(parsed.route_id, departureStationName, destName, parsed.duration_min, fare)}</div>`;
+      return `<div class="route-info">${this.renderLegLine(parsed.route_id, departureStationName, destName, parsed.duration_min, fare)}${roundTripNote}</div>`;
     }
 
     // 運賃表上は「直接到達」だが、実際には同一事業者内で乗換が必要な区間。
@@ -78,8 +79,9 @@ export class RouteFormatter {
         ${this.renderLegLine(parsed.legs[0].route_id, departureStationName, parsed.via, parsed.legs[0].duration_min, null)}
         <div class="route-transfer-note">↓ ${parsed.via}で乗換</div>
         ${this.renderLegLine(parsed.legs[1].route_id, parsed.via, destName, parsed.legs[1].duration_min, null)}
-        <div class="route-total">合計 ¥${fare}（通し運賃）・約${totalMinutes}分</div>
+        <div class="route-total">合計（片道） ¥${fare}（通し運賃）・約${totalMinutes}分</div>
         <p class="route-disclaimer">※乗換の待ち時間は考慮していません</p>
+        ${roundTripNote}
       </div>
     `;
   }
@@ -90,6 +92,7 @@ export class RouteFormatter {
     const destName = spot.source_station;
     const [fare1, fare2] = spot.source_leg_fares || [null, null];
     const fare = spot.source_fare;
+    const roundTripNote = this.renderRoundTripNote(spot.source_round_trip_fare);
 
     const leg1 = this.parseEntry(this.lookup(departureStationName, transferAt));
     const leg2 = this.parseEntry(this.lookup(transferAt, destName));
@@ -103,10 +106,21 @@ export class RouteFormatter {
         ${this.renderLegOrSegment(departureStationName, transferAt, leg1, fare1)}
         <div class="route-transfer-note">↓ ${transferAt}で乗換</div>
         ${this.renderLegOrSegment(transferAt, destName, leg2, fare2)}
-        <div class="route-total">合計 ¥${fare}${totalMinutes !== null ? `・約${totalMinutes}分` : ''}</div>
+        <div class="route-total">合計（片道） ¥${fare}${totalMinutes !== null ? `・約${totalMinutes}分` : ''}</div>
         <p class="route-disclaimer">※乗換の待ち時間は考慮していません</p>
+        ${roundTripNote}
       </div>
     `;
+  }
+
+  /**
+   * 往復運賃の注記。予算は往復基準（帰りも同額と仮定）なので、片道の内訳・合計とは
+   * 別立てで常に表示する。GTFSの運賃データには往復運賃・往復割引という概念自体が
+   * 存在しないため「同額と仮定」と明記する。
+   */
+  renderRoundTripNote(roundTripFare) {
+    if (roundTripFare === null || roundTripFare === undefined) return '';
+    return `<p class="route-round-trip">往復運賃（帰りも同額と仮定）：<strong>¥${roundTripFare}</strong></p>`;
   }
 
   /** 1区間分の表示。その区間自体がさらに乗換を要する場合はまとめて展開する */
@@ -132,10 +146,10 @@ export class RouteFormatter {
     return `<p class="route-leg route-leg-${mode}">${icon} ${label}　${originName} → ${destName}（${farePart}約${durationMin}分）</p>`;
   }
 
-  renderUnresolved(fare) {
+  renderUnresolved(spot) {
     return `
       <div class="route-info">
-        <p class="route-unresolved">経路情報を確定できませんでした（¥${fare}で到達可能です）</p>
+        <p class="route-unresolved">経路情報を確定できませんでした（片道¥${spot.source_fare}・往復¥${spot.source_round_trip_fare}で到達可能です）</p>
       </div>
     `;
   }

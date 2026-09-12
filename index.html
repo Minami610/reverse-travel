@@ -37,7 +37,7 @@
 
             <div class="form-group form-group-budget">
               <label for="budget-input">
-                予算：<span id="budget-display">¥500</span>
+                予算（往復）：<span id="budget-display">¥500</span>
               </label>
               <div class="budget-stepper">
                 <button type="button" id="budget-decrement" aria-label="予算を100円減らす">−</button>
@@ -147,9 +147,15 @@
 
       <h3>予算に含まれるもの・含まれないもの</h3>
       <p>
-        予算は<strong>出発駅からスポット最寄り駅までの片道の交通費のみ</strong>を対象とし、
-        日帰り利用を前提としています。宿泊費・飲食費・施設の入場料・帰りの交通費は
-        含まれません。
+        予算は<strong>出発駅からスポット最寄り駅までの往復の交通費</strong>を対象とし、
+        日帰り利用を前提としています。宿泊費・飲食費・施設の入場料は含まれません。
+      </p>
+      <p>
+        GTFSの運賃データ（fare_rules.txt／fare_attributes.txt）には往復運賃・往復割引という
+        概念自体が存在せず、片道の運賃のみが定義されています。そのため本アプリでは
+        <strong>帰りも往路と同額と仮定</strong>して往復額を算出しています。なお、ことでん
+        （鉄道）の運賃表では全2,756通りの区間すべてで往復方向の運賃が完全に一致しており
+        （不一致0件）、鉄道区間についてはこの仮定が実データ上も正確です。
       </p>
 
       <h3>現在の対応地域</h3>

@@ -77,6 +77,7 @@ export class SpotFinder {
             source_station: station.stop_name,
             source_stop_id: station.stop_id,
             source_fare: station.fare,
+            source_round_trip_fare: station.roundTripFare,
             source_reach_by: station.reachBy,
             source_transfer_at: station.transferAt,
             source_leg_fares: station.legFares,
