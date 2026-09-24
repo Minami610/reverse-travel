@@ -13,6 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import { parse } from 'csv-parse/sync';
 import { fileURLToPath } from 'url';
+import { namespacedId } from './gtfs-id.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -233,13 +234,14 @@ async function processOperator(operator, operatorDir, aggregated) {
       stats.inputRows += operatorStops.length;
 
       for (const stop of operatorStops) {
-        aggregated.stops[stop.stop_id] = {
-          stop_id: stop.stop_id,
+        const stopId = namespacedId(operator.id, stop.stop_id);
+        aggregated.stops[stopId] = {
+          stop_id: stopId,
           stop_name: stop.stop_name,
           stop_lat: parseFloat(stop.stop_lat),
           stop_lon: parseFloat(stop.stop_lon),
           zone_id: stop.zone_id || null,
-          parent_station: stop.parent_station || null,
+          parent_station: stop.parent_station ? namespacedId(operator.id, stop.parent_station) : null,
           operator_id: operator.id,
         };
       }
@@ -254,8 +256,9 @@ async function processOperator(operator, operatorDir, aggregated) {
       stats.inputRows += routes.length;
 
       for (const route of routes) {
-        aggregated.routes[route.route_id] = {
-          route_id: route.route_id,
+        const routeId = namespacedId(operator.id, route.route_id);
+        aggregated.routes[routeId] = {
+          route_id: routeId,
           route_short_name: route.route_short_name || '',
           route_long_name: route.route_long_name || '',
           route_type: route.route_type,
@@ -339,9 +342,9 @@ async function processFares(
       for (const stop of operatorStops) {
         if (!stop.zone_id) continue;
         if (!zoneToStopIds[stop.zone_id]) zoneToStopIds[stop.zone_id] = new Set();
-        zoneToStopIds[stop.zone_id].add(stop.stop_id);
+        zoneToStopIds[stop.zone_id].add(namespacedId(operatorId, stop.stop_id));
         if (stop.parent_station) {
-          zoneToStopIds[stop.zone_id].add(stop.parent_station);
+          zoneToStopIds[stop.zone_id].add(namespacedId(operatorId, stop.parent_station));
         }
       }
 
@@ -397,18 +400,22 @@ async function processFares(
       const stopTimes = parseGtfsFile(stopTimesPath, 'stop_times.txt');
       stats.inputRows += trips.length + stopTimes.length;
 
-      // route_id ごとに停留所を集める
+      // route_id ごとに停留所を集める（route_id/stop_idともに名前空間化する）
       const routeStops = {};
       for (const trip of trips) {
-        if (!routeStops[trip.route_id]) {
-          routeStops[trip.route_id] = new Set();
+        const routeId = namespacedId(operatorId, trip.route_id);
+        if (!routeStops[routeId]) {
+          routeStops[routeId] = new Set();
         }
       }
 
       for (const stopTime of stopTimes) {
         const trip = trips.find((t) => t.trip_id === stopTime.trip_id);
-        if (trip && routeStops[trip.route_id]) {
-          routeStops[trip.route_id].add(stopTime.stop_id);
+        if (trip) {
+          const routeId = namespacedId(operatorId, trip.route_id);
+          if (routeStops[routeId]) {
+            routeStops[routeId].add(namespacedId(operatorId, stopTime.stop_id));
+          }
         }
       }
 
@@ -422,10 +429,11 @@ async function processFares(
         if (!fare) continue;
 
         const price = parseInt(fare.price, 10);
-        const stops = Array.from(routeStops[rule.route_id] || []);
+        const routeId = namespacedId(operatorId, rule.route_id);
+        const stops = Array.from(routeStops[routeId] || []);
 
-        aggregated.bus_fares[rule.route_id] = {
-          route_id: rule.route_id,
+        aggregated.bus_fares[routeId] = {
+          route_id: routeId,
           fare: price,
           stops: stops,
           operator_id: operatorId,

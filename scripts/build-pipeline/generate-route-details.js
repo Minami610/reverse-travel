@@ -41,6 +41,7 @@ import fs from 'fs';
 import path from 'path';
 import { parse } from 'csv-parse/sync';
 import { fileURLToPath } from 'url';
+import { namespacedId } from './gtfs-id.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -95,12 +96,15 @@ export async function generateRouteDetails() {
 
     const trips = parseGtfsFile(tripsPath);
     const stopTimes = parseGtfsFile(stopTimesPath);
-    const tripToRoute = new Map(trips.map((t) => [t.trip_id, t.route_id]));
+    // route_id/stop_idはparse-and-transform.jsの出力（stops-metadata.json/
+    // route-info.json）と同じ名前空間化を適用しないと、生のGTFSファイルを
+    // 直接読んでいるこのスクリプト側だけIDが一致しなくなる。
+    const tripToRoute = new Map(trips.map((t) => [t.trip_id, namespacedId(operator.id, t.route_id)]));
 
     const tripStopsMap = new Map();
     for (const st of stopTimes) {
       if (!tripStopsMap.has(st.trip_id)) tripStopsMap.set(st.trip_id, []);
-      tripStopsMap.get(st.trip_id).push(st);
+      tripStopsMap.get(st.trip_id).push({ ...st, stop_id: namespacedId(operator.id, st.stop_id) });
     }
 
     for (const [tripId, stops] of tripStopsMap.entries()) {
