@@ -124,6 +124,55 @@ async function bundleHTML() {
 }
 
 /**
+ * spots-by-station.json の健全性チェック。
+ *
+ * 【背景】旧スポット収集パイプライン（generate-spots.json.js）や
+ * refresh-and-normalize-spots.js を誤って実行すると、本番配信中のデータ
+ * （新パイプライン=generate-spots-by-region.js産）より明確に劣化した
+ * データで上書きされる。両スクリプトはCLAUDE.mdのルールに従い実行時に
+ * 即座にエラーで止まるようにしたが、それとは別に「壊れたデータのまま
+ * バンドルしてしまう」経路（例：手動でファイルを差し替えた等）も塞ぐため、
+ * バンドル時にも構造とデータの健全性を検証する。
+ * - spotsIndex/spots/stations を持つ新形式（インデックス化済み）であること
+ *   （旧形式は{spots:{qid:詳細}, stations:{...}}でspotsIndexを持たない）
+ * - すべてのスポットに sitelinks が設定されていること
+ *   （未設定＝旧パイプライン産の証拠。spot-finder.jsの足切りフィルタが
+ *   sitelinks===undefinedを「通す」判定にしているため、無言で無効化される）
+ * - 停留所に紐づくスポット参照の総数が0でないこと
+ *   （空データでの上書きを検出する。過去に実際に発生した事故）
+ */
+function validateSpotsData(filePath) {
+  const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+
+  if (!Array.isArray(data.spotsIndex) || !Array.isArray(data.spots) || typeof data.stations !== 'object') {
+    throw new Error(
+      `spots-by-station.json が新形式（spotsIndex/spots/stations）ではありません。` +
+      `旧パイプライン（generate-spots.json.js等）で上書きされた可能性があります。`
+    );
+  }
+
+  const missingSitelinks = data.spots.filter((s) => s.sitelinks === undefined).length;
+  if (missingSitelinks > 0) {
+    throw new Error(
+      `spots-by-station.json 内の ${missingSitelinks}/${data.spots.length} 件のスポットに ` +
+      `sitelinks がありません。旧パイプライン（sitelinksを取得しない）で生成された疑いがあります。` +
+      `spot-finder.jsの足切りフィルタが無言で無効化されるため、このままバンドルしません。`
+    );
+  }
+
+  const totalRefs = Object.values(data.stations).reduce((sum, arr) => sum + arr.length, 0);
+  if (totalRefs === 0) {
+    throw new Error(
+      `spots-by-station.json の停留所に紐づくスポット参照が0件です。空データでの上書きの疑いがあります。`
+    );
+  }
+
+  console.log(
+    `  ✅ spots-by-station.json 健全性チェックOK（スポット${data.spots.length}件、駅参照${totalRefs}件、sitelinks欠落0件）`
+  );
+}
+
+/**
  * 派生データをJavaScriptオブジェクトリテラルとしてインライン化
  */
 async function generateInlineDataScript(derivedDir) {
@@ -143,9 +192,22 @@ async function generateInlineDataScript(derivedDir) {
     const filePath = path.join(derivedDir, filename);
 
     if (!fs.existsSync(filePath)) {
+      if (filename === 'spots-by-station.json') {
+        // スポットデータは他の派生データと違い「なければ空でもアプリは一応動く」
+        // ものではなく、検索結果が常に0件になる致命的な欠落。CLAUDE.mdの
+        // 「必須の生成物は不在時にエラーで停止させる」に従い、警告で済ませず止める。
+        throw new Error(
+          `${filename} が見つかりません。generate-spots-by-region.jsで生成してください` +
+          `（parse-and-transform.jsはこのファイルを生成しなくなりました）。`
+        );
+      }
       console.warn(`  ⚠️  ${filename} が見つかりません（スキップ）`);
       script += `window.${varName} = {};\n`;
       continue;
+    }
+
+    if (filename === 'spots-by-station.json') {
+      validateSpotsData(filePath);
     }
 
     const data = fs.readFileSync(filePath, 'utf-8');

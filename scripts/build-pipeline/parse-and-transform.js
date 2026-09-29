@@ -522,17 +522,15 @@ function saveDerivedData(aggregated) {
     `✅ route-info.json (${Object.keys(aggregated.routes).length} 路線)`
   );
 
-  // 4. spots-by-station.json（スタブ）
-  const spotsByStation = {};
-  for (const stopId of Object.keys(aggregated.stops)) {
-    spotsByStation[stopId] = [];
-  }
-
-  fs.writeFileSync(
-    path.join(derivedDir, 'spots-by-station.json'),
-    JSON.stringify(spotsByStation, null, 2)
-  );
-  console.log(`✅ spots-by-station.json (スタブ、generate-spots.json.js で上書き予定)`);
+  // 4. spots-by-station.json には触れない。
+  // 【2026-09-29】以前はここで空のスタブを書き出し、generateSpots()（旧パイプライン）が
+  // 後で上書きする前提だった。しかしgenerateSpots()は劣化データを生成するため無効化した
+  // （generate-spots.json.jsのコメント参照）ので、このスタブ書き込みだけが実行され続け、
+  // 本番配信中の良いデータ（新パイプライン=generate-spots-by-region.js産）を空データで
+  // 無言で上書きしてしまう（実際にこの手順で2度事故った）。
+  // スポットデータの生成・更新はgenerate-spots-by-region.jsの責務とし、parse-and-
+  // transform.jsはGTFS由来の派生データ（運賃・停留所・路線）だけを扱う。
+  console.log('ℹ️  spots-by-station.json は生成しません（generate-spots-by-region.jsの責務）');
 }
 
 // 実行

@@ -272,6 +272,17 @@ export async function generateRouteDetails() {
     console.log('  - すべてのOD区間で経路を確定できました');
   }
 
+  // 0件のまま成功扱いにしない（CLAUDE.md「各段階で件数をログし、0件なら失敗させる」）。
+  // 直行・乗換のいずれも0件は、trips.txt/stop_times.txtの取り違えや名前空間化の
+  // ミスマッチ等で駅名ペアが一切解決できていない異常事態であり、静かに空の
+  // route-details.jsonを書き出すと経路表示が全滅した状態のままビルドが進んでしまう。
+  if (odStationPairs.size > 0 && directCount + transferCount === 0) {
+    throw new Error(
+      `経路情報が1件も確定できませんでした（対象${odStationPairs.size}駅名ペア中、直行0件・乗換0件）。` +
+      `trips.txt/stop_times.txtの読み込みやstop_id/route_idの名前空間化に不整合がある可能性があります。`
+    );
+  }
+
   // サイズ抑制のためcompact出力（pretty-printしない）
   fs.writeFileSync(path.join(derivedDir, 'route-details.json'), JSON.stringify(routeDetails));
   const fileSize = fs.statSync(path.join(derivedDir, 'route-details.json')).size;

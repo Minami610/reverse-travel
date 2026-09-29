@@ -30,6 +30,22 @@ function sleep(ms) {
 }
 
 async function main() {
+  // 【無効化済み・2026-09-29】このスクリプトは spots-by-station.json を
+  // generate-spots.json.js と同じ旧フラット形式（{qid:詳細}辞書、県別整数
+  // インデックス化なし）で上書きし、かつ sitelinksを一切持たない。本番配信中の
+  // データ（新パイプライン=generate-spots-by-region.js産、インデックス化済み・
+  // sitelinks付き）をこれで上書きすると、無言で劣化・形式不一致（フロントの
+  // mergeIndexedSpotRegionsがspotsIndexを前提とするため読み込みに失敗する）が起きる。
+  // 理由はgenerate-spots.json.jsのgenerateSpots()コメントと同じ。
+  throw new Error(
+    'refresh-and-normalize-spots.js は無効化されています。\n' +
+    '理由：spots-by-station.json を旧フラット形式（sitelinksなし、整数インデックス化なし）で' +
+    '上書きしてしまい、本番配信中のデータ（新パイプライン産）より劣化する、または形式不一致で' +
+    'フロントが読み込めなくなるため。詳細はgenerate-spots.json.jsのgenerateSpots()コメントと' +
+    'CLAUDE.mdを参照してください。'
+  );
+
+  // eslint-disable-next-line no-unreachable
   if (!fs.existsSync(stationCachePath)) {
     throw new Error(`${stationCachePath} が見つかりません`);
   }

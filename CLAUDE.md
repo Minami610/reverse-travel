@@ -80,16 +80,22 @@
 
 ```
 scripts/
-  fetch-and-build.js                本番ビルドの入口。※まだ旧方式(generate-spots.json.js)を
-                                    呼んでおり、新パイプラインに未接続
-  bundle-html.js                    単一HTMLバンドラ（docs/へ自動コピー）
+  fetch-and-build.js                本番ビルドの入口。旧スポット収集(generate-spots.json.js)は
+                                    2026-09-29に無効化済み（実行するとエラーで停止する）。
+                                    新パイプラインへの接続はまだ
+  bundle-html.js                    単一HTMLバンドラ（docs/へ自動コピー）。spots-by-station.json
+                                    の健全性チェック（sitelinks欠落・0件検出）付き
   verify-initial-render.js          jsdomによる描画検証（npm run verify-render）
   build-pipeline/
     fetch-gtfs.js                   GTFS取得＋解凍＋必須ファイル検証
     parse-and-transform.js          GTFS→派生JSON（zone_id→stop_id変換、名前空間化、整数インデックス）
-    generate-route-details.js       直通検証・所要時間中央値・期待待ち時間
-    generate-spots-by-region.js     ★現行のスポット収集（bbox一括取得・除外機構・県判定）
-    generate-spots.json.js          旧方式＋Wikipedia enrichment関数群
+    generate-route-details.js       直通検証・所要時間中央値・期待待ち時間。直行・乗換とも
+                                    0件ならエラー停止
+    generate-spots-by-region.js     ★唯一の現行スポット収集（bbox一括取得・除外機構・県判定）。
+                                    fetch-and-build.jsには未接続、都道府県単位で手動実行
+    generate-spots.json.js          【無効化済み】旧方式。generateSpots()は呼ぶと即エラー。
+                                    Wikipedia本文取得等のユーティリティは新パイプラインが流用
+    refresh-and-normalize-spots.js  【無効化済み】旧方式のキャッシュ再正規化。呼ぶと即エラー
     generate-municipality-table.js  市区町村→都道府県の対応表を生成
 assets/js/  main.js / gtfs-loader.js / fare-calculator.js / spot-finder.js /
             route-formatter.js / route-duration.js / map-view.js / layout-controller.js
@@ -98,15 +104,32 @@ config/     target-operators.json / spot-config.json / spot-ranking-config.json
 
 ### 設計上の決定（経緯は git log に詳しい）
 
-- **運賃**：GTFSは①均一運賃型 ②OD運賃表型の2パターン。**データから自動判定する**（configを信用しない）。
-  `fare_rules.origin_id`/`destination_id` は **`zone_id` であって stop_id でも駅名でもない**。
-  運賃非対応のバス路線は除外。経路選択は「運行頻度の下限＋所要時間最短」で、**待ち時間（運行時間帯÷便数÷2）を考慮しないと結果が逆転する**。
+**【2026-09-29追記】以下は「あるべき設計」の記述であり、実装状況は項目ごとに異なる。
+「実装済み」だけが今`npm run build`で実際に起きることの保証。「新パイプラインのみ」は
+generate-spots-by-region.jsを手動実行したときだけ有効で、旧経路（generate-spots.json.js）は
+無効化済み。CLAUDE.mdの記述と実装が食い違っていたこと自体が2026-09-29に実際の事故
+（本番より劣化したデータでの上書きを2回発生させかけた）につながったため、今後この節を
+更新する際は必ずコードを読んで裏を取ること。書いた人（AIも人間も）の意図ではなく、
+実際に実行されるコードを信じること。**
+
+- **運賃**：GTFSは①均一運賃型 ②OD運賃表型の2パターン。**データから自動判定する**（configを信用しない）。実装済み（`parse-and-transform.js`）
+  `fare_rules.origin_id`/`destination_id` は **`zone_id` であって stop_id でも駅名でもない**。実装済み。
+  運賃非対応のバス路線は除外。実装済み（運賃ルールがなければ`bus_fares`に登場しないだけ＝暗黙の除外）。
+  経路選択は「運行頻度の下限＋所要時間最短」で、**待ち時間（運行時間帯÷便数÷2）を考慮しないと結果が逆転する**。実装済み（`generate-route-details.js`）。
+  ただし運賃を決めた事業者（最安運賃側）と表示される経路の事業者（最短時間側）が食い違うことがあり、
+  存在しない組み合わせの運賃・経路を表示する不具合が実際にあった（香川で6件実測）。修正予定。
 - **スポット収集**：Wikidataのbbox（`wikibase:box`）で地域一括取得。停留所ごとの`wikibase:around`は全国規模で破綻する（5.5〜9日）。
-  P31は `wdt:P31/wdt:P279*` でサブクラスを辿る。記事タイトルは**テキスト検索ではなくWikidataのサイトリンクから**取得する。
+  **新パイプライン（`generate-spots-by-region.js`）のみ実装。`npm run build`が呼ぶ経路（`generate-spots.json.js`）は今も`wikibase:around`の停留所ごと検索であり、無効化して塞いである。**
+  P31は `wdt:P31/wdt:P279*` でサブクラスを辿る。新旧両方に実装済み。記事タイトルは**テキスト検索ではなくWikidataのサイトリンクから**取得する。新旧両方に実装済み。
+  地図・位置図画像の除外（`isProblematicImage`、`/map|locator|relief|géolocalisation|gthumb/i`）は新旧共通の関数として実装済み（新パイプラインが旧ファイルからimportして使う）。
 - **知名度指標は Wikidataの `wikibase:sitelinks`**（pageviewsは廃止）。
+  **新パイプラインのみ実装。旧`generate-spots.json.js`はsitelinksを一切取得しないため、
+  そちらで生成したデータはフロント（`spot-finder.js`）の足切りフィルタが無言で無効化される
+  （`sitelinks===undefined`は「通す」判定のため）。** pageviews取得関数自体は削除していないが
+  デフォルト無効（`fetchPageviews:false`）なので、その意味では廃止は成立している。
   pageviewsは在校生アクセス等で観光地の知名度を反映しない（例：石川県立金沢二水高校が県内最高値級）うえ、レート制限で富山1県に174分かかった。
   sitelinksは低い値に密集し55%が同順位のため、**`sitelinks >= 10` の「足切り専用」**とし、順位付けは**情報充実度（本文文字数→画像の有無）**を主軸にする。
-- **除外機構は4層**（`config/spot-config.json` に全定義。ハードコード禁止）
+- **除外機構は4層**（`config/spot-config.json` に全定義。ハードコード禁止）。**新パイプラインのみ実装**（`verifyExclusionGuards()`等は`generate-spots-by-region.js`にしかない）。
   1. **除外優先ルール**：「除外クラス該当 **かつ** 守護クラス非該当」の場合のみ除外
   2. **ガードテスト（ベースライン方式）**：除外QID×守護QIDをP279\*で総当たり。既知の衝突は`guard_test_approved_conflicts`に理由付きで記録して通し、**未知の衝突だけビルドを停止**
   3. **誤除外の機械的検出（常設）**：除外セットのうち「記事あり＋画像あり＋sitelinks>=3」を抽出。学校や変電所は画像を持たないため、これを通るものは誤除外の疑いが濃い
@@ -115,9 +138,12 @@ config/     target-operators.json / spot-config.json / spot-ranking-config.json
   除外は取り返しがつかないが、ランキング下位なら実害がない。
   例：発電所(Q159719)は**意図的に除外しない**（発電用ダムが下位クラスにあり黒部ダム等を巻き込むため）。橋・川・ダムも残す。
 - **データ構造**：GTFSの stop_id/route_id はフィード内でしか一意でないため `{operator_id}:{raw_id}` で名前空間化必須。
-  文字列IDは県別辞書＋整数インデックスに置換してサイズを削減（構造系58%減、spots 65%減）。
-- **フロントエンドは QID で重複排除する**（`gtfs-loader.js` の `mergeIndexedSpotRegions()`）。
-  隣接県を同時ロードする設計のため、複数県にまたがるスポットや県判定フォールバックによる重複を吸収する。
+  **2026-09-29実装。** それまでは生のstop_id/route_idをそのままキーにしており、香川（ことでん＝日本語名ベースID、ことでんバス＝数字ID）はたまたま衝突しなかっただけだった。
+  文字列IDは県別辞書＋整数インデックスに置換してサイズを削減（構造系58%減、spots 65%減）。**新パイプラインのみ実装**（`buildIndexedSpotsOutput`、`generate-spots-by-region.js`）。旧`generate-spots.json.js`はフラットな`{qid:詳細}`形式で圧縮しない。
+- **フロントエンドは QID で重複排除する**（`gtfs-loader.js` の `mergeIndexedSpotRegions()`）。実装済み、`=== undefined`判定も正しい。
+  隣接県を同時ロードする設計のため、複数県にまたがるスポットや県判定フォールバックによる重複を吸収する。**ただし単一県ロードでしか実地検証されておらず、複数県での動作は段階1（富山・石川）で初めて検証する。**
+- **駅の集約は「駅名」文字列だけをキーにしている**（`stationsByName`・`reachable`・`route-details.json`すべて）。
+  **未実装の懸念事項**：全国規模では「西町」「中島」等ありふれた地名が複数の町で重複し、無関係な停留所が1つの駅に合体して存在しない乗換（瞬間移動）を生む。富山・石川の候補9フィードだけで実測44組（最大89km離れた「同名駅」）。段階1で駅IDの設計を見直す。
 
 ---
 
@@ -136,8 +162,11 @@ config/     target-operators.json / spot-config.json / spot-ranking-config.json
 - **「日本の市(Q494721)」だけでは県庁所在地が漏れる**（富山市・金沢市は中核市／都道府県庁所在地クラスを持つ）。
 - UTF-8 BOM付きの `stops.txt` には `bom: true` が必要。
 - `LIMIT` は `ORDER BY` なしで使わない（任意のN件に切られる）。
-- 地図・位置図の画像（`Japan_Map_Lincun.svg` 等）が混入するため正規表現で除外する。
+- 地図・位置図の画像は`isProblematicImage()`（`/map|locator|relief|géolocalisation|gthumb/i`、`generate-spots.json.js`）で正規表現除外する。新旧パイプライン共通の関数として実装済み。
 - **計測データはサンドボックス削除前に退避すること**（174分かけた計測結果を検証前に消した事故がある）。
+- **`npm run build`（fetch-and-build.js）は旧スポット収集経路（generate-spots.json.js）を通ると、本番配信中のデータより明確に劣化したデータを無言で生成する**（停留所ごとの近傍検索のみ・sitelinksなしで足切りフィルタが無言で無効化・ガードテストなし）。2026-09-29に`generateSpots()`と`refresh-and-normalize-spots.js`を実行時エラーで無効化済み。さらに`parse-and-transform.js`が`spots-by-station.json`に空スタブを書き込んでいたことも判明し削除した（この2つが揃って、実際に本番データを2回上書きしかけた）。新パイプラインが接続されるまでスポットデータの更新は`generate-spots-by-region.js`を都道府県単位で手動実行すること。
+- **駅名だけで駅をまとめると、別の町の同名停留所が合体して存在しない乗換（瞬間移動）が生まれる。** 富山・石川の候補9フィードだけで同名かつ1km以上離れた組が44件見つかった（最大89km）。`stationsByName`のキーを駅名文字列から、名前とは独立した安定IDに変える必要がある（段階1で対応）。
+- **運賃を決めた事業者と、表示する経路の事業者は必ず一致させること。** 別々のロジック（運賃は最安、経路表示は最短時間）で決めると、実在しない運賃×経路の組み合わせを利用者に見せてしまう（香川の高松築港で実際に6件発生：¥250はバスの運賃なのに表示は鉄道の経路）。
 
 ## 作業の進め方
 

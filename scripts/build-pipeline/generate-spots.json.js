@@ -187,9 +187,33 @@ export async function fetchWikidataResponse(
 }
 
 /**
- * スポット生成のメイン処理
+ * スポット生成のメイン処理（無効化済み・2026-09-29）
+ *
+ * 実際に本番配信しているデータより明確に劣化したデータを無言で生成してしまうため、
+ * このエントリポイントは呼び出せないようにしている（CLAUDE.md「絶対に守るルール」参照）：
+ *   - 停留所ごとの wikibase:around 個別検索のみ（bbox一括取得・県判定・
+ *     ガードテスト・誤除外の機械的検出を一切通らない）
+ *   - sitelinks を取得しないため、spot-finder.js の足切りフィルタが
+ *     全スポットで無言で無効化される（sitelinks===undefinedは「通す」判定のため）
+ * 実装本体は削除せず generateSpotsLegacyUnsafe() として残している。理由は
+ * Wikipedia本文取得等のユーティリティ（enrichSpotsBatchWithWikipedia等、同ファイル内）を
+ * 新パイプライン（generate-spots-by-region.js）が実際にimportして使っているため。
+ * 新パイプラインがfetch-and-build.jsに接続されるまでは、スポットデータの更新は
+ * generate-spots-by-region.jsを都道府県単位で個別に実行すること。
  */
 export async function generateSpots() {
+  throw new Error(
+    '旧スポット収集パイプライン（generate-spots.json.js）は無効化されています。\n' +
+    '理由：本番配信データより劣化したデータを無言で生成するため（停留所ごとの近傍検索のみ・' +
+    'sitelinks未取得で足切りフィルタが無効化・ガードテストなし）。詳細はgenerateSpots()の' +
+    'コメントとCLAUDE.mdを参照してください。\n' +
+    '新パイプライン（generate-spots-by-region.js）がfetch-and-build.jsに接続されるまでは、' +
+    'スポットデータの更新はgenerate-spots-by-region.jsを都道府県単位で個別に実行してください。'
+  );
+}
+
+/** generateSpots() の実装本体。無効化の経緯は generateSpots() のコメントを参照。 */
+async function generateSpotsLegacyUnsafe() {
   console.log('🌍 観光スポット情報生成開始...\n');
 
   // データを読み込む
