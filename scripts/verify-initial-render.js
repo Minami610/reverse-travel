@@ -25,6 +25,7 @@ import fs from 'fs';
 import path from 'path';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { fileURLToPath } from 'url';
+import { assertBundleFresh } from './check-bundle-freshness.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distIndexPath = path.join(__dirname, '../dist/index.html');
@@ -374,6 +375,7 @@ async function main() {
     console.error('dist/index.html が見つかりません。先に npm run bundle を実行してください');
     process.exit(1);
   }
+  assertBundleFresh('verify-render');
   const html = fs.readFileSync(distIndexPath, 'utf-8');
 
   const desktopOk = await checkVisible(html, true, 'PC幅相当');

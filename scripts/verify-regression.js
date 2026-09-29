@@ -25,6 +25,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { pathToFileURL } from 'url';
+import { assertBundleFresh } from './check-bundle-freshness.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,6 +43,11 @@ function toUrl(relativePath) {
 
 async function main() {
   console.log('🔁 回帰チェック開始（香川6駅×往復¥400/¥1000）\n');
+
+  // このスクリプト自身はソース（assets/js・data/derived）を直接読むため
+  // dist/index.htmlの古さには影響されないが、「これが通ったから実際に
+  // デプロイされるdist/index.htmlも最新」と誤解しないよう、ここでも確認する。
+  assertBundleFresh('verify-regression');
 
   if (!fs.existsSync(baselinePath)) {
     throw new Error(`基準値ファイルが見つかりません: ${baselinePath}`);
