@@ -6,6 +6,8 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/fetch-and-build.js",
+    "build-prefecture": "node scripts/build-prefecture.js",
+    "compare-prefecture-build": "node scripts/compare-prefecture-build.js",
     "bundle": "node scripts/bundle-html.js",
     "refresh-spots": "node scripts/build-pipeline/refresh-and-normalize-spots.js",
     "generate-route-details": "node scripts/build-pipeline/generate-route-details.js",

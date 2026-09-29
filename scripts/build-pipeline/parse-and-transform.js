@@ -19,26 +19,31 @@ import { namespacedId } from './gtfs-id.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// パス定義
+// パス定義（デフォルト。build-prefecture.js経由ではoptionsで上書きされる）
 const dataDir = path.join(__dirname, '../../data');
-const rawGtfsDir = path.join(dataDir, 'raw-gtfs');
-const derivedDir = path.join(dataDir, 'derived');
+const defaultRawGtfsDir = path.join(dataDir, 'raw-gtfs');
+const defaultDerivedDir = path.join(dataDir, 'derived');
 const configPath = path.join(__dirname, '../../config/target-operators.json');
 const municipalityLocationsPath = path.join(dataDir, 'derived/national/municipality-locations.json');
 
 /**
  * GTFS パース・派生JSON生成のメイン処理
+ * @param {{operators?: Array, rawGtfsDir?: string, outputDir?: string}} options
+ *   operators/rawGtfsDir/outputDir省略時は従来どおりconfig/target-operators.jsonと
+ *   data/raw-gtfs・data/derivedを使う（fetch-and-build.jsの挙動を変えないため）。
  */
-export async function parseAndTransform() {
+export async function parseAndTransform(options = {}) {
   console.log('🔄 GTFS パース開始...\n');
 
-  // 出力ディレクトリ作成
-  if (!fs.existsSync(derivedDir)) {
-    fs.mkdirSync(derivedDir, { recursive: true });
-  }
+  const operators = options.operators
+    || JSON.parse(fs.readFileSync(configPath, 'utf-8')).phase1_operators;
+  const rawGtfsDir = options.rawGtfsDir || defaultRawGtfsDir;
+  const outputDir = options.outputDir || defaultDerivedDir;
 
-  // configを読み込む
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+  // 出力ディレクトリ作成
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
 
   // 集約用オブジェクト
   const aggregated = {
@@ -51,7 +56,7 @@ export async function parseAndTransform() {
   let totalGeneratedRecords = 0;
 
   // 各事業者のGTFSを処理
-  for (const operator of config.phase1_operators) {
+  for (const operator of operators) {
     const operatorDir = path.join(rawGtfsDir, operator.id);
 
     if (!fs.existsSync(operatorDir)) {
@@ -78,9 +83,10 @@ export async function parseAndTransform() {
   const stationClusters = buildStationClusters(aggregated);
 
   // 派生JSONを生成
-  saveDerivedData(aggregated, stationClusters);
+  const stats = saveDerivedData(aggregated, stationClusters, outputDir);
 
   console.log('✅ GTFS パース完了\n');
+  return stats;
 }
 
 /** 2点間の距離をメートルで返す（Haversine公式） */
@@ -785,7 +791,7 @@ async function processFares(
 /**
  * 派生JSONを保存
  */
-function saveDerivedData(aggregated, stationClusters) {
+function saveDerivedData(aggregated, stationClusters, outputDir) {
   console.log('💾 派生JSONを生成中...\n');
 
   // 1. fare-lookup-tables.json
@@ -796,7 +802,7 @@ function saveDerivedData(aggregated, stationClusters) {
   };
 
   fs.writeFileSync(
-    path.join(derivedDir, 'fare-lookup-tables.json'),
+    path.join(outputDir, 'fare-lookup-tables.json'),
     JSON.stringify(fareLookup, null, 2)
   );
   console.log(`✅ fare-lookup-tables.json (${JSON.stringify(fareLookup).length} bytes)`);
@@ -804,7 +810,7 @@ function saveDerivedData(aggregated, stationClusters) {
   // 2. stops-metadata.json（プラットフォーム単位。station_id/modeが付与済み）
   const stopsArray = Object.values(aggregated.stops);
   fs.writeFileSync(
-    path.join(derivedDir, 'stops-metadata.json'),
+    path.join(outputDir, 'stops-metadata.json'),
     JSON.stringify(stopsArray, null, 2)
   );
   console.log(`✅ stops-metadata.json (${stopsArray.length} 駅)`);
@@ -828,7 +834,7 @@ function saveDerivedData(aggregated, stationClusters) {
     };
   }
   fs.writeFileSync(
-    path.join(derivedDir, 'stations.json'),
+    path.join(outputDir, 'stations.json'),
     JSON.stringify(stations, null, 2)
   );
   const transferPoints = Object.values(stations).filter(
@@ -840,7 +846,7 @@ function saveDerivedData(aggregated, stationClusters) {
 
   // 3. route-info.json
   fs.writeFileSync(
-    path.join(derivedDir, 'route-info.json'),
+    path.join(outputDir, 'route-info.json'),
     JSON.stringify(aggregated.routes, null, 2)
   );
   console.log(
@@ -856,6 +862,13 @@ function saveDerivedData(aggregated, stationClusters) {
   // スポットデータの生成・更新はgenerate-spots-by-region.jsの責務とし、parse-and-
   // transform.jsはGTFS由来の派生データ（運賃・停留所・路線）だけを扱う。
   console.log('ℹ️  spots-by-station.json は生成しません（generate-spots-by-region.jsの責務）');
+
+  return {
+    stopCount: stopsArray.length,
+    stationCount: Object.keys(stations).length,
+    routeCount: Object.keys(aggregated.routes).length,
+    transferPoints,
+  };
 }
 
 // 実行

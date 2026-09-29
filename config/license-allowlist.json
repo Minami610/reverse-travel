@@ -1,0 +1,11 @@
+{
+  "description": "build-prefecture.jsが取り込むGTFSフィードのライセンス許可リスト。config/target-operators.json・カタログスナップショットのlicense_labelがここに含まれない場合、そのフィードは除外され理由が記録される（CLAUDE.mdのODPTアクセストークン種別3区分と対応）。",
+  "allowed_license_substrings": [
+    "CC0",
+    "CC BY 4.0",
+    "ODC BY 1.0",
+    "ODbL 1.0",
+    "公共交通オープンデータ基本ライセンス",
+    "チャレンジ2026限定ライセンス"
+  ]
+}

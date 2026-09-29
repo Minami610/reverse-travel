@@ -25,12 +25,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const configPath = path.join(__dirname, '../../config/target-operators.json');
-const rawGtfsDir = path.join(__dirname, '../../data/raw-gtfs');
-const outputPath = path.join(__dirname, '../../data/derived/data-sources.json');
+const defaultRawGtfsDir = path.join(__dirname, '../../data/raw-gtfs');
+const defaultOutputPath = path.join(__dirname, '../../data/derived/data-sources.json');
 
 const ODPT_OR_GTFS_DATA_JP = new Set(['odpt', 'gtfs-data-jp']);
 
-function readFeedInfo(operatorId) {
+function readFeedInfo(rawGtfsDir, operatorId) {
   const feedInfoPath = path.join(rawGtfsDir, operatorId, 'feed_info.txt');
   if (!fs.existsSync(feedInfoPath)) return null;
 
@@ -42,7 +42,7 @@ function readFeedInfo(operatorId) {
   return records[0] || null;
 }
 
-function getFetchedAt(operatorId) {
+function getFetchedAt(rawGtfsDir, operatorId) {
   const zipPath = path.join(rawGtfsDir, operatorId, 'data.zip');
   if (fs.existsSync(zipPath)) {
     return fs.statSync(zipPath).mtime.toISOString();
@@ -54,15 +54,21 @@ function getFetchedAt(operatorId) {
   return null;
 }
 
-export function generateDataSourcesManifest() {
+/**
+ * @param {{operators?: Array, rawGtfsDir?: string, outputPath?: string, coverage?: {prefectures: string[], note: string|null}}} options
+ *   省略時は従来どおりconfig/target-operators.jsonとdata/raw-gtfs・data/derived/data-sources.jsonを使う。
+ */
+export function generateDataSourcesManifest(options = {}) {
   console.log('📋 データ出典マニフェスト生成中...');
 
   const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-  const operators = config.phase1_operators || [];
+  const operators = options.operators || config.phase1_operators || [];
+  const rawGtfsDir = options.rawGtfsDir || defaultRawGtfsDir;
+  const outputPath = options.outputPath || defaultOutputPath;
 
   const feeds = operators.map((operator) => {
-    const feedInfo = readFeedInfo(operator.id);
-    const fetchedAt = getFetchedAt(operator.id);
+    const feedInfo = readFeedInfo(rawGtfsDir, operator.id);
+    const fetchedAt = getFetchedAt(rawGtfsDir, operator.id);
 
     if (!feedInfo) {
       console.warn(`  ⚠️  ${operator.name}: feed_info.txt が見つかりません（未取得の可能性）`);
@@ -98,12 +104,10 @@ export function generateDataSourcesManifest() {
   }, {});
   const odptOrGtfsDataJpCount = feeds.filter((f) => ODPT_OR_GTFS_DATA_JP.has(f.source_category)).length;
 
-  // 対応地域（アプリ内マニュアルの「現在の対応地域」表示用）。現状は
+  // 対応地域（アプリ内マニュアルの「現在の対応地域」表示用）。build-prefecture.js
+  // 経由ではoptions.coverageで都道府県ごとの値を渡す。省略時は従来どおり
   // target-operators.json の phase1_region（香川県）をそのまま反映する。
-  // 全国対応パイプライン移行後は、都道府県別のcoverage-manifest.json
-  // （段階2で生成予定）に置き換わる想定のため、ここではハードコードせず
-  // configから読む形にしている。
-  const coverage = {
+  const coverage = options.coverage || {
     prefectures: config.phase1_region ? [config.phase1_region] : [],
     note: config.phase1_note || null,
   };

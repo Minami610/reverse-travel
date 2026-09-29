@@ -49,25 +49,33 @@ function extractAndValidateZip(zipPath, operatorDir, operatorName) {
 
 /**
  * GTFSデータをダウンロード
+ * @param {{operators?: Array, dataDir?: string, force?: boolean}} options
+ *   operators省略時はconfig/target-operators.jsonのphase1_operatorsを使う（従来どおりの挙動）。
+ *   forceはZIPが既に存在しても再ダウンロードする（段階1の「強制再取得オプション」用）。
  */
-export async function fetchGTFS() {
+export async function fetchGTFS(options = {}) {
   console.log('📥 GTFS ダウンロード開始...');
 
-  // config を読み込む
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+  const operators = options.operators
+    || JSON.parse(fs.readFileSync(configPath, 'utf-8')).phase1_operators;
+  const targetDir = options.dataDir || dataDir;
+  const force = options.force || false;
 
-  // data/raw-gtfs ディレクトリを作成
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
+  if (!fs.existsSync(targetDir)) {
+    fs.mkdirSync(targetDir, { recursive: true });
   }
 
-  for (const operator of config.phase1_operators) {
-    const operatorDir = path.join(dataDir, operator.id);
+  for (const operator of operators) {
+    const operatorDir = path.join(targetDir, operator.id);
     const zipPath = path.join(operatorDir, 'data.zip');
 
     try {
       // ディレクトリ作成
       fs.mkdirSync(operatorDir, { recursive: true });
+
+      if (force && fs.existsSync(zipPath)) {
+        fs.rmSync(zipPath);
+      }
 
       if (!fs.existsSync(zipPath)) {
         console.log(`⏳ ${operator.name} をダウンロード中...`);
@@ -90,7 +98,7 @@ export async function fetchGTFS() {
       const hasAllFiles = requiredGtfsFiles.every(
         (filename) => fs.existsSync(path.join(operatorDir, filename))
       );
-      if (!hasAllFiles) {
+      if (!hasAllFiles || force) {
         extractAndValidateZip(zipPath, operatorDir, operator.name);
       } else {
         console.log(`   → ${operator.name}: GTFSファイルは展開済み`);

@@ -59,8 +59,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const dataDir = path.join(__dirname, '../../data');
-const rawGtfsDir = path.join(dataDir, 'raw-gtfs');
-const derivedDir = path.join(dataDir, 'derived');
+const defaultRawGtfsDir = path.join(dataDir, 'raw-gtfs');
+const defaultDerivedDir = path.join(dataDir, 'derived');
 const configPath = path.join(__dirname, '../../config/target-operators.json');
 
 function parseGtfsFile(filePath) {
@@ -79,10 +79,18 @@ function median(values) {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
-export async function generateRouteDetails() {
+/**
+ * @param {{operators?: Array, rawGtfsDir?: string, outputDir?: string}} options
+ *   省略時は従来どおりconfig/target-operators.jsonとdata/raw-gtfs・data/derivedを使う。
+ */
+export async function generateRouteDetails(options = {}) {
   console.log('🔄 経路情報（路線・所要時間）を生成中...\n');
 
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+  const operators = options.operators
+    || JSON.parse(fs.readFileSync(configPath, 'utf-8')).phase1_operators;
+  const rawGtfsDir = options.rawGtfsDir || defaultRawGtfsDir;
+  const derivedDir = options.outputDir || defaultDerivedDir;
+
   const stopsMeta = JSON.parse(
     fs.readFileSync(path.join(derivedDir, 'stops-metadata.json'), 'utf-8')
   );
@@ -105,7 +113,7 @@ export async function generateRouteDetails() {
   const stationDirect = new Map();
   let totalTrips = 0;
 
-  for (const operator of config.phase1_operators) {
+  for (const operator of operators) {
     const operatorDir = path.join(rawGtfsDir, operator.id);
     const tripsPath = path.join(operatorDir, 'trips.txt');
     const stopTimesPath = path.join(operatorDir, 'stop_times.txt');
