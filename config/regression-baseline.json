@@ -1,0 +1,36 @@
+{
+  "description": "香川県の回帰チェック基準値（scripts/verify-regression.js、npm run verify-regression）。値がずれたら、意図した変更（データ更新・仕様変更等）かどうかをまず確認すること。意図した変更なら、このファイルを更新したうえでコミットメッセージに「なぜ変わったか」を書くこと。",
+  "generated_at": "2026-09-30",
+  "departures": [
+    {
+      "display_name": "高松築港",
+      "note": "香川最大のハブ駅",
+      "budgets": { "400": { "reachable": 58, "spots": 72 }, "1000": { "reachable": 199, "spots": 142 } }
+    },
+    {
+      "display_name": "琴電琴平",
+      "note": "琴平線の末端駅（鉄道のみ）",
+      "budgets": { "400": { "reachable": 2, "spots": 10 }, "1000": { "reachable": 7, "spots": 18 } }
+    },
+    {
+      "display_name": "長尾",
+      "note": "長尾線の末端駅（鉄道のみ）",
+      "budgets": { "400": { "reachable": 5, "spots": 15 }, "1000": { "reachable": 14, "spots": 78 } }
+    },
+    {
+      "display_name": "琴電志度",
+      "note": "志度線の末端駅（鉄道のみ）",
+      "budgets": { "400": { "reachable": 5, "spots": 22 }, "1000": { "reachable": 23, "spots": 95 } }
+    },
+    {
+      "display_name": "仏生山",
+      "note": "中間規模の駅（鉄道＋バス）",
+      "budgets": { "400": { "reachable": 11, "spots": 28 }, "1000": { "reachable": 130, "spots": 133 } }
+    },
+    {
+      "display_name": "ＪＲ栗林駅",
+      "note": "バスのみの停留所（鉄道の乗換駅なし）",
+      "budgets": { "400": { "reachable": 15, "spots": 64 }, "1000": { "reachable": 33, "spots": 70 } }
+    }
+  ]
+}

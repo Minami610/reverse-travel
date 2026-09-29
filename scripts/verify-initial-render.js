@@ -23,7 +23,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { JSDOM } from 'jsdom';
+import { JSDOM, VirtualConsole } from 'jsdom';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -221,10 +221,25 @@ async function waitFor(predicate, timeoutMs, intervalMs = 50) {
  */
 async function checkResultCards(html) {
   const errors = [];
+  // fare-calculator.js が console.log で出す「直接到達駅」「乗り継ぎ到達駅」
+  // 「往復予算内」の件数を横取りする。テキスト出力をregexで拾うのではなく、
+  // VirtualConsoleの'log'イベントで生の引数を受け取る（文字列化のブレに強い）。
+  // 【背景】この3段階のどれかが0件でも、最終的なスポット件数がたまたま
+  // 非0になることがあり（実際に段階Bの実装中、乗り継ぎ到達駅が0件のまま
+  // 気づかず.spot-card検証だけは通っていた）、「件数0を成功扱いしない」
+  // というCLAUDE.mdのルールをverify-render自身が破っていた反省による。
+  const capturedLogs = [];
+  const virtualConsole = new VirtualConsole();
+  virtualConsole.on('log', (...args) => {
+    capturedLogs.push(args.map((a) => String(a)).join(' '));
+  });
+  virtualConsole.forwardTo(console);
+
   const dom = new JSDOM(html, {
     url: 'http://localhost/',
     runScripts: 'dangerously',
     pretendToBeVisual: true,
+    virtualConsole,
   });
   const { window } = dom;
   stubMatchMedia(window, true);
@@ -273,6 +288,33 @@ async function checkResultCards(html) {
 
   if (!rendered) {
     console.log('❌ 検索後も #results-list に子要素が生成されませんでした（タイムアウト）');
+    window.close();
+    return false;
+  }
+
+  // 直接到達・乗り継ぎ到達・往復予算内のいずれかが0件なら失敗にする。
+  // 完全一致まではscripts/verify-regression.jsの役割で、ここは「0件を
+  // 静かに通さない」という最低限の安全網。
+  const stageChecks = [
+    { label: '直接到達駅', pattern: /直接到達駅:\s*(\d+)駅/ },
+    { label: '乗り継ぎ到達駅', pattern: /乗り継ぎ到達駅:\s*(\d+)駅/ },
+    { label: '往復予算内', pattern: /往復予算内.*?:\s*(\d+)駅/ },
+  ];
+  let stagesOk = true;
+  for (const { label, pattern } of stageChecks) {
+    const match = capturedLogs.map((l) => l.match(pattern)).find(Boolean);
+    const count = match ? parseInt(match[1], 10) : null;
+    if (count === null) {
+      console.log(`❌ ログから「${label}」の件数を取得できませんでした`);
+      stagesOk = false;
+    } else if (count === 0) {
+      console.log(`❌ 「${label}」が0件です（0件を成功扱いにしない）`);
+      stagesOk = false;
+    } else {
+      console.log(`✅ ${label}: ${count}件`);
+    }
+  }
+  if (!stagesOk) {
     window.close();
     return false;
   }

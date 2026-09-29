@@ -16,8 +16,16 @@
  * 市区町村があるか」のアサーションで検証すること。
  *
  * 使い方: node scripts/build-pipeline/generate-municipality-table.js
- * 出力: data/derived/national/municipality-to-pref.json
- *       { "富山市": "富山県", "高岡市": "富山県", ... }
+ * 出力:
+ * - data/derived/national/municipality-to-pref.json
+ *   { "富山市": "富山県", "高岡市": "富山県", ... }
+ * - data/derived/national/municipality-locations.json
+ *   [{ "name": "富山市", "pref": "富山県", "lat": ..., "lon": ... }, ...]
+ *   駅の表示名の曖昧さ回避（例：「西町（小松市）」、parse-and-transform.jsの
+ *   buildStationClusters()参照）用に、市区町村の代表座標から最近傍の市区町村名を
+ *   引くためのテーブル。市区町村の境界ポリゴンは持たないため、これは
+ *   「代表点への最近傍」による近似であり、境界付近では隣接市区町村と誤ることが
+ *   ありうる（表示名の曖昧さ回避という用途上、実害は限定的と判断）。
  */
 
 import fs from 'fs';
@@ -27,6 +35,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const outDir = path.join(__dirname, '../../data/derived/national');
 const outPath = path.join(outDir, 'municipality-to-pref.json');
+const locationsOutPath = path.join(outDir, 'municipality-locations.json');
 
 const WIKIDATA_SPARQL = 'https://query.wikidata.org/sparql';
 const USER_AGENT = 'reverse-travel/0.1.0 (contact: reverse-travel-maintainer)';
@@ -56,6 +65,52 @@ const MUNICIPALITY_CLASSES = [
   'Q18663566', // 日本の廃止市区町村（過去のGTFSデータに残る旧地名対策）
 ];
 
+/**
+ * JSON文字列リテラルの内側にだけ現れる生の制御文字（エスケープされていない
+ * 改行・タブ等）を、対応するエスケープ列（\n, \r, \t）またはその他は除去に
+ * 置き換える。文字列の外側（トークン区切りの空白）はJSON構造の解釈に
+ * 影響するため一切変更しない（単純な正規表現での全置換だと、区切り空白まで
+ * 壊してJSON構造そのものを破壊することがあった）。
+ */
+function sanitizeJsonControlChars(text) {
+  let result = '';
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const code = text.charCodeAt(i);
+    if (!inString) {
+      if (ch === '"') inString = true;
+      result += ch;
+      continue;
+    }
+    if (escaped) {
+      result += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      result += ch;
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = false;
+      result += ch;
+      continue;
+    }
+    if (code <= 0x1f) {
+      if (ch === '\n') result += '\\n';
+      else if (ch === '\r') result += '\\r';
+      else if (ch === '\t') result += '\\t';
+      // それ以外の制御文字は表示に影響しないため単純に落とす
+      continue;
+    }
+    result += ch;
+  }
+  return result;
+}
+
 async function sparqlQuery(query, { post = false } = {}) {
   const params = new URLSearchParams({ query, format: 'json' });
   const response = post
@@ -76,7 +131,12 @@ async function sparqlQuery(query, { post = false } = {}) {
   if (!response.ok) {
     throw new Error(`SPARQL失敗: HTTP ${response.status} - ${(await response.text()).slice(0, 300)}`);
   }
-  const data = await response.json();
+  // WDQSの一部ラベル文字列に、JSON文字列リテラル内では不正な生の制御文字
+  // （エスケープされていない改行・タブ等）が混入することがあり、
+  // response.json()（内部でJSON.parseと同じ厳格パーサを使う）が例外を投げる。
+  const rawText = await response.text();
+  const sanitized = sanitizeJsonControlChars(rawText);
+  const data = JSON.parse(sanitized);
   return data.results.bindings;
 }
 
@@ -97,14 +157,19 @@ export async function generateMunicipalityTable() {
   }
   console.log(`   ${prefBindings.length}件`);
 
-  console.log('🏘️  市区町村とその所属都道府県を取得中...（P131*で祖先を遡るため数十秒かかる場合あり）');
+  console.log('🏘️  市区町村とその所属都道府県・代表座標を取得中...（P131*で祖先を遡るため数十秒かかる場合あり）');
   const classValues = MUNICIPALITY_CLASSES.map((q) => `wd:${q}`).join(' ');
+  // P625（代表座標）はOPTIONAL：一部の廃止市区町村等は座標を持たない場合がある。
+  // 複数座標を持つ項目があるとCartesian積で行数が水増しされるため
+  // （CLAUDE.mdの「GROUP BY/DISTINCTを書かないと水増しされる」の罠）、
+  // GROUP BYせず全行取得したうえで、JS側で決定的な選択規則（緯度→経度昇順）で
+  // 1件に絞る（SPARQLの行順に依存する「最初の1行」は使わない）。
   const muniBindings = await sparqlQuery(
     `
     PREFIX wdt: <http://www.wikidata.org/prop/direct/>
     PREFIX wd: <http://www.wikidata.org/entity/>
     PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-    SELECT ?itemLabel ?prefLabel WHERE {
+    SELECT ?itemLabel ?prefLabel ?coord WHERE {
       VALUES ?class { ${classValues} }
       ?item wdt:P31 ?class.
       ?item wdt:P17 wd:Q17.
@@ -112,16 +177,37 @@ export async function generateMunicipalityTable() {
       ?item wdt:P131* ?pref.
       ?pref wdt:P31 wd:Q50337.
       ?pref rdfs:label ?prefLabel. FILTER(LANG(?prefLabel) = "ja")
+      OPTIONAL { ?item wdt:P625 ?coord. }
     }
   `,
     { post: true }
   );
   let resolved = 0;
+  const coordCandidatesByName = new Map(); // name -> [{lat, lon}, ...]（同名で複数座標があれば後で決定的に1件選ぶ）
   for (const b of muniBindings) {
-    table[b.itemLabel.value] = b.prefLabel.value;
-    resolved += 1;
+    const name = b.itemLabel.value;
+    if (table[name] === undefined) resolved += 1;
+    table[name] = b.prefLabel.value;
+
+    if (b.coord?.value) {
+      const match = b.coord.value.match(/Point\(([^ ]+) ([^ ]+)\)/);
+      if (match) {
+        const lon = parseFloat(match[1]);
+        const lat = parseFloat(match[2]);
+        if (!coordCandidatesByName.has(name)) coordCandidatesByName.set(name, []);
+        coordCandidatesByName.get(name).push({ lat, lon });
+      }
+    }
   }
   console.log(`   ${resolved}件（都道府県への変換が確定したもの）`);
+
+  const locations = [];
+  for (const [name, candidates] of coordCandidatesByName.entries()) {
+    candidates.sort((a, b) => a.lat - b.lat || a.lon - b.lon);
+    const { lat, lon } = candidates[0];
+    locations.push({ name, pref: table[name], lat, lon });
+  }
+  console.log(`   ${locations.length}件の市区町村に代表座標あり（駅表示名の曖昧さ回避用）`);
 
   // アサーション: 47都道府県すべてに1件以上の市区町村が存在するか検証する。
   // 「日本の市」だけを指定した最初の実装では富山市・金沢市が丸ごと欠落し、
@@ -140,6 +226,10 @@ export async function generateMunicipalityTable() {
   if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
   fs.writeFileSync(outPath, JSON.stringify(table));
   console.log(`✅ 保存: ${outPath}（${Object.keys(table).length}エントリ）`);
+
+  fs.writeFileSync(locationsOutPath, JSON.stringify(locations));
+  console.log(`✅ 保存: ${locationsOutPath}（${locations.length}エントリ）`);
+
   return table;
 }
 

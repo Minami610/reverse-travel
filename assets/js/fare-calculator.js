@@ -27,6 +27,22 @@ function isBusEligible(mode) {
   return mode === 'bus' || mode === 'mixed';
 }
 
+/**
+ * keep-min（「より安いときだけ上書き」）は運賃が同額のとき、処理順で先に
+ * 見つかった候補が残ってしまう（事業者の列挙順・停留所の列挙順まかせ）。
+ * 同額なら「乗車時間＋待ち時間が短い方」を明示的に優先する決定的な規則にする。
+ * 所要時間が片方だけ確定している場合は確定している方を優先する（未確定のまま
+ * 残すと、詳細画面で「経路情報を確定できませんでした」になる候補を選んで
+ * しまいうるため）。両方未確定なら既存を維持する。
+ */
+function isBetterCandidate(candidateFare, candidateMinutes, existing) {
+  if (!existing) return true;
+  if (candidateFare !== existing.fare) return candidateFare < existing.fare;
+  if (existing.selectionMinutes === null) return candidateMinutes !== null;
+  if (candidateMinutes === null) return false;
+  return candidateMinutes < existing.selectionMinutes;
+}
+
 export class FareCalculator {
   constructor(data) {
     this.fareData = data.fareData;
@@ -73,9 +89,15 @@ export class FareCalculator {
           if (!destStationId || destStationId === departureStationId) continue;
 
           const existing = reachable.get(destStationId);
-          if (!existing || existing.fare > fare) {
+          const selectionMinutes = estimateSelectionMinutes(this.routeDetails, departureStationId, {
+            reachBy: 'direct',
+            station_id: destStationId,
+            viaOperator: originOperator,
+          });
+          if (isBetterCandidate(fare, selectionMinutes, existing)) {
             reachable.set(destStationId, {
               fare,
+              selectionMinutes,
               reachBy: 'direct',
               viaOperator: originOperator,
               viaStopId: originStopId,
@@ -114,12 +136,20 @@ export class FareCalculator {
 
             const totalFare = railInfo.fare + busFare;
             const existing = reachable.get(destStationId);
-            if (!existing || existing.fare > totalFare) {
+            const legOperators = [railInfo.viaOperator, busStop.operator_id];
+            const selectionMinutes = estimateSelectionMinutes(this.routeDetails, departureStationId, {
+              reachBy: 'transfer',
+              station_id: destStationId,
+              transferAt: railStationId,
+              legOperators,
+            });
+            if (isBetterCandidate(totalFare, selectionMinutes, existing)) {
               reachable.set(destStationId, {
                 fare: totalFare,
+                selectionMinutes,
                 reachBy: 'transfer',
                 transferAt: railStationId,
-                legOperators: [railInfo.viaOperator, busStop.operator_id],
+                legOperators,
                 legFares: [railInfo.fare, busFare],
               });
               transferCount += 1;
@@ -169,7 +199,9 @@ export class FareCalculator {
           legOperators: info.legOperators || null,
           legFares: info.legFares || null,
         };
-        stationEntry.selectionTimeMin = estimateSelectionMinutes(this.routeDetails, departureStationId, stationEntry);
+        // タイブレークのために探索中に既に算出済み（isBetterCandidate参照）。
+        // 再計算せず同じ値を使い回すことで、両者が食い違う余地をなくす。
+        stationEntry.selectionTimeMin = info.selectionMinutes;
         stationEntry.rideDurationMin = estimateRideMinutes(this.routeDetails, departureStationId, stationEntry);
         return stationEntry;
       });

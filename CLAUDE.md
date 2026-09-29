@@ -85,10 +85,15 @@ scripts/
                                     新パイプラインへの接続はまだ
   bundle-html.js                    単一HTMLバンドラ（docs/へ自動コピー）。spots-by-station.json
                                     の健全性チェック（sitelinks欠落・0件検出）付き
-  verify-initial-render.js          jsdomによる描画検証（npm run verify-render）
+  verify-initial-render.js          jsdomによる描画検証（npm run verify-render）。直接到達・
+                                    乗り継ぎ到達・往復予算内のいずれかが0件なら失敗にする
+  verify-regression.js              香川12通り（6駅×往復¥400/¥1000）の到達駅数・スポット件数が
+                                    config/regression-baseline.jsonと完全一致するか、運賃事業者と
+                                    表示経路の食い違いが0件かを検証（npm run verify-regression）
   build-pipeline/
     fetch-gtfs.js                   GTFS取得＋解凍＋必須ファイル検証
-    parse-and-transform.js          GTFS→派生JSON（zone_id→stop_id変換、名前空間化、整数インデックス）
+    parse-and-transform.js          GTFS→派生JSON（zone_id→stop_id変換、名前空間化、整数インデックス、
+                                    route_typeベースのmode判定、駅クラスタリング）
     generate-route-details.js       直通検証・所要時間中央値・期待待ち時間。直行・乗換とも
                                     0件ならエラー停止
     generate-spots-by-region.js     ★唯一の現行スポット収集（bbox一括取得・除外機構・県判定）。
@@ -98,10 +103,14 @@ scripts/
     generate-spots.json.js          【無効化済み】旧方式。generateSpots()は呼ぶと即エラー。
                                     Wikipedia本文取得等のユーティリティは新パイプラインが流用
     refresh-and-normalize-spots.js  【無効化済み】旧方式のキャッシュ再正規化。呼ぶと即エラー
-    generate-municipality-table.js  市区町村→都道府県の対応表を生成
+    generate-municipality-table.js  市区町村→都道府県の対応表（municipality-to-pref.json）と、
+                                    駅の表示名曖昧さ回避用の市区町村代表座標
+                                    （municipality-locations.json）を生成
 assets/js/  main.js / gtfs-loader.js / fare-calculator.js / spot-finder.js /
             route-formatter.js / route-duration.js / map-view.js / layout-controller.js
-config/     target-operators.json / spot-config.json / spot-ranking-config.json
+config/     target-operators.json / spot-config.json / spot-ranking-config.json /
+            regression-baseline.json（回帰チェックの基準値。ずれたら意図した変更か確認し、
+            意図したものならコミットメッセージに理由を書いて更新する）
 ```
 
 ### 設計上の決定（経緯は git log に詳しい）
@@ -151,8 +160,12 @@ generate-spots-by-region.jsを手動実行したときだけ有効で、旧経�
   隣接県を同時ロードする設計のため、複数県にまたがるスポットや県判定フォールバックによる重複を吸収する。**ただし単一県ロードでしか実地検証されておらず、複数県での動作は段階1（富山・石川）で初めて検証する。**
 - **駅は「駅名」文字列ではなく安定した駅ID（station_id）をキーにする**（`stations.json`・`reachable`・`route-details.json`・出発駅候補リストすべて）。**2026-09-29実装**（`parse-and-transform.js`の`buildStationClusters()`）。同名かつ1000m以内の停留所だけを1駅とみなし、1000mを超えて離れていれば別駅として分裂させる。station_idはクラスタ内で辞書順最小のstop_id、表示名（display_name）は別に持つ。
   **1000mという閾値の根拠**：香川で現在1つの駅として扱われているグループの最大の広がりは春日川駅（鉄道3停留所＋バス2停留所、最大821.6m）。この値を下回ると香川の既存駅が分裂するため、安全マージンを見て1000mにした（実測：この閾値で香川362駅名中、分裂は0件）。
-  **このクラスタリングが解決する範囲は同一都道府県内の同名衝突のみ。** 都道府県をまたいだ同名衝突（富山・石川の候補9フィードで実測44件、最大89km離れた「同名駅」）は未解決。複数県のデータを同時にロードする段階で、`mergeIndexedSpotRegions()`と同様の「県をまたいだ駅の統合」処理が別途必要（未実装、段階1のオーケストレーションで対応予定）。
+  **クラスタの直径にも同じ1000mの上限を課す**（`splitClusterByDiameter()`）。単連結（single-link）でクラスタリングすると「A-Bが900m、B-Cが900m」の連鎖で1.8km離れたAとCが同じ駅になりうる（同名の停留所が多い都市部で起きうる）ため、クラスタの直径（全ペア間の最大距離）が閾値を超えていたら直径の両端点を種に最近傍分割で再帰的に分割する。分割が起きたクラスタ数・全クラスタの直径上位10件は毎回のビルドでログに出す。
+  **同名の駅が複数クラスタに分裂した場合の表示名は、最寄りの市区町村名で曖昧さ回避する**（例：「西町（小松市）」、`generate-municipality-table.js`が生成する`municipality-locations.json`の市区町村代表座標への最近傍探索。市区町村境界ポリゴンは持たないため近似）。市区町村名まで同じで区別できない場合のみ番号を付ける。`municipality-locations.json`が無い場合は番号にフォールバックする。
+  **このクラスタリングが解決する範囲は同一都道府県（＝同一ビルド）内の同名衝突のみ。** station_idがstop_id由来になった結果、遠く離れた同名駅が誤って合体することはもう起きない（旧・駅名文字列キー時代の問題は解消済み）。**段階1で実際に注意が必要なのは逆の問題**：県境にある物理的に同じ駅が、県ごとに別ビルドで作られると別々のstation_idになり、乗換が失われること（例：富山側フィードの加越能バス「金沢駅西口」と、石川側フィードの金沢駅周辺の停留所は、別々の県ビルドでは別IDになる）。
+  **設計方針（段階1で実装、未着手）**：駅クラスタリングは県ごとの独立ビルド内で完結させる（現状のまま）。県境の同一駅は、全県ビルド後に別途「県またぎ駅マージ」ステップ（`mergeIndexedSpotRegions()`のQID版と同じ考え方）で、隣接県の`stations.json`同士を突き合わせ、同名かつ近接（同じ1000m級の閾値を想定）のペアを検出してエイリアス表（`{県A側station_id: 正規station_id, 県B側station_id: 正規station_id}`）を生成し、フロントエンドの読み込み時にこれを適用する。県単位ビルドの独立性・再開可能性（CLAUDE.md「作業の進め方」参照）を保つため、各県の`buildStationClusters()`自体には手を入れない。
   なお、空文字列の駅名（出入口・改札等、乗車できないGTFS要素）はクラスタリング対象から除外した結果、香川の駅数は363→362になった（従来は空文字列がひとまとまりの偽駅として扱われていた）。
+- **運賃が同額の候補が複数あるとき、keep-minは処理順で先に見つかった方を残す。** 決定的な規則にするため「乗車時間＋待ち時間が短い方」を明示的なタイブレークにする（`fare-calculator.js`の`isBetterCandidate()`）。**2026-09-29実装。** 片方だけ所要時間が確定している場合は確定している方を優先する。
 
 ---
 
@@ -174,7 +187,9 @@ generate-spots-by-region.jsを手動実行したときだけ有効で、旧経�
 - 地図・位置図の画像は`isProblematicImage()`（`/map|locator|relief|géolocalisation|gthumb/i`、`generate-spots.json.js`）で正規表現除外する。新旧パイプライン共通の関数として実装済み。
 - **計測データはサンドボックス削除前に退避すること**（174分かけた計測結果を検証前に消した事故がある）。
 - **`npm run build`（fetch-and-build.js）は旧スポット収集経路（generate-spots.json.js）を通ると、本番配信中のデータより明確に劣化したデータを無言で生成する**（停留所ごとの近傍検索のみ・sitelinksなしで足切りフィルタが無言で無効化・ガードテストなし）。2026-09-29に`generateSpots()`と`refresh-and-normalize-spots.js`を実行時エラーで無効化済み。さらに`parse-and-transform.js`が`spots-by-station.json`に空スタブを書き込んでいたことも判明し削除した（この2つが揃って、実際に本番データを2回上書きしかけた）。**現時点ではスポットデータを再生成する手段自体が存在しない**（`generate-spots-by-region.js`にCLIの入口がまだないため）。存在しない手順を「あるかのように」書かないこと（この事故自体、書かれていることと実際が違ったことが原因）。
-- **駅名だけで駅をまとめると、別の町の同名停留所が合体して存在しない乗換（瞬間移動）が生まれる。** 富山・石川の候補9フィードだけで同名かつ1km以上離れた組が44件見つかった（最大89km）。**2026-09-29修正済み**：`stationsByName`のキーを駅名文字列から安定した駅ID（station_id）に変えた（同一都道府県内の衝突のみ解決。都道府県をまたいだ衝突は別途対応が必要、上記「データ構造」参照）。
+- **駅名だけで駅をまとめると、別の町の同名停留所が合体して存在しない乗換（瞬間移動）が生まれる。** 富山・石川の候補9フィードだけで同名かつ1km以上離れた組が44件見つかった（最大89km）。**2026-09-29修正済み**：`stationsByName`のキーを駅名文字列から安定した駅ID（station_id）に変えた。station_idがstop_id由来になったため、遠く離れた同名駅が誤って合体することはもう起きない。**残る課題は逆方向**：県境の同一駅が県ごとの別ビルドで別IDになり乗換が失われる問題（上記「データ構造」の設計方針を参照、段階1で対応）。
+- **単連結（single-link）クラスタリングは鎖状に遠くまで繋がる。** 「A-Bが900m、B-Cが900m」なら1.8km離れたAとCも同じクラスタになりうる。クラスタの直径（全ペア間の最大距離）を別途計算し、閾値超過なら分割すること。**2026-09-29実装**（`splitClusterByDiameter()`、上記「データ構造」参照）。
+- **`npm run verify-render`が✅でも、内部の到達駅数・スポット件数が壊れていることがある。** 実際に「乗り継ぎ到達駅0件」「往復予算内190駅（本来199駅）」になっていたのに、カード生成の検証だけは通っていた事故があった（2026-09-29）。**対策**：`npm run verify-regression`（`config/regression-baseline.json`と完全一致するか、運賃事業者と表示経路の食い違いが0件かを検証）を常設し、`verify-render`自体にも直接到達・乗り継ぎ到達・往復予算内のいずれかが0件なら失敗にする検証を追加した。フロントエンドやデータ形式を触ったら両方実行すること。
 - **運賃を決めた事業者と、表示する経路の事業者は必ず一致させること。** 別々のロジック（運賃は最安、経路表示は最短時間）で決めると、実在しない運賃×経路の組み合わせを利用者に見せてしまう（香川の高松築港で実際に6件発生：¥250はバスの運賃なのに表示は鉄道の経路）。**2026-09-29修正済み**（上記「運賃」の項目参照）。
 - **鉄道／バスの判定を事業者IDの固定値で行わないこと。route_typeで停留所ごとに判定する。** 事業者単位の固定値（旧`RAIL_OPERATOR_ID`/`BUS_OPERATOR_ID`）は、鉄道とバス両方を運行する事業者（例：富山地方鉄道）で破綻する。**2026-09-29修正済み**（上記「停留所ごとの鉄道／バス判定」参照）。route_typeベースの判定を実装する際は、駅の代表stop_id（親）が直接stop_times.txtに登場せずmode判定から漏れる罠に注意（子の判定結果を親へ伝播する必要がある）。
 

@@ -24,6 +24,7 @@ const dataDir = path.join(__dirname, '../../data');
 const rawGtfsDir = path.join(dataDir, 'raw-gtfs');
 const derivedDir = path.join(dataDir, 'derived');
 const configPath = path.join(__dirname, '../../config/target-operators.json');
+const municipalityLocationsPath = path.join(dataDir, 'derived/national/municipality-locations.json');
 
 /**
  * GTFS パース・派生JSON生成のメイン処理
@@ -202,31 +203,113 @@ function mergeDuplicateStationNames(aggregated) {
   console.log(`  - 統合した停留所名グループ: ${mergedGroupCount}件（${mergedStopCount}停留所の表記を統合）`);
 }
 
-// 同名かつこの距離（メートル）以内のときだけ1駅とみなす。
+// 同名かつこの距離（メートル）以内のときだけ1駅とみなす（単連結・single-link）。
 // 【根拠】香川で現在1つの駅として扱われているグループの中で最大の広がりは
 // 春日川駅（鉄道3停留所＋バス2停留所、最大821.6m）。この値を下回ると香川の
 // 既存駅が分裂するため、安全マージンを見て1000mに設定した。
 // 一方、富山・石川の候補9フィードで見つかった「別の町の同名停留所」は
 // 最短でも数km、大半は数十km離れており、1000mなら確実に誤結合を防げる。
+//
+// 【直径の上限（同じ値を使う）】単連結クラスタリングは「A-Bが900m、B-Cが900m」
+// のような連鎖で、1.8km離れたAとCを同じ駅にしてしまう（同名の停留所が多い
+// 都市部の「駅前」「市役所前」等で起きうる）。このクラスタの実際の直径
+// （全ペア間の最大距離）がこの閾値を超えていたら、後段のsplitClusterByDiameter()
+// で分割する。閾値を分けなかったのは、「離れていても同名ならまとめてよい距離」と
+// 「そもそも別駅とみなすべき距離」を別々の値にする根拠がないため。
 const STATION_CLUSTER_THRESHOLD_METERS = 1000;
+
+/** クラスタ内の全ペア間の最大距離（直径、メートル） */
+function clusterDiameterMeters(stops) {
+  let max = 0;
+  for (let i = 0; i < stops.length; i++) {
+    for (let j = i + 1; j < stops.length; j++) {
+      const d = haversineMeters(stops[i].stop_lat, stops[i].stop_lon, stops[j].stop_lat, stops[j].stop_lon);
+      if (d > max) max = d;
+    }
+  }
+  return max;
+}
+
+/**
+ * クラスタの直径が閾値を超えていたら、直径の両端点（最も離れた2停留所）を
+ * 種として最近傍割り当てで2分割し、それぞれについて直径が閾値以下になるまで
+ * 再帰する（決定的：種は「最大距離を与える点対」という一意の基準で選ぶ）。
+ * 単連結クラスタリング（buildStationClusters）が生む「鎖状の分裂した駅」対策。
+ */
+function splitClusterByDiameter(stops, thresholdMeters) {
+  if (stops.length <= 1) return [stops];
+
+  let maxD = 0, pi = 0, pj = 1;
+  for (let i = 0; i < stops.length; i++) {
+    for (let j = i + 1; j < stops.length; j++) {
+      const d = haversineMeters(stops[i].stop_lat, stops[i].stop_lon, stops[j].stop_lat, stops[j].stop_lon);
+      if (d > maxD) { maxD = d; pi = i; pj = j; }
+    }
+  }
+  if (maxD <= thresholdMeters) return [stops];
+
+  const seedA = stops[pi];
+  const seedB = stops[pj];
+  const groupA = [];
+  const groupB = [];
+  for (const s of stops) {
+    const dA = haversineMeters(s.stop_lat, s.stop_lon, seedA.stop_lat, seedA.stop_lon);
+    const dB = haversineMeters(s.stop_lat, s.stop_lon, seedB.stop_lat, seedB.stop_lon);
+    (dA <= dB ? groupA : groupB).push(s);
+  }
+  // seedA/seedBはそれぞれ自分自身への距離0で必ず別グループに入るため、
+  // groupA/groupBは常に非空かつstops全体の真部分集合になる（再帰は必ず停止する）。
+  return [...splitClusterByDiameter(groupA, thresholdMeters), ...splitClusterByDiameter(groupB, thresholdMeters)];
+}
+
+/**
+ * 市区町村の代表座標（generate-municipality-table.jsが生成した
+ * municipality-locations.json）から、最も近い市区町村名を返す最近傍探索。
+ * 市区町村の境界ポリゴンは持たないため「代表点への最近傍」による近似であり、
+ * 境界付近では隣接市区町村と誤ることがありうる（駅の表示名の曖昧さ回避という
+ * 用途上、実害は限定的と判断）。ファイルが存在しない場合はnullを返し、
+ * 呼び出し側が番号での曖昧さ回避にフォールバックする。
+ */
+function loadNearestMunicipalityFinder() {
+  if (!fs.existsSync(municipalityLocationsPath)) {
+    console.warn(
+      `    ⚠️  ${municipalityLocationsPath} が見つかりません。駅名の曖昧さ回避は市区町村名ではなく` +
+      `番号にフォールバックします（node scripts/build-pipeline/generate-municipality-table.js で生成できます）。`
+    );
+    return null;
+  }
+  const locations = JSON.parse(fs.readFileSync(municipalityLocationsPath, 'utf-8'));
+  return (lat, lon) => {
+    let best = null;
+    let bestDist = Infinity;
+    for (const loc of locations) {
+      const d = haversineMeters(lat, lon, loc.lat, loc.lon);
+      if (d < bestDist) { bestDist = d; best = loc; }
+    }
+    return best?.name ?? null;
+  };
+}
 
 /**
  * 駅名文字列だけをキーにするのをやめ、「同名かつ閾値以内の距離」でクラスタリングし、
  * 安定したstation_id（クラスタ内の名前空間化済みstop_idのうち辞書順最小のもの）を
  * 割り当てる。表示名（display_name）は駅名と別に持ち、同名の駅が複数クラスタに
- * 分裂した場合だけ曖昧さ回避のサフィックスを付ける。
+ * 分裂した場合は最寄りの市区町村名で曖昧さ回避する（例：「西町（小松市）」）。
+ * 市区町村名まで同じで区別できない場合だけ番号を付ける。
  *
  * 【このクラスタリングが解決する範囲】同一都道府県（＝同一ビルド）内での
- * 同名衝突のみ。都道府県をまたいだ同名衝突（例：富山・石川の候補9フィードで
- * 実測した44組、最大89km）は、このクラスタリングの対象外＝解決しない。
- * 複数県のデータを同時にロードする段階で、mergeIndexedSpotRegions()と同様の
- * 「県をまたいだ駅の統合」処理が別途必要になる（未実装、段階1のオーケストレーション
- * で対応予定）。
+ * 同名衝突のみ。stop_id由来の安定IDを使うため、遠く離れた同名停留所が
+ * 誤って合体することはない（名前だけがキーだった旧実装の問題は解消済み）。
+ * 段階1で本当に注意が必要なのは逆に、県境をまたぐ同一の駅が県ごとに別ビルドで
+ * 作られると別々の駅（別々のstation_id）になり、乗換が失われる問題（CLAUDE.md
+ * 「データ構造」参照。県をまたぐ駅統合は別途、複数県ロード時の処理として必要）。
  *
  * stop_name が空文字列の停留所（出入口・改札等、乗車できないGTFS要素）は
  * クラスタリング対象から除外する（駅としての意味を持たないため）。
  */
 function buildStationClusters(aggregated) {
+  const findNearestMunicipality = loadNearestMunicipalityFinder();
+
   const stopsArray = Object.values(aggregated.stops);
   const byName = new Map();
   for (const stop of stopsArray) {
@@ -237,6 +320,8 @@ function buildStationClusters(aggregated) {
 
   const clusters = [];
   let splitNameCount = 0;
+  let diameterSplitCount = 0;
+  const diameters = []; // {name, diameter} 全クラスタ分。ビルドログの上位10件表示用
 
   for (const [name, group] of byName.entries()) {
     const n = group.length;
@@ -254,7 +339,7 @@ function buildStationClusters(aggregated) {
     }
 
     const visited = new Array(n).fill(false);
-    const groupClusters = [];
+    let singleLinkClusters = [];
     for (let start = 0; start < n; start++) {
       if (visited[start]) continue;
       const component = [];
@@ -270,23 +355,62 @@ function buildStationClusters(aggregated) {
           }
         }
       }
-      groupClusters.push(component.map((idx) => group[idx]));
+      singleLinkClusters.push(component.map((idx) => group[idx]));
     }
 
-    if (groupClusters.length > 1) {
+    // 直径が閾値を超える単連結クラスタ（鎖状の分裂駅）を検出し、分割する
+    const finalClusters = [];
+    for (const clusterStops of singleLinkClusters) {
+      const diameter = clusterDiameterMeters(clusterStops);
+      if (diameter > STATION_CLUSTER_THRESHOLD_METERS) {
+        diameterSplitCount += 1;
+        console.warn(
+          `    ⚠️  駅名「${name}」のクラスタ直径が${Math.round(diameter)}mで閾値` +
+          `${STATION_CLUSTER_THRESHOLD_METERS}mを超過（鎖状の連結）。分割します。`
+        );
+        finalClusters.push(...splitClusterByDiameter(clusterStops, STATION_CLUSTER_THRESHOLD_METERS));
+      } else {
+        finalClusters.push(clusterStops);
+      }
+    }
+    for (const clusterStops of finalClusters) {
+      diameters.push({ name, diameter: clusterDiameterMeters(clusterStops) });
+    }
+
+    if (finalClusters.length > 1) {
       splitNameCount += 1;
-      console.warn(
-        `    ⚠️  駅名「${name}」が${groupClusters.length}クラスタに分裂（閾値${STATION_CLUSTER_THRESHOLD_METERS}m）。` +
-        `表示名は番号で曖昧さ回避（市区町村ベースの表示名は未実装）。`
-      );
     }
 
-    groupClusters.forEach((clusterStops, idx) => {
-      const stationId = [...clusterStops].map((s) => s.stop_id).sort()[0];
-      const displayName = groupClusters.length > 1 ? `${name}（${idx + 1}）` : name;
+    // 曖昧さ回避：まず市区町村名を試し、それでも重複するものだけ番号を付ける
+    const withMunicipality = finalClusters.map((clusterStops) => {
       const lat = clusterStops.reduce((sum, s) => sum + s.stop_lat, 0) / clusterStops.length;
       const lon = clusterStops.reduce((sum, s) => sum + s.stop_lon, 0) / clusterStops.length;
+      const municipality = finalClusters.length > 1 && findNearestMunicipality
+        ? findNearestMunicipality(lat, lon)
+        : null;
+      return { clusterStops, lat, lon, municipality };
+    });
+    const municipalityCounts = new Map();
+    for (const c of withMunicipality) {
+      if (!c.municipality) continue;
+      municipalityCounts.set(c.municipality, (municipalityCounts.get(c.municipality) || 0) + 1);
+    }
+    let numberedIndex = 0;
+    withMunicipality.forEach(({ clusterStops, lat, lon, municipality }) => {
+      let displayName = name;
+      if (finalClusters.length > 1) {
+        if (municipality && municipalityCounts.get(municipality) === 1) {
+          displayName = `${name}（${municipality}）`;
+        } else {
+          numberedIndex += 1;
+          displayName = municipality
+            ? `${name}（${municipality}${numberedIndex}）` // 同一市区町村内でさらに分裂した稀なケース
+            : `${name}（${numberedIndex}）`;
+        }
+        console.warn(`       → 表示名: ${displayName}`);
+      }
 
+      const stationId = [...clusterStops].map((s) => s.stop_id).sort()[0];
       for (const stop of clusterStops) {
         stop.station_id = stationId;
       }
@@ -302,8 +426,20 @@ function buildStationClusters(aggregated) {
   }
 
   console.log(
-    `  - 駅クラスタリング: ${byName.size}駅名 → ${clusters.length}駅（分裂した駅名: ${splitNameCount}件）`
+    `  - 駅クラスタリング: ${byName.size}駅名 → ${clusters.length}駅` +
+    `（分裂した駅名: ${splitNameCount}件、うち直径超過による分割: ${diameterSplitCount}件）`
   );
+
+  // 各県のビルドで、クラスタ直径の最大値と上位10件をログに出す（B-8）
+  const multiStopDiameters = diameters.filter((d) => d.diameter > 0).sort((a, b) => b.diameter - a.diameter);
+  if (multiStopDiameters.length > 0) {
+    console.log(`  - クラスタ直径の最大値: ${Math.round(multiStopDiameters[0].diameter)}m（${multiStopDiameters[0].name}）`);
+    console.log('  - クラスタ直径 上位10件:');
+    for (const d of multiStopDiameters.slice(0, 10)) {
+      console.log(`      ${d.name}: ${Math.round(d.diameter)}m`);
+    }
+  }
+
   return clusters;
 }
 
