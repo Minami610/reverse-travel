@@ -91,12 +91,17 @@ async function main() {
       const budget = parseInt(budgetStr, 10);
       const reachable = await fareCalc.calculateReachable(stationId, budget);
       const spots = await spotFinder.findSpots(reachable);
-      const actual = { reachable: reachable.length, spots: spots.length };
+      const transfer = reachable.filter((r) => r.reachBy === 'transfer').length;
+      const actual = { reachable: reachable.length, spots: spots.length, transfer };
 
-      const ok = actual.reachable === expected.reachable && actual.spots === expected.spots;
+      let ok = actual.reachable === expected.reachable && actual.spots === expected.spots;
+      if (expected.transfer !== undefined) {
+        ok = ok && actual.transfer === expected.transfer;
+      }
       console.log(
         `${ok ? '✅' : '❌'} ${departure.display_name} 往復¥${budget}: ` +
-        `到達駅数=${actual.reachable}（基準${expected.reachable}） スポット件数=${actual.spots}（基準${expected.spots}）`
+        `到達駅数=${actual.reachable}（基準${expected.reachable}） スポット件数=${actual.spots}（基準${expected.spots}）` +
+        (expected.transfer !== undefined ? ` 乗換到達駅数=${actual.transfer}（基準${expected.transfer}）` : '')
       );
       if (!ok) failures += 1;
 

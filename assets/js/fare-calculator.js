@@ -110,7 +110,6 @@ export class FareCalculator {
       console.log(`✅ 直接到達駅: ${directCount}駅`);
 
       // ステップ2：鉄道系の停留所で直接到達した駅から、併設バス系停留所経由でラストワンマイル
-      let transferCount = 0;
       const directRailStations = Array.from(reachable.entries()).filter(
         ([, info]) => info.reachBy === 'direct' && isRailEligible(this.stopIdToMode.get(info.viaStopId))
       );
@@ -152,13 +151,10 @@ export class FareCalculator {
                 legOperators,
                 legFares: [railInfo.fare, busFare],
               });
-              transferCount += 1;
             }
           }
         }
       }
-
-      console.log(`✅ 乗り継ぎ到達駅: ${transferCount}駅`);
 
       // 最終判定：このアプリの予算は往復の交通費（2026-09-12決定、CLAUDE.md参照）。
       // GTFSの運賃データに往復運賃・往復割引という概念自体が存在しないため、
@@ -175,6 +171,11 @@ export class FareCalculator {
         }
       }
       console.log(`✅ 往復予算内（片道総額×2 ≦ ¥${budget}）: ${reachable.size}駅`);
+
+      const finalTransferCount = Array.from(reachable.values()).filter(
+        (info) => info.reachBy === 'transfer'
+      ).length;
+      console.log(`✅ 乗り継ぎ到達駅: ${finalTransferCount}駅`);
 
       // 結果をリスト化（各駅IDに属する全stop_idを付与＝スポット検索用）
       // selectionTimeMin は「乗車時間＋期待待ち時間」（分）。アクセス駅選定（SpotFinder）で

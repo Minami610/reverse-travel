@@ -5,7 +5,7 @@
     {
       "display_name": "高松築港",
       "note": "香川最大のハブ駅",
-      "budgets": { "400": { "reachable": 58, "spots": 72 }, "1000": { "reachable": 199, "spots": 142 } }
+      "budgets": { "400": { "reachable": 58, "spots": 72 }, "1000": { "reachable": 199, "spots": 142, "transfer": 11 } }
     },
     {
       "display_name": "琴電琴平",
