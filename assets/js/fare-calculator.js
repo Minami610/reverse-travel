@@ -2,21 +2,30 @@
  * fare-calculator.js - 運賃計算エンジン（フェーズ1）
  *
  * 運賃データ（od_fares）は stop_id 単位のOD運賃表（駅・バス停の全事業者を横断してフラットに統合済み）。
- * 同一駅名でもプラットフォーム単位でstop_idが分かれているため、駅名単位に集約して扱う。
+ * 同一プラットフォームのstop_idは駅ID（station_id）単位に集約して扱う。
  *
  * フェーズ1スコープ：
- * 1. OD運賃表から「出発駅から¥X以内の到達駅」を駅名単位で直接検索（鉄道・バスとも同じOD表として扱う）
- * 2. 鉄道で直接到達した駅から、その駅に併設するバス停（同一駅名の別事業者stop_id）経由で
+ * 1. OD運賃表から「出発駅から¥X以内の到達駅」を駅ID単位で直接検索（鉄道・バスとも同じOD表として扱う）
+ * 2. 鉄道系の停留所で直接到達した駅から、その駅に併設するバス系の停留所経由で
  *    さらにバスのOD運賃を1回分加算し、ラストワンマイルを探索
  * 3. 乗り継ぎは最大1回に限定
+ *
+ * 【鉄道／バスの判定はstop_idのmode（route_typeベース、parse-and-transform.js産）を使う。
+ * 以前はRAIL_OPERATOR_ID='kotoden'/BUS_OPERATOR_ID='kotoden-bus'という事業者IDの固定値
+ * だったが、これは事業者ごとに単一モードの香川でしか成立せず、鉄道とバスの両方を
+ * 運行する事業者（例：富山地方鉄道）で破綻するため、停留所ごとの実データ判定に変えた。】
  *
  * フェーズ2以降：汎用グラフ探索（ダイクストラ法）へ移行予定
  */
 
 import { estimateSelectionMinutes, estimateRideMinutes } from './route-duration.js';
 
-const RAIL_OPERATOR_ID = 'kotoden';
-const BUS_OPERATOR_ID = 'kotoden-bus';
+function isRailEligible(mode) {
+  return mode === 'rail' || mode === 'mixed';
+}
+function isBusEligible(mode) {
+  return mode === 'bus' || mode === 'mixed';
+}
 
 export class FareCalculator {
   constructor(data) {
@@ -24,34 +33,35 @@ export class FareCalculator {
     this.stopsMetadata = data.stopsMetadata;
     this.routeInfo = data.routeInfo;
     this.routeDetails = data.routeDetails;
-    this.stationsByName = data.stationsByName;
-    this.stopIdToName = new Map(
-      this.stopsMetadata.map((s) => [s.stop_id, s.stop_name])
+    this.stations = data.stations;
+    this.stopIdToStationId = new Map(
+      this.stopsMetadata.map((s) => [s.stop_id, s.station_id])
+    );
+    this.stopIdToMode = new Map(
+      this.stopsMetadata.map((s) => [s.stop_id, s.mode])
     );
   }
 
   /**
-   * 出発駅（駅名）から予算内で到達可能な駅を計算
-   * @param {string} departureStationName - 出発駅名
+   * 出発駅（駅ID）から予算内で到達可能な駅を計算
+   * @param {string} departureStationId - 出発駅ID（stations.jsonのキー）
    * @param {number} budget - 予算（円）。**往復**の交通費（2026-09-12決定）。
    *                  GTFSの運賃データには往復運賃・往復割引の概念がなく、片道の
    *                  運賃商品しか存在しないため、帰りも往路と同額と仮定して判定する。
-   * @returns {Array} [{stop_id, stop_name, stop_ids, fare, roundTripFare, reachBy}, ...]
-   *                  stop_id/stop_name は駅名（呼び出し側の互換性のため）
-   *                  stop_ids はその駅名に属する実際のstop_id一覧（スポット検索用）
+   * @returns {Array} [{station_id, display_name, stop_ids, fare, roundTripFare, reachBy, viaOperator, transferAt, legOperators, legFares}, ...]
    *                  fare は片道総額、roundTripFare は fare*2（予算と比較すべき実際の負担額）
    *                  reachBy: 'direct'(直接), 'transfer'(鉄道→バス1回乗換)
    */
-  async calculateReachable(departureStationName, budget) {
+  async calculateReachable(departureStationId, budget) {
     try {
-      const departureStation = this.stationsByName?.[departureStationName];
+      const departureStation = this.stations?.[departureStationId];
       if (!departureStation) {
-        console.warn(`⚠️ 出発駅が見つかりません: ${departureStationName}`);
+        console.warn(`⚠️ 出発駅が見つかりません: ${departureStationId}`);
         return [];
       }
 
-      // ステップ1：出発駅の全stop_id（全事業者）を起点にOD運賃表を直接検索し、駅名単位に集約
-      const reachable = new Map(); // stationName -> {fare, reachBy, viaOperator}
+      // ステップ1：出発駅の全stop_id（全事業者）を起点にOD運賃表を直接検索し、駅ID単位に集約
+      const reachable = new Map(); // stationId -> {fare, reachBy, viaOperator, viaStopId}
 
       for (const { stop_id: originStopId, operator_id: originOperator } of departureStation.stops) {
         const destinations = this.fareData.od_fares?.[originStopId];
@@ -59,12 +69,17 @@ export class FareCalculator {
 
         for (const [destStopId, fare] of Object.entries(destinations)) {
           if (fare > budget) continue;
-          const destName = this.stopIdToName.get(destStopId);
-          if (!destName || destName === departureStationName) continue;
+          const destStationId = this.stopIdToStationId.get(destStopId);
+          if (!destStationId || destStationId === departureStationId) continue;
 
-          const existing = reachable.get(destName);
+          const existing = reachable.get(destStationId);
           if (!existing || existing.fare > fare) {
-            reachable.set(destName, { fare, reachBy: 'direct', viaOperator: originOperator });
+            reachable.set(destStationId, {
+              fare,
+              reachBy: 'direct',
+              viaOperator: originOperator,
+              viaStopId: originStopId,
+            });
           }
         }
       }
@@ -72,41 +87,39 @@ export class FareCalculator {
       const directCount = reachable.size;
       console.log(`✅ 直接到達駅: ${directCount}駅`);
 
-      // ステップ2：鉄道で直接到達した駅から、併設バス停経由でラストワンマイル
+      // ステップ2：鉄道系の停留所で直接到達した駅から、併設バス系停留所経由でラストワンマイル
       let transferCount = 0;
       const directRailStations = Array.from(reachable.entries()).filter(
-        ([, info]) => info.reachBy === 'direct' && info.viaOperator === RAIL_OPERATOR_ID
+        ([, info]) => info.reachBy === 'direct' && isRailEligible(this.stopIdToMode.get(info.viaStopId))
       );
 
-      for (const [railStationName, railInfo] of directRailStations) {
+      for (const [railStationId, railInfo] of directRailStations) {
         const remainingBudget = budget - railInfo.fare;
         if (remainingBudget <= 0) continue;
 
-        const railStation = this.stationsByName[railStationName];
+        const railStation = this.stations[railStationId];
         if (!railStation) continue;
 
-        const busStopIds = railStation.stops
-          .filter((s) => s.operator_id === BUS_OPERATOR_ID)
-          .map((s) => s.stop_id);
-        if (busStopIds.length === 0) continue; // この駅にはバス乗換拠点がない
+        const busStops = railStation.stops.filter((s) => isBusEligible(s.mode));
+        if (busStops.length === 0) continue; // この駅にはバス乗換拠点がない
 
-        for (const busStopId of busStopIds) {
-          const busDestinations = this.fareData.od_fares?.[busStopId];
+        for (const busStop of busStops) {
+          const busDestinations = this.fareData.od_fares?.[busStop.stop_id];
           if (!busDestinations) continue;
 
           for (const [destStopId, busFare] of Object.entries(busDestinations)) {
             if (busFare > remainingBudget) continue;
-            const destName = this.stopIdToName.get(destStopId);
-            if (!destName || destName === departureStationName || destName === railStationName) continue;
+            const destStationId = this.stopIdToStationId.get(destStopId);
+            if (!destStationId || destStationId === departureStationId || destStationId === railStationId) continue;
 
             const totalFare = railInfo.fare + busFare;
-            const existing = reachable.get(destName);
+            const existing = reachable.get(destStationId);
             if (!existing || existing.fare > totalFare) {
-              reachable.set(destName, {
+              reachable.set(destStationId, {
                 fare: totalFare,
                 reachBy: 'transfer',
-                viaOperator: BUS_OPERATOR_ID,
-                transferAt: railStationName,
+                transferAt: railStationId,
+                legOperators: [railInfo.viaOperator, busStop.operator_id],
                 legFares: [railInfo.fare, busFare],
               });
               transferCount += 1;
@@ -126,34 +139,38 @@ export class FareCalculator {
       // 採用しない。探索フェーズの枝刈り（上記のbudget比較）は「往路総額は
       // budgetを超えない」という往復判定より常に緩い条件のままにしておき、
       // 有効な候補を誤って捨てないようにした上で、ここで一度だけ厳密に判定する。
-      for (const [stationName, info] of reachable) {
+      for (const [stationId, info] of reachable) {
         if (info.fare * 2 > budget) {
-          reachable.delete(stationName);
+          reachable.delete(stationId);
         }
       }
       console.log(`✅ 往復予算内（片道総額×2 ≦ ¥${budget}）: ${reachable.size}駅`);
 
-      // 結果をリスト化（各駅名に属する全stop_idを付与＝スポット検索用）
+      // 結果をリスト化（各駅IDに属する全stop_idを付与＝スポット検索用）
       // selectionTimeMin は「乗車時間＋期待待ち時間」（分）。アクセス駅選定（SpotFinder）で
       // 「選定時間＋徒歩時間」の総所要時間を比較するために使う。
       // rideDurationMin は乗車時間のみ（待ち時間を含まない）。カード・詳細画面の
       // 所要時間表示に使う。どちらも経路が確定できない場合はnull。
       // fare は片道総額（詳細画面の区間内訳・合計と整合させるためそのまま維持）、
       // roundTripFare は予算と比較すべき実際の負担額（往復・帰りは同額と仮定）。
-      const result = Array.from(reachable.entries()).map(([stationName, info]) => {
-        const station = this.stationsByName[stationName];
+      // viaOperator/legOperatorsは運賃を決めた事業者そのものを経路表示にも
+      // 使わせるためのもの（運賃事業者と表示経路事業者を一致させる）。
+      const result = Array.from(reachable.entries()).map(([stationId, info]) => {
+        const station = this.stations[stationId];
         const stationEntry = {
-          stop_id: stationName,
-          stop_name: stationName,
+          station_id: stationId,
+          display_name: station ? station.display_name : stationId,
           stop_ids: station ? station.stops.map((s) => s.stop_id) : [],
           fare: info.fare,
           roundTripFare: info.fare * 2,
           reachBy: info.reachBy,
+          viaOperator: info.reachBy === 'direct' ? info.viaOperator : null,
           transferAt: info.transferAt || null,
+          legOperators: info.legOperators || null,
           legFares: info.legFares || null,
         };
-        stationEntry.selectionTimeMin = estimateSelectionMinutes(this.routeDetails, departureStationName, stationEntry);
-        stationEntry.rideDurationMin = estimateRideMinutes(this.routeDetails, departureStationName, stationEntry);
+        stationEntry.selectionTimeMin = estimateSelectionMinutes(this.routeDetails, departureStationId, stationEntry);
+        stationEntry.rideDurationMin = estimateRideMinutes(this.routeDetails, departureStationId, stationEntry);
         return stationEntry;
       });
 

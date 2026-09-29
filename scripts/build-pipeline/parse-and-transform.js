@@ -5,7 +5,8 @@
  * 
  * 出力：
  * - fare-lookup-tables.json    : {od_fares: {...}, bus_fares: {...}}
- * - stops-metadata.json        : [{stop_id, stop_name, stop_lat, stop_lon, ...}]
+ * - stops-metadata.json        : [{stop_id, stop_name, stop_lat, stop_lon, mode, station_id, ...}]
+ * - stations.json              : {station_id: {display_name, stop_lat, stop_lon, stops:[...]}}
  * - route-info.json            : {route_id: {route_short_name, ...}}
  */
 
@@ -72,8 +73,11 @@ export async function parseAndTransform() {
   // 実質同一地点だが表記が異なる停留所名を統合（鉄道↔バスの乗換拠点を増やすため）
   mergeDuplicateStationNames(aggregated);
 
+  // 駅名文字列ではなく安定したIDで駅をまとめる（同名かつ近接のときだけ1駅とみなす）
+  const stationClusters = buildStationClusters(aggregated);
+
   // 派生JSONを生成
-  saveDerivedData(aggregated);
+  saveDerivedData(aggregated, stationClusters);
 
   console.log('✅ GTFS パース完了\n');
 }
@@ -198,6 +202,187 @@ function mergeDuplicateStationNames(aggregated) {
   console.log(`  - 統合した停留所名グループ: ${mergedGroupCount}件（${mergedStopCount}停留所の表記を統合）`);
 }
 
+// 同名かつこの距離（メートル）以内のときだけ1駅とみなす。
+// 【根拠】香川で現在1つの駅として扱われているグループの中で最大の広がりは
+// 春日川駅（鉄道3停留所＋バス2停留所、最大821.6m）。この値を下回ると香川の
+// 既存駅が分裂するため、安全マージンを見て1000mに設定した。
+// 一方、富山・石川の候補9フィードで見つかった「別の町の同名停留所」は
+// 最短でも数km、大半は数十km離れており、1000mなら確実に誤結合を防げる。
+const STATION_CLUSTER_THRESHOLD_METERS = 1000;
+
+/**
+ * 駅名文字列だけをキーにするのをやめ、「同名かつ閾値以内の距離」でクラスタリングし、
+ * 安定したstation_id（クラスタ内の名前空間化済みstop_idのうち辞書順最小のもの）を
+ * 割り当てる。表示名（display_name）は駅名と別に持ち、同名の駅が複数クラスタに
+ * 分裂した場合だけ曖昧さ回避のサフィックスを付ける。
+ *
+ * 【このクラスタリングが解決する範囲】同一都道府県（＝同一ビルド）内での
+ * 同名衝突のみ。都道府県をまたいだ同名衝突（例：富山・石川の候補9フィードで
+ * 実測した44組、最大89km）は、このクラスタリングの対象外＝解決しない。
+ * 複数県のデータを同時にロードする段階で、mergeIndexedSpotRegions()と同様の
+ * 「県をまたいだ駅の統合」処理が別途必要になる（未実装、段階1のオーケストレーション
+ * で対応予定）。
+ *
+ * stop_name が空文字列の停留所（出入口・改札等、乗車できないGTFS要素）は
+ * クラスタリング対象から除外する（駅としての意味を持たないため）。
+ */
+function buildStationClusters(aggregated) {
+  const stopsArray = Object.values(aggregated.stops);
+  const byName = new Map();
+  for (const stop of stopsArray) {
+    if (!stop.stop_name) continue;
+    if (!byName.has(stop.stop_name)) byName.set(stop.stop_name, []);
+    byName.get(stop.stop_name).push(stop);
+  }
+
+  const clusters = [];
+  let splitNameCount = 0;
+
+  for (const [name, group] of byName.entries()) {
+    const n = group.length;
+    const adjacency = Array.from({ length: n }, () => new Set());
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const distance = haversineMeters(
+          group[i].stop_lat, group[i].stop_lon, group[j].stop_lat, group[j].stop_lon
+        );
+        if (distance <= STATION_CLUSTER_THRESHOLD_METERS) {
+          adjacency[i].add(j);
+          adjacency[j].add(i);
+        }
+      }
+    }
+
+    const visited = new Array(n).fill(false);
+    const groupClusters = [];
+    for (let start = 0; start < n; start++) {
+      if (visited[start]) continue;
+      const component = [];
+      const queue = [start];
+      visited[start] = true;
+      while (queue.length > 0) {
+        const current = queue.shift();
+        component.push(current);
+        for (const next of adjacency[current]) {
+          if (!visited[next]) {
+            visited[next] = true;
+            queue.push(next);
+          }
+        }
+      }
+      groupClusters.push(component.map((idx) => group[idx]));
+    }
+
+    if (groupClusters.length > 1) {
+      splitNameCount += 1;
+      console.warn(
+        `    ⚠️  駅名「${name}」が${groupClusters.length}クラスタに分裂（閾値${STATION_CLUSTER_THRESHOLD_METERS}m）。` +
+        `表示名は番号で曖昧さ回避（市区町村ベースの表示名は未実装）。`
+      );
+    }
+
+    groupClusters.forEach((clusterStops, idx) => {
+      const stationId = [...clusterStops].map((s) => s.stop_id).sort()[0];
+      const displayName = groupClusters.length > 1 ? `${name}（${idx + 1}）` : name;
+      const lat = clusterStops.reduce((sum, s) => sum + s.stop_lat, 0) / clusterStops.length;
+      const lon = clusterStops.reduce((sum, s) => sum + s.stop_lon, 0) / clusterStops.length;
+
+      for (const stop of clusterStops) {
+        stop.station_id = stationId;
+      }
+
+      clusters.push({
+        station_id: stationId,
+        display_name: displayName,
+        stop_lat: lat,
+        stop_lon: lon,
+        stops: clusterStops,
+      });
+    });
+  }
+
+  console.log(
+    `  - 駅クラスタリング: ${byName.size}駅名 → ${clusters.length}駅（分裂した駅名: ${splitNameCount}件）`
+  );
+  return clusters;
+}
+
+// GTFSのroute_type: 0=路面電車, 1=地下鉄, 2=鉄道 → 「鉄道系」として扱う。3=バス。
+const RAIL_ROUTE_TYPES = new Set([0, 1, 2]);
+const BUS_ROUTE_TYPE = 3;
+
+/**
+ * 停留所ごとに「鉄道系route_typeの便が来るか／バスの便が来るか」を判定し、
+ * aggregated.stops の各エントリに mode（'rail'|'bus'|'mixed'|null）を付与する。
+ *
+ * 【なぜ事業者単位ではなく停留所単位か】fare-calculator.jsは以前
+ * RAIL_OPERATOR_ID='kotoden'/BUS_OPERATOR_ID='kotoden-bus' という事業者IDの
+ * 固定値で「乗換の起点は鉄道駅、終点はバス停」を判定していた。これは
+ * 事業者ごとに単一モードの香川（ことでん=鉄道専業、ことでんバス=バス専業）
+ * でしか成立せず、鉄道とバスの両方を運行する事業者（例：富山地方鉄道）や、
+ * 1つのGTFSフィード内にroute_typeが混在するケースで破綻する。
+ * route_typeは「その便がどの種別の路線を走るか」の実データなので、
+ * 停留所ごとに「その停留所に実際に来る便の種別」を集計する方が正確。
+ */
+function classifyStopModes(operator, operatorDir, aggregated) {
+  const routesPath = path.join(operatorDir, 'routes.txt');
+  const tripsPath = path.join(operatorDir, 'trips.txt');
+  const stopTimesPath = path.join(operatorDir, 'stop_times.txt');
+  if (!fs.existsSync(routesPath) || !fs.existsSync(tripsPath) || !fs.existsSync(stopTimesPath)) {
+    console.warn(`  ⚠️  ${operator.name}: routes.txt/trips.txt/stop_times.txtが揃わずモード判定をスキップ`);
+    return;
+  }
+
+  const routes = parseGtfsFile(routesPath, 'routes.txt（モード判定用）');
+  const trips = parseGtfsFile(tripsPath, 'trips.txt（モード判定用）');
+  const stopTimes = parseGtfsFile(stopTimesPath, 'stop_times.txt（モード判定用）');
+
+  const routeTypeByRawRouteId = new Map(routes.map((r) => [r.route_id, parseInt(r.route_type, 10)]));
+  const tripToRouteType = new Map();
+  for (const trip of trips) {
+    const type = routeTypeByRawRouteId.get(trip.route_id);
+    if (type !== undefined) tripToRouteType.set(trip.trip_id, type);
+  }
+
+  const hasRail = new Set();
+  const hasBus = new Set();
+  for (const st of stopTimes) {
+    const type = tripToRouteType.get(st.trip_id);
+    if (type === undefined) continue;
+    const stopId = namespacedId(operator.id, st.stop_id);
+    if (RAIL_ROUTE_TYPES.has(type)) hasRail.add(stopId);
+    else if (type === BUS_ROUTE_TYPE) hasBus.add(stopId);
+  }
+
+  // 駅の代表stop_id（location_type=1の親、例："○○_駅"）はGTFSの設計上
+  // stop_times.txtに直接登場しないことが多く（実際に乗降するのはプラットフォーム
+  // 単位の子停留所）、上記だけでは親にmodeが付かない。fare-calculator.jsは
+  // od_fares（zone_id経由で親・子どちらのstop_idも登録される）から拾った
+  // stop_idでmodeを判定するため、親が未分類のままだと「鉄道駅なのに
+  // rail-eligibleと判定されない」事故になる（実測：香川で乗換到達駅が
+  // 56駅→0駅に消えた）。子の判定結果を親（parent_station）にも伝播する。
+  const classifiedStopIds = [...new Set([...hasRail, ...hasBus])];
+  for (const stopId of classifiedStopIds) {
+    const stop = aggregated.stops[stopId];
+    if (!stop?.parent_station) continue;
+    if (hasRail.has(stopId)) hasRail.add(stop.parent_station);
+    if (hasBus.has(stopId)) hasBus.add(stop.parent_station);
+  }
+
+  let railCount = 0, busCount = 0, mixedCount = 0;
+  for (const stopId of new Set([...hasRail, ...hasBus])) {
+    const stop = aggregated.stops[stopId];
+    if (!stop) continue; // stops.txtに存在しないstop_id（データ不整合）は無視
+    const isRail = hasRail.has(stopId);
+    const isBus = hasBus.has(stopId);
+    stop.mode = isRail && isBus ? 'mixed' : isRail ? 'rail' : 'bus';
+    if (stop.mode === 'mixed') mixedCount += 1;
+    else if (stop.mode === 'rail') railCount += 1;
+    else busCount += 1;
+  }
+  console.log(`    モード判定: 鉄道系${railCount}件 / バス${busCount}件 / 混在${mixedCount}件`);
+}
+
 function parseGtfsFile(filePath, label) {
   const records = parse(fs.readFileSync(filePath, 'utf-8'), {
     bom: true,
@@ -243,6 +428,8 @@ async function processOperator(operator, operatorDir, aggregated) {
           zone_id: stop.zone_id || null,
           parent_station: stop.parent_station ? namespacedId(operator.id, stop.parent_station) : null,
           operator_id: operator.id,
+          mode: null, // route_typeから後述のclassifyStopModes()が判定して埋める
+          station_id: null, // buildStationClusters()が後で埋める
         };
       }
 
@@ -269,6 +456,9 @@ async function processOperator(operator, operatorDir, aggregated) {
       stats.generatedRecords += routes.length;
       console.log(`    生成レコード: ${routes.length} 路線`);
     }
+
+    // 2b. 停留所ごとの鉄道／バス判定（route_typeベース、事業者単位の固定値をやめる）
+    classifyStopModes(operator, operatorDir, aggregated);
 
     // 3. fare_rules.txt と fare_attributes.txt をパース（運賃計算用）
     if (fs.existsSync(fareRulesPath) && fs.existsSync(fareAttributesPath)) {
@@ -459,7 +649,7 @@ async function processFares(
 /**
  * 派生JSONを保存
  */
-function saveDerivedData(aggregated) {
+function saveDerivedData(aggregated, stationClusters) {
   console.log('💾 派生JSONを生成中...\n');
 
   // 1. fare-lookup-tables.json
@@ -475,7 +665,7 @@ function saveDerivedData(aggregated) {
   );
   console.log(`✅ fare-lookup-tables.json (${JSON.stringify(fareLookup).length} bytes)`);
 
-  // 2. stops-metadata.json
+  // 2. stops-metadata.json（プラットフォーム単位。station_id/modeが付与済み）
   const stopsArray = Object.values(aggregated.stops);
   fs.writeFileSync(
     path.join(derivedDir, 'stops-metadata.json'),
@@ -483,34 +673,33 @@ function saveDerivedData(aggregated) {
   );
   console.log(`✅ stops-metadata.json (${stopsArray.length} 駅)`);
 
-  // 2b. stations-by-name.json
-  // プラットフォーム単位で分かれているstop_idを駅名単位に集約。
-  // 同じ駅名に複数事業者のstop_idが含まれる場合、それが鉄道⇔バスの乗換拠点になる
+  // 2b. stations.json（旧stations-by-name.json）
+  // キーは駅名ではなくstation_id（buildStationClusters()が割り当てた安定ID）。
+  // 駅名文字列はdisplay_nameとしてのみ保持する。同じ駅（station_id）に複数事業者の
+  // stop_idが含まれる場合、それが鉄道⇔バスの乗換拠点になる
   // （例: 「高松築港」に琴電の駅stop_idとことでんバスの停留所stop_idが両方存在）。
-  const stationsByName = {};
-  for (const stop of stopsArray) {
-    if (!stationsByName[stop.stop_name]) {
-      stationsByName[stop.stop_name] = {
-        stop_name: stop.stop_name,
-        stop_lat: stop.stop_lat,
-        stop_lon: stop.stop_lon,
-        stops: [],
-      };
-    }
-    stationsByName[stop.stop_name].stops.push({
-      stop_id: stop.stop_id,
-      operator_id: stop.operator_id,
-    });
+  const stations = {};
+  for (const cluster of stationClusters) {
+    stations[cluster.station_id] = {
+      display_name: cluster.display_name,
+      stop_lat: cluster.stop_lat,
+      stop_lon: cluster.stop_lon,
+      stops: cluster.stops.map((s) => ({
+        stop_id: s.stop_id,
+        operator_id: s.operator_id,
+        mode: s.mode,
+      })),
+    };
   }
   fs.writeFileSync(
-    path.join(derivedDir, 'stations-by-name.json'),
-    JSON.stringify(stationsByName, null, 2)
+    path.join(derivedDir, 'stations.json'),
+    JSON.stringify(stations, null, 2)
   );
-  const transferPoints = Object.values(stationsByName).filter(
+  const transferPoints = Object.values(stations).filter(
     (s) => new Set(s.stops.map((st) => st.operator_id)).size > 1
   ).length;
   console.log(
-    `✅ stations-by-name.json (${Object.keys(stationsByName).length} 駅名、うち複数事業者の乗換拠点 ${transferPoints}件)`
+    `✅ stations.json (${Object.keys(stations).length} 駅、うち複数事業者の乗換拠点 ${transferPoints}件)`
   );
 
   // 3. route-info.json

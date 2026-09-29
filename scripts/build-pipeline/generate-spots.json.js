@@ -198,8 +198,14 @@ export async function fetchWikidataResponse(
  * 実装本体は削除せず generateSpotsLegacyUnsafe() として残している。理由は
  * Wikipedia本文取得等のユーティリティ（enrichSpotsBatchWithWikipedia等、同ファイル内）を
  * 新パイプライン（generate-spots-by-region.js）が実際にimportして使っているため。
- * 新パイプラインがfetch-and-build.jsに接続されるまでは、スポットデータの更新は
- * generate-spots-by-region.jsを都道府県単位で個別に実行すること。
+ *
+ * 【2026-09-29時点で正直に書いておくこと】generate-spots-by-region.jsは
+ * generateSpotsForRegion()をエクスポートしているだけで、CLIから実行する入口がまだない。
+ * つまり現時点では「スポットデータを再生成する手段」自体が存在しない。案内できる
+ * 代替手順が実在しないのに手順があるかのように書くと、今回の一連の事故
+ * （書かれていることと実際が違ったこと）を繰り返すことになる。都道府県単位の
+ * オーケストレーション（build-prefecture.js想定）を段階1で作るまで、このコメントは
+ * このままにしておくこと。
  */
 export async function generateSpots() {
   throw new Error(
@@ -207,8 +213,8 @@ export async function generateSpots() {
     '理由：本番配信データより劣化したデータを無言で生成するため（停留所ごとの近傍検索のみ・' +
     'sitelinks未取得で足切りフィルタが無効化・ガードテストなし）。詳細はgenerateSpots()の' +
     'コメントとCLAUDE.mdを参照してください。\n' +
-    '新パイプライン（generate-spots-by-region.js）がfetch-and-build.jsに接続されるまでは、' +
-    'スポットデータの更新はgenerate-spots-by-region.jsを都道府県単位で個別に実行してください。'
+    '現時点ではスポットデータを再生成する手段はありません（generate-spots-by-region.jsに' +
+    'CLIの入口がまだなく、都道府県単位のオーケストレーションは段階1で実装予定です）。'
   );
 }
 

@@ -179,7 +179,7 @@ async function generateInlineDataScript(derivedDir) {
   const files = {
     'fare-lookup-tables.json': 'EMBEDDED_FARE_DATA',
     'stops-metadata.json': 'EMBEDDED_STOPS_METADATA',
-    'stations-by-name.json': 'EMBEDDED_STATIONS_BY_NAME',
+    'stations.json': 'EMBEDDED_STATIONS',
     'route-info.json': 'EMBEDDED_ROUTE_INFO',
     'route-details.json': 'EMBEDDED_ROUTE_DETAILS',
     'spots-by-station.json': 'EMBEDDED_SPOTS_BY_STATION',
@@ -196,9 +196,16 @@ async function generateInlineDataScript(derivedDir) {
         // スポットデータは他の派生データと違い「なければ空でもアプリは一応動く」
         // ものではなく、検索結果が常に0件になる致命的な欠落。CLAUDE.mdの
         // 「必須の生成物は不在時にエラーで停止させる」に従い、警告で済ませず止める。
+        // 【2026-09-29】generate-spots-by-region.jsにはCLIの入口（generateSpotsForRegion()
+        // をエクスポートしているだけ）がまだない。案内できる再生成手順が実在しないため、
+        // 存在しない手順を案内しない（今回の一連の事故も「書かれていることと実際が
+        // 違った」ことが原因のため、同じ轍を踏まない）。
         throw new Error(
-          `${filename} が見つかりません。generate-spots-by-region.jsで生成してください` +
-          `（parse-and-transform.jsはこのファイルを生成しなくなりました）。`
+          `${filename} が見つかりません。現時点ではこのファイルを再生成する手段がありません` +
+          `（generate-spots-by-region.jsはCLIから直接実行できず、都道府県単位のオーケストレーション` +
+          `（build-prefecture.js想定、未実装）を段階1で作るまで待つ必要があります）。` +
+          `dist/index.htmlやdocs/index.htmlに埋め込み済みのデータから復元するか、既存の` +
+          `data/derived/spots-by-station.jsonのバックアップを使ってください。`
         );
       }
       console.warn(`  ⚠️  ${filename} が見つかりません（スキップ）`);
@@ -210,15 +217,20 @@ async function generateInlineDataScript(derivedDir) {
       validateSpotsData(filePath);
     }
 
-    const data = fs.readFileSync(filePath, 'utf-8');
-    script += `window.${varName} = ${data};\n`;
+    // JSON.parse→JSON.stringifyで必ず圧縮してから埋め込む。入力ファイルが
+    // pretty-print（インデント付き）で保存されていた場合、そのまま埋め込むと
+    // 本番HTMLが無駄に肥大化する（実測: 整形済みのまま埋め込んだ結果、
+    // dist/index.htmlが約700KB余分に膨らんだ事故があった）。入力ファイルの
+    // 書き方に依存しない安全な埋め込み方にする。
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    script += `window.${varName} = ${JSON.stringify(parsed)};\n`;
   }
 
-  // spot-ranking-config.json もインライン化
+  // spot-ranking-config.json もインライン化（他と同様、必ず圧縮してから埋め込む）
   const spotConfigPath = path.join(__dirname, '../config/spot-ranking-config.json');
   if (fs.existsSync(spotConfigPath)) {
-    const spotConfig = fs.readFileSync(spotConfigPath, 'utf-8');
-    script += `window.EMBEDDED_SPOT_RANKING_CONFIG = ${spotConfig};\n`;
+    const spotConfig = JSON.parse(fs.readFileSync(spotConfigPath, 'utf-8'));
+    script += `window.EMBEDDED_SPOT_RANKING_CONFIG = ${JSON.stringify(spotConfig)};\n`;
   }
 
   return script;

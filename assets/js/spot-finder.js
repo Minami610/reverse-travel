@@ -53,7 +53,7 @@ export class SpotFinder {
       for (const station of reachableStations) {
         // 駅は複数のstop_id（プラットフォーム単位）を持ちうるため、
         // 全stop_id分のスポット参照を駅内でQID重複排除する（最短距離を採用）
-        const stopIds = station.stop_ids?.length ? station.stop_ids : [station.stop_id];
+        const stopIds = station.stop_ids?.length ? station.stop_ids : [station.station_id];
         const bestRefByQidInStation = new Map();
 
         stopIds.forEach((stopId) => {
@@ -74,12 +74,14 @@ export class SpotFinder {
             ...detail,
             id: qid,
             distance: ref.distance,
-            source_station: station.stop_name,
-            source_stop_id: station.stop_id,
+            source_station: station.display_name,
+            source_station_id: station.station_id,
             source_fare: station.fare,
             source_round_trip_fare: station.roundTripFare,
             source_reach_by: station.reachBy,
+            source_via_operator: station.viaOperator,
             source_transfer_at: station.transferAt,
+            source_leg_operators: station.legOperators,
             source_leg_fares: station.legFares,
             source_ride_duration_min: station.rideDurationMin,
             source_total_time_min:

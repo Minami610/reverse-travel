@@ -242,10 +242,20 @@ async function checkResultCards(html) {
 
   console.log('\n=== 検索実行後の結果カード検証 ===');
 
-  // 実際のユーザー操作を模して検索を実行する（出発駅・予算をセットしてフォーム送信）
+  // 実際のユーザー操作を模して検索を実行する（出発駅・予算をセットしてフォーム送信）。
+  // 駅IDは名前ではなく安定IDなので、display_nameから逆引きして取得する
+  // （ハードコードするとクラスタリングの実装詳細が変わるたびに壊れるため）。
   const departureInput = doc.getElementById('departure-input');
+  const takamatsuId = Object.entries(window.EMBEDDED_STATIONS || {}).find(
+    ([, s]) => s.display_name === '高松築港'
+  )?.[0];
+  if (!takamatsuId) {
+    console.log('❌ 検証用の出発駅「高松築港」がEMBEDDED_STATIONSに見つかりません');
+    window.close();
+    return false;
+  }
   departureInput.value = '高松築港';
-  departureInput.dataset.stationName = '高松築港';
+  departureInput.dataset.stationId = takamatsuId;
   doc.getElementById('budget-input').value = '1000';
   doc.getElementById('search-form').dispatchEvent(
     new window.Event('submit', { bubbles: true, cancelable: true })

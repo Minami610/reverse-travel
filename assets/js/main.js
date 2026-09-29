@@ -21,7 +21,8 @@ class ReverseTravel {
     this.mapView.onSelectionChange = (spotId) => this.highlightCard(spotId);
     this.data = null;
     this.dataLoadFailed = false;
-    this.cache = new Map(); // localStorageの前段キャッシュ
+    this.cache = new Map(); // 検索結果のメモリキャッシュ（駅ID×予算）
+    this.currentDepartureStationId = null;
     this.currentDepartureStationName = null;
     this.currentSpots = []; // 検索結果（おすすめ順、地図のピンもこの集合のまま）
     this.currentSortOrder = 'recommended';
@@ -266,7 +267,7 @@ class ReverseTravel {
       this.data = await this.loader.loadAll();
       this.fareCalc = new FareCalculator(this.data);
       this.spotFinder = new SpotFinder(this.data);
-      this.routeFormatter = new RouteFormatter(this.data.routeInfo, this.data.routeDetails);
+      this.routeFormatter = new RouteFormatter(this.data.routeInfo, this.data.routeDetails, this.data.stations);
       console.log('✅ 全データロード完了');
     } catch (error) {
       console.error('❌ データロード失敗:', error);
@@ -285,14 +286,16 @@ class ReverseTravel {
       return;
     }
 
-    // プラットフォーム単位のstop_idではなく、駅名単位で候補を出す
-    const stationNames = Object.keys(this.data.stationsByName || {});
-    const filtered = stationNames
-      .filter(name => name.toLowerCase().includes(input.toLowerCase()))
+    // プラットフォーム単位のstop_idではなく、駅ID単位で候補を出す。
+    // 検索・表示は display_name で行うが、選択後に内部で使う識別子は
+    // 駅名文字列ではなく安定した駅ID（同名衝突の心配がない）にする。
+    const entries = Object.entries(this.data.stations || {});
+    const filtered = entries
+      .filter(([, station]) => station.display_name.toLowerCase().includes(input.toLowerCase()))
       .slice(0, 10);
 
     const html = filtered
-      .map(name => `<div class="suggestion-item" data-station-name="${name}">${name}</div>`)
+      .map(([stationId, station]) => `<div class="suggestion-item" data-station-id="${stationId}" data-station-name="${station.display_name}">${station.display_name}</div>`)
       .join('');
 
     this.elements.departureSuggestions.innerHTML = html;
@@ -300,9 +303,10 @@ class ReverseTravel {
     // クリックリスナー
     this.elements.departureSuggestions.querySelectorAll('.suggestion-item').forEach(item => {
       item.addEventListener('click', (e) => {
+        const stationId = e.target.getAttribute('data-station-id');
         const stationName = e.target.getAttribute('data-station-name');
         this.elements.departureInput.value = stationName;
-        this.elements.departureInput.dataset.stationName = stationName;
+        this.elements.departureInput.dataset.stationId = stationId;
         this.elements.departureSuggestions.innerHTML = '';
       });
     });
@@ -314,24 +318,24 @@ class ReverseTravel {
       return;
     }
 
-    const stationName = this.elements.departureInput.dataset.stationName;
+    const stationId = this.elements.departureInput.dataset.stationId;
     const budget = parseInt(this.elements.budgetInput.value, 10);
 
-    if (!stationName || !budget) {
+    if (!stationId || !budget) {
       alert('出発駅と予算を選択してください');
       return;
     }
 
-    // キャッシュチェック
-    const cacheKey = `route_${stationName}_${budget}`;
+    // キャッシュチェック（メモリ上のMapのみ。ページを離れると消える軽量キャッシュで足りる）
+    const cacheKey = `route_${stationId}_${budget}`;
     if (this.cache.has(cacheKey)) {
-      this.displayResults(this.cache.get(cacheKey), stationName);
+      this.displayResults(this.cache.get(cacheKey), stationId);
       return;
     }
 
     try {
       // 到達可能な駅を計算
-      const reachableStations = await this.fareCalc.calculateReachable(stationName, budget);
+      const reachableStations = await this.fareCalc.calculateReachable(stationId, budget);
       console.log('到達可能駅:', reachableStations);
 
       // 周辺スポット検索
@@ -341,22 +345,16 @@ class ReverseTravel {
       // キャッシュ保存
       this.cache.set(cacheKey, spots);
 
-      // localStorageにも保存
-      try {
-        localStorage.setItem(cacheKey, JSON.stringify(spots));
-      } catch (e) {
-        console.warn('localStorage保存失敗:', e);
-      }
-
-      this.displayResults(spots, stationName);
+      this.displayResults(spots, stationId);
     } catch (error) {
       console.error('検索失敗:', error);
       alert('検索中にエラーが発生しました');
     }
   }
 
-  displayResults(spots, departureStationName) {
-    this.currentDepartureStationName = departureStationName;
+  displayResults(spots, departureStationId) {
+    this.currentDepartureStationId = departureStationId;
+    this.currentDepartureStationName = this.data.stations?.[departureStationId]?.display_name || departureStationId;
     this.currentSpots = spots;
     this.currentSortOrder = 'recommended';
     this.elements.sortSelect.value = 'recommended';
@@ -367,7 +365,7 @@ class ReverseTravel {
     this.elements.appLayout.setAttribute('data-view', 'results');
     this.elements.appLayout.classList.add('has-results');
 
-    const departureStation = this.data.stationsByName?.[departureStationName];
+    const departureStation = this.data.stations?.[departureStationId];
     this.mapView.render(departureStation, spots);
 
     this.renderResultsList();
@@ -512,8 +510,8 @@ class ReverseTravel {
   }
 
   showSpotDetail(spot) {
-    const routeInfoHtml = this.routeFormatter && this.currentDepartureStationName
-      ? this.routeFormatter.format(this.currentDepartureStationName, spot)
+    const routeInfoHtml = this.routeFormatter && this.currentDepartureStationId
+      ? this.routeFormatter.format(this.currentDepartureStationId, spot)
       : '';
 
     const html = `

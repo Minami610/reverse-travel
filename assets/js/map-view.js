@@ -54,7 +54,7 @@ export class MapView {
   }
 
   /**
-   * @param {{stop_name: string, stop_lat: number, stop_lon: number}} departureStation
+   * @param {{display_name: string, stop_lat: number, stop_lon: number}} departureStation
    * @param {Array} spots - latitude/longitude を持つスポット配列
    */
   render(departureStation, spots) {
@@ -71,13 +71,13 @@ export class MapView {
         zIndexOffset: 2000,
       })
         .addTo(this.markersLayer)
-        .bindTooltip(departureStation.stop_name, {
+        .bindTooltip(departureStation.display_name, {
           permanent: true,
           direction: 'top',
           offset: [0, -16],
           className: 'map-departure-tooltip',
         })
-        .bindPopup(`${departureStation.stop_name}（出発駅）`);
+        .bindPopup(`${departureStation.display_name}（出発駅）`);
       bounds.push([departureStation.stop_lat, departureStation.stop_lon]);
     }
 

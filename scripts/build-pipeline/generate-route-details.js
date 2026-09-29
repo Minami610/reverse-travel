@@ -2,7 +2,7 @@
  * generate-route-details.js - 経路（使用路線・所要時間）情報の生成
  *
  * fare-lookup-tables.json の od_fares（停留所単位のOD運賃表）に登場する
- * 「駅名→駅名」の組み合わせについて、trips.txt + stop_times.txt から
+ * 「駅ID→駅ID」の組み合わせについて、trips.txt + stop_times.txt から
  * 実際にその区間を直通する便があるかを検証し、使用路線と所要時間を確定する。
  *
  * 【方針】
@@ -29,12 +29,24 @@
  * FALLBACK_INTERVAL_FOR_SINGLE_TRIP_MIN を運行間隔とみなす（＝実質的に
  * 「他に選択肢があればまず選ばれない」程度の大きなペナルティを与える）。
  *
+ * 【事業者別に引けるようにする理由（2026-09-29）】
+ * 以前は駅名ペアごとに「頻度下限＋最短」で1つだけ経路を選んでいたため、
+ * 運賃を決めた事業者（最安運賃側）と表示される経路の事業者（最短時間側）が
+ * 食い違い、存在しない運賃×経路の組み合わせを表示することがあった
+ * （香川の高松築港で実測6件：¥250はバスの運賃なのにことでん線の経路を表示）。
+ * fare-calculator.jsが運賃を決めた時点でどの事業者のstop_idを使ったかが
+ * 確定しているため、route-details側もその事業者に限定して経路を引けるように、
+ * 駅IDペアごとに「関係する事業者ごと」に個別最適化した経路を保持する。
+ *
  * 出力：
- * - route-details.json : {出発駅名: {到着駅名: RouteEntry}}
+ * - route-details.json : {出発駅ID: {到着駅ID: {事業者ID: RouteEntry}}}
  *   RouteEntry は配列で、長さでdirect/transferを判別する（キー名の繰り返しを避けて
  *   ファイルサイズを抑えるため）：
  *     - 直行:   [route_id, duration_min, expected_wait_min]                                        （長さ3）
  *     - 乗換1回: [via, route_id_1, duration_min_1, wait_min_1, route_id_2, duration_min_2, wait_min_2] （長さ7）
+ *   乗換1回はfare_rulesがゾーン制の通し運賃であることが前提のため、同一事業者内の
+ *   隠れた乗換のみを対象とする（他事業者を経由する乗換はfare-calculator.js側の
+ *   reachBy='transfer'として別建てで扱う）。
  */
 
 import fs from 'fs';
@@ -77,11 +89,19 @@ export async function generateRouteDetails() {
   const fareLookup = JSON.parse(
     fs.readFileSync(path.join(derivedDir, 'fare-lookup-tables.json'), 'utf-8')
   );
-  const stopIdToName = new Map(stopsMeta.map((s) => [s.stop_id, s.stop_name]));
+  const routeInfo = JSON.parse(
+    fs.readFileSync(path.join(derivedDir, 'route-info.json'), 'utf-8')
+  );
+  // 駅名ではなく安定した駅ID（parse-and-transform.jsのbuildStationClusters()が
+  // 割り当てたもの）で引けるようにする。空文字列の駅名（出入口等）は
+  // station_idを持たないため経路情報の対象外になる。
+  const stopIdToStationId = new Map(stopsMeta.map((s) => [s.stop_id, s.station_id]).filter(([, id]) => id));
+  const stopIdToOperator = new Map(stopsMeta.map((s) => [s.stop_id, s.operator_id]));
+  const routeIdToOperator = new Map(Object.entries(routeInfo).map(([id, r]) => [id, r.operator_id]));
 
   // 1. 「停留所→その停留所を通る路線」相当の情報を、tripごとのstop_times順序を
-  //    走査することで「駅名→駅名の直行ペア（路線別・所要時間サンプル付き）」として構築する
-  //    Map<originName, Map<destName, Map<routeId, minutes[]>>>
+  //    走査することで「駅ID→駅IDの直行ペア（路線別・所要時間サンプル付き）」として構築する
+  //    Map<originStationId, Map<destStationId, Map<routeId, minutes[]>>>
   const stationDirect = new Map();
   let totalTrips = 0;
 
@@ -116,20 +136,20 @@ export async function generateRouteDetails() {
       // 同一trip内で「先に通る停留所→後に通る停留所」の全組み合わせが
       // 「この順序で通る＝直通する」ペアの正解データになる
       for (let i = 0; i < stops.length; i++) {
-        const nameI = stopIdToName.get(stops[i].stop_id);
-        if (!nameI) continue;
+        const stationI = stopIdToStationId.get(stops[i].stop_id);
+        if (!stationI) continue;
         for (let j = i + 1; j < stops.length; j++) {
-          const nameJ = stopIdToName.get(stops[j].stop_id);
-          if (!nameJ || nameJ === nameI) continue;
+          const stationJ = stopIdToStationId.get(stops[j].stop_id);
+          if (!stationJ || stationJ === stationI) continue;
 
           const departureMin = timeToMinutes(stops[i].departure_time);
           const duration = timeToMinutes(stops[j].arrival_time) - departureMin;
           if (duration < 0) continue; // 異常データガード
 
-          if (!stationDirect.has(nameI)) stationDirect.set(nameI, new Map());
-          const destMap = stationDirect.get(nameI);
-          if (!destMap.has(nameJ)) destMap.set(nameJ, new Map());
-          const routeMap = destMap.get(nameJ);
+          if (!stationDirect.has(stationI)) stationDirect.set(stationI, new Map());
+          const destMap = stationDirect.get(stationI);
+          if (!destMap.has(stationJ)) destMap.set(stationJ, new Map());
+          const routeMap = destMap.get(stationJ);
           if (!routeMap.has(routeId)) routeMap.set(routeId, []);
           routeMap.get(routeId).push({ duration, departureMin });
         }
@@ -157,12 +177,14 @@ export async function generateRouteDetails() {
   // 「他に選択肢があればまず選ばれない」程度のペナルティを与える
   const FALLBACK_INTERVAL_FOR_SINGLE_TRIP_MIN = 720; // 12時間 → 期待待ち時間360分
 
-  function resolveDirect(originName, destName) {
-    const routeMap = stationDirect.get(originName)?.get(destName);
+  /** 指定した事業者の路線に限定して直行経路を解決する */
+  function resolveDirectForOperator(originId, destId, operatorId) {
+    const routeMap = stationDirect.get(originId)?.get(destId);
     if (!routeMap || routeMap.size === 0) return null;
 
     const candidates = [];
     for (const [routeId, entries] of routeMap.entries()) {
+      if (routeIdToOperator.get(routeId) !== operatorId) continue;
       const durations = entries.map((e) => e.duration);
       const departureMins = entries.map((e) => e.departureMin);
       const tripCount = entries.length;
@@ -176,6 +198,7 @@ export async function generateRouteDetails() {
         expected_wait_min: Math.round(avgIntervalMin / 2),
       });
     }
+    if (candidates.length === 0) return null;
 
     // 便数が一定以上ある候補があればその中から最短を選ぶ。
     // なければ（そもそも便数の少ない候補しかない区間）全候補中の最短にフォールバックする。
@@ -195,15 +218,18 @@ export async function generateRouteDetails() {
     return best;
   }
 
-  // 2. od_fares に登場する「駅名→駅名」ペアについて経路を確定する
-  const odStationPairs = new Set();
+  // 2. od_fares に登場する「起点stop_id→終点stop_id」ごとに、起点stop_idの事業者を
+  //    そのまま経路解決対象の事業者とする（運賃を決めた事業者と表示経路の事業者を
+  //    最初から一致させる。fare-calculator.js側のviaOperatorと同じ考え方）。
+  const odTriples = new Set(); // `${originStationId}\t${destStationId}\t${operatorId}`
   for (const [originStopId, dests] of Object.entries(fareLookup.od_fares)) {
-    const originName = stopIdToName.get(originStopId);
-    if (!originName) continue;
+    const originStationId = stopIdToStationId.get(originStopId);
+    const operatorId = stopIdToOperator.get(originStopId);
+    if (!originStationId || !operatorId) continue;
     for (const destStopId of Object.keys(dests)) {
-      const destName = stopIdToName.get(destStopId);
-      if (!destName || destName === originName) continue;
-      odStationPairs.add(`${originName}\t${destName}`);
+      const destStationId = stopIdToStationId.get(destStopId);
+      if (!destStationId || destStationId === originStationId) continue;
+      odTriples.add(`${originStationId}\t${destStationId}\t${operatorId}`);
     }
   }
 
@@ -213,39 +239,41 @@ export async function generateRouteDetails() {
   let unresolvedCount = 0;
   const unresolvedSamples = [];
 
-  for (const pairKey of odStationPairs) {
-    const [originName, destName] = pairKey.split('\t');
+  for (const tripleKey of odTriples) {
+    const [originId, destId, operatorId] = tripleKey.split('\t');
 
-    const direct = resolveDirect(originName, destName);
+    const direct = resolveDirectForOperator(originId, destId, operatorId);
     if (direct) {
-      if (!routeDetails[originName]) routeDetails[originName] = {};
-      routeDetails[originName][destName] = [direct.route_id, direct.duration_min, direct.expected_wait_min];
+      if (!routeDetails[originId]) routeDetails[originId] = {};
+      if (!routeDetails[originId][destId]) routeDetails[originId][destId] = {};
+      routeDetails[originId][destId][operatorId] = [direct.route_id, direct.duration_min, direct.expected_wait_min];
       directCount += 1;
       continue;
     }
 
-    // 直行不可 → 1回の乗換を試行。
-    // originから直行できる駅を経由候補とし、そこからdestへ直行できるものの中で
-    // 合計所要時間が最短のものを採用する。
-    const originDests = stationDirect.get(originName);
+    // 直行不可 → 同一事業者内での1回の乗換を試行。
+    // fare_rulesのゾーン制通し運賃は同一事業者の網内で完結する前提のため、
+    // 乗換候補（ハブ）も同じ事業者の直行区間から探す。
+    const originDests = stationDirect.get(originId);
     let bestTransfer = null;
     if (originDests) {
-      for (const hubName of originDests.keys()) {
-        if (hubName === destName) continue;
-        const leg2 = resolveDirect(hubName, destName);
-        if (!leg2) continue;
-        const leg1 = resolveDirect(originName, hubName);
+      for (const hubId of originDests.keys()) {
+        if (hubId === destId) continue;
+        const leg1 = resolveDirectForOperator(originId, hubId, operatorId);
         if (!leg1) continue;
+        const leg2 = resolveDirectForOperator(hubId, destId, operatorId);
+        if (!leg2) continue;
         const total = leg1.duration_min + leg2.duration_min;
         if (!bestTransfer || total < bestTransfer.total) {
-          bestTransfer = { via: hubName, leg1, leg2, total };
+          bestTransfer = { via: hubId, leg1, leg2, total };
         }
       }
     }
 
     if (bestTransfer) {
-      if (!routeDetails[originName]) routeDetails[originName] = {};
-      routeDetails[originName][destName] = [
+      if (!routeDetails[originId]) routeDetails[originId] = {};
+      if (!routeDetails[originId][destId]) routeDetails[originId][destId] = {};
+      routeDetails[originId][destId][operatorId] = [
         bestTransfer.via,
         bestTransfer.leg1.route_id,
         bestTransfer.leg1.duration_min,
@@ -257,11 +285,11 @@ export async function generateRouteDetails() {
       transferCount += 1;
     } else {
       unresolvedCount += 1;
-      if (unresolvedSamples.length < 20) unresolvedSamples.push(pairKey.replace('\t', ' → '));
+      if (unresolvedSamples.length < 20) unresolvedSamples.push(tripleKey.replace(/\t/g, ' → '));
     }
   }
 
-  console.log(`\n📊 経路確定の内訳（駅名ペア単位、全${odStationPairs.size}件）`);
+  console.log(`\n📊 経路確定の内訳（駅ID×事業者ペア単位、全${odTriples.size}件）`);
   console.log(`  - 直行: ${directCount}`);
   console.log(`  - 乗換1回で確定: ${transferCount}`);
   console.log(`  - 確定できず: ${unresolvedCount}`);
@@ -274,11 +302,11 @@ export async function generateRouteDetails() {
 
   // 0件のまま成功扱いにしない（CLAUDE.md「各段階で件数をログし、0件なら失敗させる」）。
   // 直行・乗換のいずれも0件は、trips.txt/stop_times.txtの取り違えや名前空間化の
-  // ミスマッチ等で駅名ペアが一切解決できていない異常事態であり、静かに空の
+  // ミスマッチ等で駅ペアが一切解決できていない異常事態であり、静かに空の
   // route-details.jsonを書き出すと経路表示が全滅した状態のままビルドが進んでしまう。
-  if (odStationPairs.size > 0 && directCount + transferCount === 0) {
+  if (odTriples.size > 0 && directCount + transferCount === 0) {
     throw new Error(
-      `経路情報が1件も確定できませんでした（対象${odStationPairs.size}駅名ペア中、直行0件・乗換0件）。` +
+      `経路情報が1件も確定できませんでした（対象${odTriples.size}駅ID×事業者ペア中、直行0件・乗換0件）。` +
       `trips.txt/stop_times.txtの読み込みやstop_id/route_idの名前空間化に不整合がある可能性があります。`
     );
   }
@@ -288,7 +316,7 @@ export async function generateRouteDetails() {
   const fileSize = fs.statSync(path.join(derivedDir, 'route-details.json')).size;
   console.log(`\n✅ route-details.json (${(fileSize / 1024).toFixed(1)} KB, ${directCount + transferCount}件の経路情報)`);
 
-  return { directCount, transferCount, unresolvedCount, total: odStationPairs.size };
+  return { directCount, transferCount, unresolvedCount, total: odTriples.size };
 }
 
 // 実行

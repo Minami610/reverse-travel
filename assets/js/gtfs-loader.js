@@ -42,8 +42,8 @@ export class GTFSLoader {
     this.fareData = null;
     this.stopsMetadata = null;
     this.routeInfo = null;
-    this.routeDetails = null; // 出発駅名 → {到着駅名: RouteEntry}（経路・所要時間、詳細はgenerate-route-details.js）
-    this.stationsByName = null; // 駅名 → {stop_name, stop_lat, stop_lon, stops: [{stop_id, operator_id}]}
+    this.routeDetails = null; // 出発駅ID → {到着駅ID: {事業者ID: RouteEntry}}（経路・所要時間、詳細はgenerate-route-details.js）
+    this.stations = null; // 駅ID → {display_name, stop_lat, stop_lon, stops: [{stop_id, operator_id, mode}]}
     this.spots = null; // QID → スポット詳細の辞書
     this.spotsByStation = null; // stop_id → [{qid, distance}, ...] の参照配列
   }
@@ -58,7 +58,7 @@ export class GTFSLoader {
         this.stopsMetadata = window.EMBEDDED_STOPS_METADATA;
         this.routeInfo = window.EMBEDDED_ROUTE_INFO;
         this.routeDetails = window.EMBEDDED_ROUTE_DETAILS;
-        this.stationsByName = window.EMBEDDED_STATIONS_BY_NAME;
+        this.stations = window.EMBEDDED_STATIONS;
         // EMBEDDED_SPOTS_BY_STATIONは{spotsIndex, spots, stations}のインデックス化済み形式
         // （県ごとに1つ）。将来、隣接県を同時ロードする際は配列で複数地域分渡す。
         const merged = mergeIndexedSpotRegions([window.EMBEDDED_SPOTS_BY_STATION]);
@@ -68,11 +68,11 @@ export class GTFSLoader {
         // 開発時：埋め込みデータがないため data/derived/*.json を fetch で読み込む
         console.log('ℹ️ 埋め込みデータなし。data/derived/*.json を fetch で読み込みます（開発モード）');
         const derivedBase = 'data/derived/';
-        const [fareData, stopsMetadata, stationsByName, routeInfo, routeDetails, spotsData, rankingConfig] =
+        const [fareData, stopsMetadata, stations, routeInfo, routeDetails, spotsData, rankingConfig] =
           await Promise.all([
             this.fetchJson(`${derivedBase}fare-lookup-tables.json`),
             this.fetchJson(`${derivedBase}stops-metadata.json`),
-            this.fetchJson(`${derivedBase}stations-by-name.json`),
+            this.fetchJson(`${derivedBase}stations.json`),
             this.fetchJson(`${derivedBase}route-info.json`),
             this.fetchJson(`${derivedBase}route-details.json`),
             this.fetchJson(`${derivedBase}spots-by-station.json`),
@@ -83,7 +83,7 @@ export class GTFSLoader {
         this.stopsMetadata = stopsMetadata;
         this.routeInfo = routeInfo;
         this.routeDetails = routeDetails;
-        this.stationsByName = stationsByName;
+        this.stations = stations;
         // spots-by-station.jsonは{spotsIndex, spots, stations}のインデックス化済み形式
         const merged = mergeIndexedSpotRegions([spotsData]);
         this.spots = merged.spots;
@@ -95,7 +95,7 @@ export class GTFSLoader {
 
       console.log('✅ GTFS派生データをロード');
       console.log(`  - ${this.stopsMetadata.length} 駅のメタデータ`);
-      console.log(`  - ${Object.keys(this.stationsByName).length} 駅名（集約後）`);
+      console.log(`  - ${Object.keys(this.stations).length} 駅（クラスタリング後）`);
       console.log(`  - ${Object.keys(this.routeInfo).length} 路線の情報`);
       console.log(`  - ${Object.keys(this.spots).length} 件のスポット辞書`);
       console.log(`  - ${Object.keys(this.spotsByStation).length} 駅のスポット参照`);
@@ -105,7 +105,7 @@ export class GTFSLoader {
         stopsMetadata: this.stopsMetadata,
         routeInfo: this.routeInfo,
         routeDetails: this.routeDetails,
-        stationsByName: this.stationsByName,
+        stations: this.stations,
         spots: this.spots,
         spotsByStation: this.spotsByStation,
       };
