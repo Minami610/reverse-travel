@@ -69,6 +69,9 @@ const protectedClassQids = (spotConfig.protected_classes?.qids || [])
   .join(' ');
 const individualOverrideQids = (spotConfig.individual_overrides?.qids || []).map((entry) => entry.qid);
 const individualOverrideValues = individualOverrideQids.map((qid) => `wd:${qid}`).join(', ');
+const individualExclusionQidSet = new Set(
+  (spotConfig.individual_exclusions?.qids || []).map((entry) => entry.qid)
+);
 const guardTestApprovedConflicts = spotConfig.guard_test_approved_conflicts?.entries || [];
 const noiseFilterQidSet = new Set(
   (spotConfig.suspicious_exclusion_noise_filter?.qids || []).map((entry) => entry.qid)
@@ -933,7 +936,16 @@ export async function generateSpotsForRegion(stops, options = {}) {
     `   bbox: lon[${bbox.west.toFixed(4)}, ${bbox.east.toFixed(4)}] lat[${bbox.south.toFixed(4)}, ${bbox.north.toFixed(4)}]`
   );
 
-  const { items: regionItems, failLog } = await fetchRegionItemsAdaptive(bbox, { label });
+  const { items: rawRegionItems, failLog } = await fetchRegionItemsAdaptive(bbox, { label });
+  // individual_exclusions（individual_overridesの逆、QID単位の精密除外）を適用する。
+  // SPARQL側ではなくJS側でのポストフィルタにする理由：対象がごく少数（1件単位）で、
+  // クエリ構造を変えずに安全・低リスクに実装できるため（島の一律クラス除外は
+  // 見附島・雨晴の女岩等の正当なスポットを巻き込むため採用しない方針）。
+  const regionItems = rawRegionItems.filter((item) => !individualExclusionQidSet.has(item.id));
+  const individualExclusionCount = rawRegionItems.length - regionItems.length;
+  if (individualExclusionCount > 0) {
+    console.log(`   → 個別除外リストにより${individualExclusionCount}件を除外`);
+  }
   console.log(`   → 地域全体のユニークWikidata項目数: ${regionItems.length}件`);
   if (failLog.length > 0) {
     console.warn(`   ⚠️  取得を諦めた範囲: ${failLog.length}件（要確認）`);

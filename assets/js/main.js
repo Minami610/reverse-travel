@@ -25,6 +25,7 @@ class ReverseTravel {
     this.currentDepartureStationId = null;
     this.currentDepartureStationName = null;
     this.currentSpots = []; // 検索結果（おすすめ順、地図のピンもこの集合のまま）
+    this.currentReachableCount = 0; // 0件時の案内文の出し分けに使う（到達駅0件/スポット0件を区別）
     this.currentSortOrder = 'recommended';
 
     this.initUI();
@@ -329,7 +330,8 @@ class ReverseTravel {
     // キャッシュチェック（メモリ上のMapのみ。ページを離れると消える軽量キャッシュで足りる）
     const cacheKey = `route_${stationId}_${budget}`;
     if (this.cache.has(cacheKey)) {
-      this.displayResults(this.cache.get(cacheKey), stationId);
+      const cached = this.cache.get(cacheKey);
+      this.displayResults(cached.spots, stationId, cached.reachableCount);
       return;
     }
 
@@ -342,20 +344,21 @@ class ReverseTravel {
       const spots = await this.spotFinder.findSpots(reachableStations);
       console.log('発見スポット:', spots);
 
-      // キャッシュ保存
-      this.cache.set(cacheKey, spots);
+      // キャッシュ保存（0件時の案内文の出し分けに到達駅数も使うため、spotsと一緒に保存する）
+      this.cache.set(cacheKey, { spots, reachableCount: reachableStations.length });
 
-      this.displayResults(spots, stationId);
+      this.displayResults(spots, stationId, reachableStations.length);
     } catch (error) {
       console.error('検索失敗:', error);
       alert('検索中にエラーが発生しました');
     }
   }
 
-  displayResults(spots, departureStationId) {
+  displayResults(spots, departureStationId, reachableCount) {
     this.currentDepartureStationId = departureStationId;
     this.currentDepartureStationName = this.data.stations?.[departureStationId]?.display_name || departureStationId;
     this.currentSpots = spots;
+    this.currentReachableCount = reachableCount;
     this.currentSortOrder = 'recommended';
     this.elements.sortSelect.value = 'recommended';
 
@@ -394,6 +397,29 @@ class ReverseTravel {
   }
 
   /**
+   * 検索結果0件のときの案内文を組み立てる。
+   *
+   * 【背景】2026-10-01のことでんバス運賃改定で、ＪＲ栗林駅から往復¥400で検索すると
+   * 実際に0件になるケースが発生した（最低運賃が¥200→¥210になり、往復¥400を
+   * 超えたため）。これは値上げの正しい結果であり、予算の上限・刻み幅（CLAUDE.md
+   * 「予算の上限が低いことは仕様」参照）を変える理由にはならない。一方で
+   * 「該当するスポットが見つかりません」とだけ出て終わる画面は不親切なため、
+   * 原因を「予算内に到達できる駅がない」場合と「到達できる駅はあるが近くに
+   * スポットがない」場合とで出し分ける。
+   */
+  buildNoResultsMessage() {
+    if (this.currentReachableCount === 0) {
+      const cheapestFare = this.fareCalc.findCheapestOneWayFare(this.currentDepartureStationId);
+      if (cheapestFare !== null) {
+        const suggestedBudget = Math.ceil((cheapestFare * 2) / 100) * 100;
+        return `<p class="no-results">この予算では行ける場所がありません。${this.currentDepartureStationName}からは往復¥${suggestedBudget}から行けます。</p>`;
+      }
+      return '<p class="no-results">この駅の運賃データが見つかりませんでした</p>';
+    }
+    return '<p class="no-results">到達できる駅は見つかりましたが、近くに観光スポットが見つかりませんでした</p>';
+  }
+
+  /**
    * 一覧部分のみを再描画する。並び替え時は表示対象スポットの集合が
    * 変わらないため地図は呼び出し元で再描画しない。
    * カードのクリック／ホバーは initUI で一覧全体に委譲済みのため、
@@ -401,7 +427,7 @@ class ReverseTravel {
    */
   renderResultsList() {
     if (this.currentSpots.length === 0) {
-      this.elements.resultsList.innerHTML = '<p class="no-results">該当するスポットが見つかりません</p>';
+      this.elements.resultsList.innerHTML = this.buildNoResultsMessage();
       return;
     }
 

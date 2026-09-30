@@ -213,4 +213,27 @@ export class FareCalculator {
       throw error;
     }
   }
+
+  /**
+   * 出発駅から到達可能な全駅のうち、片道運賃が最も安いものを返す（予算に関係なく）。
+   * 予算内に1駅も到達できなかったとき、「ここからは往復¥X00から行けます」という
+   * 案内に使う。乗り継ぎは必ず直行区間より高くなるため（乗り継ぎ運賃＝区間1＋区間2、
+   * 区間2>0）、直行のOD運賃表の最小値を見るだけで全体の最安値になる。
+   * @param {string} departureStationId
+   * @returns {number|null} 片道運賃の最小値。運賃データが1件もなければnull
+   */
+  findCheapestOneWayFare(departureStationId) {
+    const departureStation = this.stations?.[departureStationId];
+    if (!departureStation) return null;
+
+    let min = null;
+    for (const { stop_id: originStopId } of departureStation.stops) {
+      const destinations = this.fareData.od_fares?.[originStopId];
+      if (!destinations) continue;
+      for (const fare of Object.values(destinations)) {
+        if (min === null || fare < min) min = fare;
+      }
+    }
+    return min;
+  }
 }

@@ -366,8 +366,70 @@ async function checkResultCards(html) {
       : '❌ 構造またはスタイルが想定と異なるカードがあります'
   );
 
+  // 到達駅0件（=検索結果0件）のときの案内文を検証する。
+  // 【背景】2026-10-01のことでんバス運賃改定で、ＪＲ栗林駅から往復¥400の検索が
+  // 実際に0件になった（最低片道運賃が¥200→¥210になり往復¥400を超えたため）。
+  // これは値上げの正しい結果で予算の上限・刻み幅は変えないが、「該当するスポットが
+  // 見つかりません」とだけ出て終わる画面は不親切なため、「ここからは往復¥Xから
+  // 行けます」という案内を出すようにした（main.jsのbuildNoResultsMessage()）。
+  // この組み合わせで実際に案内文が出ることを常設検証する。
+  const noResultsOk = await checkNoResultsMessage(doc, window);
+
   window.close();
-  return ok;
+  return ok && noResultsOk;
+}
+
+/**
+ * ＪＲ栗林駅×往復¥400（2026-10-01のことでんバス運賃改定後は実際に到達駅0件になる
+ * 組み合わせ）で検索し、「ここからは往復¥Xから行けます」の案内文が出ることを確認する。
+ * 対象駅が見つからない、または（データ側の変化で）たまたま0件でなくなっていた場合は
+ * このチェック自体をスキップする（0件になる特定の組み合わせに依存しすぎないため）。
+ */
+async function checkNoResultsMessage(doc, window) {
+  const kuribayashiId = Object.entries(window.EMBEDDED_STATIONS || {}).find(
+    ([, s]) => s.display_name === 'ＪＲ栗林駅'
+  )?.[0];
+  if (!kuribayashiId) {
+    console.log('ℹ️  0件案内文チェック: 検証用の出発駅「ＪＲ栗林駅」が見つからないためスキップします');
+    return true;
+  }
+
+  // 直前の検索（高松築港）の結果がすでに#results-listに残っているため、
+  // 「children.length > 0」だけを条件にすると新しい検索の完了を待たずに
+  // 即座に真になってしまう（実際にこれでレースコンディションが起きた：
+  // 新しい検索が終わる前に古いカードのままチェックしてしまっていた）。
+  // 直前の内容を記録し、内容が変化したことをもって新しい検索の完了とみなす。
+  const beforeHtml = doc.getElementById('results-list').innerHTML;
+
+  const departureInput = doc.getElementById('departure-input');
+  departureInput.value = 'ＪＲ栗林駅';
+  departureInput.dataset.stationId = kuribayashiId;
+  doc.getElementById('budget-input').value = '400';
+  doc.getElementById('search-form').dispatchEvent(
+    new window.Event('submit', { bubbles: true, cancelable: true })
+  );
+
+  const rendered = await waitFor(() => doc.getElementById('results-list').innerHTML !== beforeHtml, 8000);
+  if (!rendered) {
+    console.log('❌ 0件案内文チェック: 検索後も #results-list の内容が更新されませんでした（タイムアウト）');
+    return false;
+  }
+
+  const resultsList = doc.getElementById('results-list');
+  const hasCards = resultsList.querySelectorAll('.spot-card').length > 0;
+  if (hasCards) {
+    console.log('ℹ️  0件案内文チェック: ＪＲ栗林駅×往復¥400が0件でなくなっている（データの変化）ためスキップします');
+    return true;
+  }
+
+  const noResultsText = resultsList.querySelector('.no-results')?.textContent || '';
+  const hasSuggestion = /往復¥\d+から行けます/.test(noResultsText);
+  if (!hasSuggestion) {
+    console.log(`❌ 0件案内文チェック: 「往復¥Xから行けます」の案内文が出ていません（実際の表示: "${noResultsText}"）`);
+    return false;
+  }
+  console.log(`✅ 0件案内文チェック: ${noResultsText}`);
+  return true;
 }
 
 async function main() {
