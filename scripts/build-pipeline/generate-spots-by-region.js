@@ -981,7 +981,9 @@ export async function generateSpotsForRegion(stops, options = {}) {
   }
 
   const normalizedOutput = buildIndexedSpotsOutput(spotsByStation);
-  return { normalizedOutput, spotsByStation, regionItems, failLog, spotDetailsCache };
+  // excludedItemsはビルド間差分レポート（build-prefecture.js）が「消えたQIDの除外原因クラス」を
+  // 表示するために使う。ログ専用に取得したものをそのまま返すだけで、追加のクエリは発生しない。
+  return { normalizedOutput, spotsByStation, regionItems, excludedItems, failLog, spotDetailsCache };
 }
 
 /**

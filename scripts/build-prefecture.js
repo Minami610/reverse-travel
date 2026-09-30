@@ -9,15 +9,20 @@
  * - 1県が失敗しても他の県の処理は続け、最後に失敗一覧を出す
  * - 件数0は成功として扱わない（各ステップの0件チェックは各モジュールに委譲しつつ、
  *   ここでも最終成果物の件数を横断チェックする）
+ * - 前回ビルドとのスポット差分レポート（追加/削除QIDと削除原因クラス）。削除が
+ *   前回件数の一定割合を超えたら--accept-diff指定がない限り失敗にする
+ *   （Wikidata側の分類変更で除外対象が静かに変わりうるため。CLAUDE.md参照）
  *
  * 使い方:
  *   node scripts/build-prefecture.js 37            # 香川県のみビルド
  *   node scripts/build-prefecture.js 37,16,17       # 複数県を順にビルド
  *   node scripts/build-prefecture.js 37 --force      # 完了マーカーを無視して作り直す
+ *   node scripts/build-prefecture.js 37 --force --accept-diff  # スポット削除率が閾値超でも続行
  *
  * 出力: data/derived/pref/{2桁コード}/
  *   fare-lookup-tables.json / stops-metadata.json / stations.json / route-info.json /
- *   route-details.json / spots-by-station.json / data-sources.json / .build-complete.json
+ *   route-details.json / spots-by-station.json / data-sources.json / spot-diff-report.json /
+ *   .build-complete.json
  */
 import fs from 'fs';
 import path from 'path';
@@ -31,6 +36,10 @@ import { generateSpotsForRegion } from './build-pipeline/generate-spots-by-regio
 import { loadOrBuildCatalogSnapshot } from './build-pipeline/catalog-snapshot.js';
 import { checkLicenseAllowed } from './build-pipeline/license-check.js';
 import { checkFeedHasFareData } from './build-pipeline/fare-feed-check.js';
+import { computeSpotDiff, logSpotDiff } from './build-pipeline/spot-diff-report.js';
+
+// 前回件数に対する削除率がこれを超えたら--accept-diffなしでは失敗にする
+const SPOT_REMOVAL_RATIO_THRESHOLD = 0.03;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, '..');
@@ -85,7 +94,7 @@ function filterOperators(operators) {
  * 1都道府県分をビルドする。失敗時は例外を投げる（呼び出し側=main()で捕捉し、
  * 他の県の処理は継続する）。
  */
-async function buildOnePrefecture(code, { force }) {
+async function buildOnePrefecture(code, { force, acceptDiff }) {
   const codeStr = prefCodeStr(code);
   const outputDir = prefOutputDir(code);
   const markerPath = completionMarkerPath(code);
@@ -156,11 +165,31 @@ async function buildOnePrefecture(code, { force }) {
 
   console.log('\n【ステップ3】観光スポット情報を生成（Wikidata bbox一括取得）');
   const stopsMeta = JSON.parse(fs.readFileSync(path.join(outputDir, 'stops-metadata.json'), 'utf-8'));
-  const { normalizedOutput } = await generateSpotsForRegion(stopsMeta, { label: prefName });
+  const { normalizedOutput, excludedItems } = await generateSpotsForRegion(stopsMeta, { label: prefName });
   if (normalizedOutput.spotsIndex.length === 0) {
     throw new Error(`${prefName}: スポット件数が0件です`);
   }
-  fs.writeFileSync(path.join(outputDir, 'spots-by-station.json'), JSON.stringify(normalizedOutput));
+
+  // 前回ビルドとの差分レポート（上書きする前に読む）。Wikidata側の分類変更だけで
+  // config・コードを変えなくても除外対象が変わりうるため、削除件数の異常を機械的に検出する。
+  const spotsPath = path.join(outputDir, 'spots-by-station.json');
+  const previousSpots = fs.existsSync(spotsPath) ? JSON.parse(fs.readFileSync(spotsPath, 'utf-8')) : null;
+  const spotDiff = computeSpotDiff(previousSpots, normalizedOutput, excludedItems);
+  logSpotDiff(spotDiff, prefName);
+  fs.writeFileSync(path.join(outputDir, 'spot-diff-report.json'), JSON.stringify(spotDiff, null, 2));
+
+  if (spotDiff.hasPrevious && spotDiff.removalRatio > SPOT_REMOVAL_RATIO_THRESHOLD && !acceptDiff) {
+    throw new Error(
+      `${prefName}: スポット削除率が閾値(${(SPOT_REMOVAL_RATIO_THRESHOLD * 100).toFixed(0)}%)を超えました` +
+      `（前回${spotDiff.previousCount}件中${spotDiff.removedCount}件、${(spotDiff.removalRatio * 100).toFixed(1)}%）。` +
+      `意図した変化（Wikidata側の分類変更等）と確認できたら --accept-diff を指定して再実行してください。`
+    );
+  }
+  if (spotDiff.hasPrevious && spotDiff.removalRatio > SPOT_REMOVAL_RATIO_THRESHOLD && acceptDiff) {
+    console.warn(`⚠️  削除率が閾値を超えていますが --accept-diff が指定されているため続行します`);
+  }
+
+  fs.writeFileSync(spotsPath, JSON.stringify(normalizedOutput));
   console.log(`✅ spots-by-station.json (${normalizedOutput.spotsIndex.length}件のユニークスポット)`);
 
   // 完了マーカー
@@ -179,6 +208,9 @@ async function buildOnePrefecture(code, { force }) {
       route_details_unresolved: routeStats.unresolvedCount,
       spots: normalizedOutput.spotsIndex.length,
     },
+    spot_diff: spotDiff.hasPrevious
+      ? { previous_count: spotDiff.previousCount, added: spotDiff.addedCount, removed: spotDiff.removedCount, removal_ratio: spotDiff.removalRatio }
+      : null,
   };
   fs.writeFileSync(markerPath, JSON.stringify(marker, null, 2));
 
@@ -190,16 +222,17 @@ async function buildOnePrefecture(code, { force }) {
 
 function parseArgs(argv) {
   const force = argv.includes('--force');
+  const acceptDiff = argv.includes('--accept-diff');
   const codesArg = argv.find((a) => !a.startsWith('--'));
   if (!codesArg) {
     throw new Error('都道府県コードを指定してください（例: node scripts/build-prefecture.js 37）');
   }
   const codes = codesArg.split(',').map((s) => s.trim()).filter(Boolean);
-  return { codes, force };
+  return { codes, force, acceptDiff };
 }
 
 async function main() {
-  const { codes, force } = parseArgs(process.argv.slice(2));
+  const { codes, force, acceptDiff } = parseArgs(process.argv.slice(2));
 
   const succeeded = [];
   const skipped = [];
@@ -207,7 +240,7 @@ async function main() {
 
   for (const code of codes) {
     try {
-      const result = await buildOnePrefecture(code, { force });
+      const result = await buildOnePrefecture(code, { force, acceptDiff });
       if (result.skipped) {
         skipped.push({ code: prefCodeStr(code), prefName: result.prefName });
       } else {
