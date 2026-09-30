@@ -12,6 +12,10 @@
  * - 前回ビルドとのスポット差分レポート（追加/削除QIDと削除原因クラス）。削除が
  *   前回件数の一定割合を超えたら--accept-diff指定がない限り失敗にする
  *   （Wikidata側の分類変更で除外対象が静かに変わりうるため。CLAUDE.md参照）
+ * - 前回ビルドとのGTFS構造差分レポート（駅・停留所・路線の追加/削除、名前付き）。
+ *   GTFSフィード自体の更新（ダイヤ改正等）が原因のことがあるため、こちらは
+ *   ゲートにはせず報告のみ。カタログスナップショットにはfeed_version等の
+ *   フィード版情報を記録し、いつのダイヤ改正のデータかを追跡できるようにする。
  *
  * 使い方:
  *   node scripts/build-prefecture.js 37            # 香川県のみビルド
@@ -22,21 +26,23 @@
  * 出力: data/derived/pref/{2桁コード}/
  *   fare-lookup-tables.json / stops-metadata.json / stations.json / route-info.json /
  *   route-details.json / spots-by-station.json / data-sources.json / spot-diff-report.json /
- *   .build-complete.json
+ *   gtfs-diff-report.json / .build-complete.json
  */
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { parse } from 'csv-parse/sync';
 
 import { fetchGTFS } from './build-pipeline/fetch-gtfs.js';
 import { parseAndTransform } from './build-pipeline/parse-and-transform.js';
 import { generateRouteDetails } from './build-pipeline/generate-route-details.js';
 import { generateDataSourcesManifest } from './build-pipeline/generate-data-sources-manifest.js';
 import { generateSpotsForRegion } from './build-pipeline/generate-spots-by-region.js';
-import { loadOrBuildCatalogSnapshot } from './build-pipeline/catalog-snapshot.js';
+import { loadOrBuildCatalogSnapshot, recordFetchedFeedVersions } from './build-pipeline/catalog-snapshot.js';
 import { checkLicenseAllowed } from './build-pipeline/license-check.js';
 import { checkFeedHasFareData } from './build-pipeline/fare-feed-check.js';
 import { computeSpotDiff, logSpotDiff } from './build-pipeline/spot-diff-report.js';
+import { computeGtfsDiff, logGtfsDiff } from './build-pipeline/gtfs-diff-report.js';
 
 // 前回件数に対する削除率がこれを超えたら--accept-diffなしでは失敗にする
 const SPOT_REMOVAL_RATIO_THRESHOLD = 0.03;
@@ -56,6 +62,22 @@ function prefOutputDir(code) {
 
 function completionMarkerPath(code) {
   return path.join(prefOutputDir(code), '.build-complete.json');
+}
+
+/** 取得済みGTFSのfeed_info.txtからバージョン情報を読む（なければnullを詰める） */
+function readFeedInfo(operatorId) {
+  const feedInfoPath = path.join(rawGtfsDir, operatorId, 'feed_info.txt');
+  if (!fs.existsSync(feedInfoPath)) {
+    return { operatorId, feedVersion: null, feedStartDate: null, feedEndDate: null };
+  }
+  const records = parse(fs.readFileSync(feedInfoPath, 'utf-8'), { bom: true, columns: true });
+  const row = records[0];
+  return {
+    operatorId,
+    feedVersion: row?.feed_version || null,
+    feedStartDate: row?.feed_start_date || null,
+    feedEndDate: row?.feed_end_date || null,
+  };
 }
 
 /**
@@ -133,6 +155,12 @@ async function buildOnePrefecture(code, { force, acceptDiff }) {
   console.log('【ステップ1】GTFSデータをダウンロード');
   await fetchGTFS({ operators: licenseFiltered, dataDir: rawGtfsDir, force });
 
+  // カタログスナップショットに、実際に取得したフィードのバージョン（ダイヤ改正の
+  // 識別情報）を記録する。「configもコードも変えていないのに結果が変わった」ときに
+  // GTFS側の更新が原因かどうかを再現・追跡できるようにするため。
+  const feedInfos = licenseFiltered.map((op) => readFeedInfo(op.id));
+  recordFetchedFeedVersions(code, feedInfos);
+
   // 3. 運賃データの有無で最終的な対象事業者を確定する（除外理由を記録）
   const { included: operators, excluded } = filterOperators(licenseFiltered);
   if (excluded.length > 0) {
@@ -151,11 +179,34 @@ async function buildOnePrefecture(code, { force, acceptDiff }) {
     coverage: { prefectures: [prefName], note: `都道府県コード${codeStr}（build-prefecture.js、段階1）` },
   });
 
+  // 前回ビルドのGTFS構造（駅・停留所・路線）を、上書きする前に読んでおく。
+  // GTFSフィード自体の更新（ダイヤ改正等）は到達駅数（回帰チェックの基準値）に
+  // 影響しうるが、スポットの削除率ゲートとは性質が異なり正当な更新を止めたく
+  // ないため、こちらは失敗にはせず報告のみとする。
+  function readGtfsSnapshot() {
+    const stationsPath = path.join(outputDir, 'stations.json');
+    const stopsMetaPath = path.join(outputDir, 'stops-metadata.json');
+    const routeInfoPath = path.join(outputDir, 'route-info.json');
+    if (!fs.existsSync(stationsPath) || !fs.existsSync(stopsMetaPath) || !fs.existsSync(routeInfoPath)) {
+      return null;
+    }
+    return {
+      stations: JSON.parse(fs.readFileSync(stationsPath, 'utf-8')),
+      stopsMetadata: JSON.parse(fs.readFileSync(stopsMetaPath, 'utf-8')),
+      routeInfo: JSON.parse(fs.readFileSync(routeInfoPath, 'utf-8')),
+    };
+  }
+  const previousGtfs = readGtfsSnapshot();
+
   console.log('\n【ステップ2】GTFSをパース・変換');
   const parseStats = await parseAndTransform({ operators, rawGtfsDir, outputDir });
   if (!parseStats.stationCount) {
     throw new Error(`${prefName}: 駅数が0件です`);
   }
+
+  const gtfsDiff = computeGtfsDiff(previousGtfs, readGtfsSnapshot());
+  logGtfsDiff(gtfsDiff, prefName);
+  fs.writeFileSync(path.join(outputDir, 'gtfs-diff-report.json'), JSON.stringify(gtfsDiff, null, 2));
 
   console.log('\n【ステップ2b】経路（路線・所要時間）情報を生成');
   const routeStats = await generateRouteDetails({ operators, rawGtfsDir, outputDir });
@@ -210,6 +261,13 @@ async function buildOnePrefecture(code, { force, acceptDiff }) {
     },
     spot_diff: spotDiff.hasPrevious
       ? { previous_count: spotDiff.previousCount, added: spotDiff.addedCount, removed: spotDiff.removedCount, removal_ratio: spotDiff.removalRatio }
+      : null,
+    gtfs_diff: gtfsDiff.hasPrevious
+      ? {
+          stations: { added: gtfsDiff.stations.added.length, removed: gtfsDiff.stations.removed.length },
+          stops: { added: gtfsDiff.stops.added.length, removed: gtfsDiff.stops.removed.length },
+          routes: { added: gtfsDiff.routes.added.length, removed: gtfsDiff.routes.removed.length },
+        }
       : null,
   };
   fs.writeFileSync(markerPath, JSON.stringify(marker, null, 2));

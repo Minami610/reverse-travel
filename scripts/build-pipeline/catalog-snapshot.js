@@ -85,3 +85,41 @@ export function loadOrBuildCatalogSnapshot(prefCode, { force = false } = {}) {
   );
   return entry;
 }
+
+/**
+ * GTFS取得後、実際にダウンロードしたフィードのバージョン情報
+ * （feed_info.txtのfeed_version/feed_start_date/feed_end_date）をカタログ
+ * スナップショットに記録する。
+ *
+ * 【背景】カタログスナップショット自体は「どのURLから取得するか」の取得日
+ * しか記録しておらず、フィードの中身がいつのダイヤ改正のものかは分からない。
+ * 実際に、ことでんバスが2026-10-01のダイヤ改正でfeed_versionを
+ * 「ことでんバス_20260401-20260930」→「ことでんバス_20261001-20270331」に
+ * 更新していたことが、この記録がないと追えなかった（駅362→364等の変化の
+ * 原因調査に手間がかかった）。再現性のため、取得のたびに記録を更新する。
+ *
+ * @param {number|string} prefCode
+ * @param {Array<{operatorId: string, feedVersion: string|null, feedStartDate: string|null, feedEndDate: string|null}>} feedInfos
+ */
+export function recordFetchedFeedVersions(prefCode, feedInfos) {
+  const key = String(prefCode);
+  const snapshot = loadSnapshotFile();
+  const entry = snapshot.prefectures[key];
+  if (!entry) {
+    console.warn(`⚠️  カタログスナップショットに都道府県コード${key}のエントリがないため、フィード版の記録をスキップします`);
+    return;
+  }
+
+  const fetchedAt = new Date().toISOString();
+  const byOperatorId = new Map(feedInfos.map((f) => [f.operatorId, f]));
+  for (const operator of entry.operators) {
+    const info = byOperatorId.get(operator.id);
+    if (!info) continue;
+    operator.feed_version = info.feedVersion;
+    operator.feed_start_date = info.feedStartDate;
+    operator.feed_end_date = info.feedEndDate;
+    operator.last_fetched_at = fetchedAt;
+  }
+  saveSnapshotFile(snapshot);
+  console.log(`✅ カタログスナップショット: 都道府県コード${key}のフィード版情報を記録（${feedInfos.length}件）`);
+}
