@@ -18,14 +18,15 @@ const __dirname = path.dirname(__filename);
 // パス定義
 const configPath = path.join(__dirname, '../../config/target-operators.json');
 const dataDir = path.join(__dirname, '../../data/raw-gtfs');
-const requiredGtfsFiles = [
-  'stops.txt',
-  'routes.txt',
-  'trips.txt',
-  'stop_times.txt',
-  'fare_rules.txt',
-  'fare_attributes.txt',
-];
+// 停留所・経路・運行情報はどんな交通フィードにも必須（欠けていればダウンロード・
+// 解凍そのものが失敗している証拠）。fare_rules.txt/fare_attributes.txtは必須に
+// 含めない：運賃データを持たないフィードが実在する（例：富山地方鉄道市内電車。
+// 2026-10-01、段階1(b)で実際に検証して判明）。これらはparse-and-transform.jsが
+// 欠如を許容して警告のみで続行し、fare-feed-check.jsが「運賃データなし」として
+// 後段で理由付きで除外する設計のため、ここで止める必要がない（むしろ1事業者の
+// 運賃データ欠如で県全体のダウンロードが失敗するのは過剰）。
+const requiredGtfsFiles = ['stops.txt', 'routes.txt', 'trips.txt', 'stop_times.txt'];
+const fareGtfsFiles = ['fare_rules.txt', 'fare_attributes.txt'];
 
 function validateExtractedFiles(operatorDir, operatorName) {
   const missingFiles = requiredGtfsFiles.filter(
@@ -37,12 +38,43 @@ function validateExtractedFiles(operatorDir, operatorName) {
       `${operatorName}: GTFS必須ファイルがありません: ${missingFiles.join(', ')}`
     );
   }
+
+  const missingFareFiles = fareGtfsFiles.filter(
+    (filename) => !fs.existsSync(path.join(operatorDir, filename))
+  );
+  if (missingFareFiles.length > 0) {
+    console.warn(
+      `   ⚠️  ${operatorName}: 運賃関連ファイルがありません（${missingFareFiles.join(', ')}）。` +
+      `運賃データなしのフィードとして後段（fare-feed-check.js）で除外判定されます`
+    );
+  }
+}
+
+/**
+ * GTFS仕様はファイル拡張子を.txtと定めているが、一部のフィードは.csvで配布している
+ * （実例：南砺市営バスのcalendar/calendar_dates/shapes/stop_times、2026-10-01、
+ * 段階1(b)で発見）。以降のパース処理（parse-and-transform.js等）は.txtを前提にしか
+ * 読んでいないため、.txtが存在せず.csvだけが存在するファイルをコピーして.txt版を
+ * 作る。特定の事業者・ファイル名をハードコードせず、解凍後のディレクトリを
+ * 汎用的に走査することで、同じ癖を持つ他のフィードにも自動対応する。
+ */
+function normalizeCsvToTxt(operatorDir, operatorName) {
+  const files = fs.readdirSync(operatorDir);
+  for (const file of files) {
+    if (!file.endsWith('.csv')) continue;
+    const base = file.slice(0, -4);
+    const txtPath = path.join(operatorDir, `${base}.txt`);
+    if (fs.existsSync(txtPath)) continue;
+    fs.copyFileSync(path.join(operatorDir, file), txtPath);
+    console.log(`   → ${operatorName}: ${file} に.txt版がないため ${base}.txt としてコピー（GTFS仕様外の.csv配布に対応）`);
+  }
 }
 
 function extractAndValidateZip(zipPath, operatorDir, operatorName) {
   console.log(`   → ZIPを解凍中: ${zipPath}`);
   const zip = new AdmZip(zipPath);
   zip.extractAllTo(operatorDir, true);
+  normalizeCsvToTxt(operatorDir, operatorName);
   validateExtractedFiles(operatorDir, operatorName);
   console.log(`   → GTFS必須ファイルを検証完了 (${requiredGtfsFiles.length} ファイル)`);
 }
