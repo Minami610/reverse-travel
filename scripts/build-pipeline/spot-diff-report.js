@@ -8,6 +8,16 @@
  * 43都道府県分のビルドや、コンテスト審査前の再ビルドでも同じことが起こりうるため、
  * 「気をつける」ではなく前回出力との差分を機械的に検出する仕組みにする。
  */
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const spotConfigPath = path.join(__dirname, '../../config/spot-config.json');
+const spotConfig = JSON.parse(fs.readFileSync(spotConfigPath, 'utf-8'));
+const individualExclusionReasonByQid = new Map(
+  (spotConfig.individual_exclusions?.qids || []).map((entry) => [entry.qid, entry.reason])
+);
 
 /**
  * @param {{spotsIndex: string[], spots: Array}|null} previousOutput - 前回ビルドのspots-by-station.json（なければnull）
@@ -35,10 +45,12 @@ export function computeSpotDiff(previousOutput, newOutput, excludedItems) {
       const idx = oldIndex.indexOf(qid);
       const spot = previousOutput.spots[idx];
       const excluded = excludedById.get(qid);
+      const individualReason = individualExclusionReasonByQid.get(qid);
       return {
         qid,
         name: spot?.name || '(不明)',
         matchedExcludedQids: excluded?.matchedExcludedQids || null,
+        individualExclusionReason: individualReason || null,
       };
     });
 
@@ -70,8 +82,15 @@ export function logSpotDiff(diff, label) {
   }
   console.log(`  削除: ${diff.removedCount}件`);
   for (const r of diff.removed) {
-    const reason = r.matchedExcludedQids ? r.matchedExcludedQids.join(', ') : '不明（bbox圏外・取得失敗等の可能性）';
-    console.log(`    - ${r.name} (${r.qid}) 除外原因クラス: ${reason}`);
+    let reason;
+    if (r.individualExclusionReason) {
+      reason = `個別除外リスト（理由：${r.individualExclusionReason}）`;
+    } else if (r.matchedExcludedQids) {
+      reason = `除外原因クラス: ${r.matchedExcludedQids.join(', ')}`;
+    } else {
+      reason = '原因不明（bbox圏外・取得失敗等の可能性。個別除外リストにも該当なし）';
+    }
+    console.log(`    - ${r.name} (${r.qid}) ${reason}`);
   }
   console.log(`  削除率: ${(diff.removalRatio * 100).toFixed(1)}%（前回${diff.previousCount}件中${diff.removedCount}件）`);
 }

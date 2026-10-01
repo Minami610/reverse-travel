@@ -76,6 +76,9 @@ const guardTestApprovedConflicts = spotConfig.guard_test_approved_conflicts?.ent
 const noiseFilterQidSet = new Set(
   (spotConfig.suspicious_exclusion_noise_filter?.qids || []).map((entry) => entry.qid)
 );
+const suspiciousConfirmedQidSet = new Set(
+  (spotConfig.suspicious_exclusion_confirmed_qids?.qids || []).map((entry) => entry.qid)
+);
 
 const WIKIDATA_SPARQL = 'https://query.wikidata.org/sparql';
 const WIKIDATA_USER_AGENT =
@@ -778,19 +781,27 @@ export async function checkSuspiciousExclusions(bbox, label, keptCount) {
     label: `${label} 誤除外チェック`,
   });
   const suspiciousItems = filterOutKnownNoise(rawSuspiciousItems);
-  const ratio = keptCount > 0 ? suspiciousItems.length / keptCount : 0;
+
+  // レビュー済みで「除外が正しい」と判断済みのQID（suspicious_exclusion_confirmed_qids）は
+  // 閾値判定の分子から除く。分母（keptCount）はそのままにする。確認済みのものまで
+  // 毎回同じ警告を出し続けると、警告に慣れて本当に新しい誤除外を見逃すため。
+  const confirmed = suspiciousItems.filter((item) => suspiciousConfirmedQidSet.has(item.id));
+  const unconfirmed = suspiciousItems.filter((item) => !suspiciousConfirmedQidSet.has(item.id));
+  const ratio = keptCount > 0 ? unconfirmed.length / keptCount : 0;
+
   console.log(
     `\n🔍 [${label}] 誤除外疑いチェック: ノイズ除去前${rawSuspiciousItems.length}件 → 除去後${suspiciousItems.length}件` +
-      `（抑制${rawSuspiciousItems.length - suspiciousItems.length}件、採用セット比${(ratio * 100).toFixed(1)}%、閾値${(SUSPICIOUS_EXCLUSION_WARNING_RATIO * 100).toFixed(1)}%）`
+      `（抑制${rawSuspiciousItems.length - suspiciousItems.length}件、うち確認済み${confirmed.length}件、未確認${unconfirmed.length}件、` +
+      `採用セット比（未確認分のみ）${(ratio * 100).toFixed(1)}%、閾値${(SUSPICIOUS_EXCLUSION_WARNING_RATIO * 100).toFixed(1)}%）`
   );
   if (ratio > SUSPICIOUS_EXCLUSION_WARNING_RATIO) {
     const breakdown = new Map();
-    for (const item of suspiciousItems) {
+    for (const item of unconfirmed) {
       for (const qid of item.instanceOfQids) breakdown.set(qid, (breakdown.get(qid) || 0) + 1);
     }
     const top = [...breakdown.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
     console.warn(
-      `   ⚠️  誤除外の疑いがある項目が閾値を超えています。除外リストの見直しを検討してください。`
+      `   ⚠️  誤除外の疑いがある項目（未確認分）が閾値を超えています。除外リストの見直しを検討してください。`
     );
     console.warn(`   上位P31候補: ${top.map(([qid, count]) => `${qid}:${count}件`).join(', ')}`);
   }

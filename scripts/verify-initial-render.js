@@ -423,12 +423,34 @@ async function checkNoResultsMessage(doc, window) {
   }
 
   const noResultsText = resultsList.querySelector('.no-results')?.textContent || '';
-  const hasSuggestion = /往復¥\d+から行けます/.test(noResultsText);
-  if (!hasSuggestion) {
+  const suggestionMatch = noResultsText.match(/往復¥(\d+)から行けます/);
+  if (!suggestionMatch) {
     console.log(`❌ 0件案内文チェック: 「往復¥Xから行けます」の案内文が出ていません（実際の表示: "${noResultsText}"）`);
     return false;
   }
   console.log(`✅ 0件案内文チェック: ${noResultsText}`);
+
+  // 案内した金額が「言うだけ」になっていないか、実際にその金額で検索してスポットが
+  // 1件以上出ることを確認する（最安運賃×2をそのまま提示すると、その行き先の周りに
+  // スポットが1件もないケースで案内が嘘になりうるため、findSmallestBudgetWithSpots()
+  // が実際に検索して確認済みの金額だけを案内するようにした。その検証）。
+  const suggestedBudget = suggestionMatch[1];
+  const beforeHtml2 = resultsList.innerHTML;
+  doc.getElementById('budget-input').value = suggestedBudget;
+  doc.getElementById('search-form').dispatchEvent(
+    new window.Event('submit', { bubbles: true, cancelable: true })
+  );
+  const rendered2 = await waitFor(() => doc.getElementById('results-list').innerHTML !== beforeHtml2, 8000);
+  if (!rendered2) {
+    console.log('❌ 0件案内文チェック: 案内額での再検索後も #results-list の内容が更新されませんでした（タイムアウト）');
+    return false;
+  }
+  const cardsAtSuggestedBudget = resultsList.querySelectorAll('.spot-card').length;
+  if (cardsAtSuggestedBudget === 0) {
+    console.log(`❌ 0件案内文チェック: 案内した往復¥${suggestedBudget}で実際に検索してもスポットが0件でした（案内が実態と合っていません）`);
+    return false;
+  }
+  console.log(`✅ 0件案内文チェック: 案内した往復¥${suggestedBudget}で実際に検索すると${cardsAtSuggestedBudget}件のスポットが出ました`);
   return true;
 }
 

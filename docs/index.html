@@ -2410,28 +2410,6 @@ class FareCalculator {
     }
   }
 
-  /**
-   * 出発駅から到達可能な全駅のうち、片道運賃が最も安いものを返す（予算に関係なく）。
-   * 予算内に1駅も到達できなかったとき、「ここからは往復¥X00から行けます」という
-   * 案内に使う。乗り継ぎは必ず直行区間より高くなるため（乗り継ぎ運賃＝区間1＋区間2、
-   * 区間2>0）、直行のOD運賃表の最小値を見るだけで全体の最安値になる。
-   * @param {string} departureStationId
-   * @returns {number|null} 片道運賃の最小値。運賃データが1件もなければnull
-   */
-  findCheapestOneWayFare(departureStationId) {
-    const departureStation = this.stations?.[departureStationId];
-    if (!departureStation) return null;
-
-    let min = null;
-    for (const { stop_id: originStopId } of departureStation.stops) {
-      const destinations = this.fareData.od_fares?.[originStopId];
-      if (!destinations) continue;
-      for (const fare of Object.values(destinations)) {
-        if (min === null || fare < min) min = fare;
-      }
-    }
-    return min;
-  }
 }
 
 
@@ -3485,6 +3463,32 @@ class ReverseTravel {
   }
 
   /**
+   * 到達駅はあるがスポットが0件のとき、予算を¥100刻みで上げていき、実際に
+   * スポットが1件以上見つかる最小の予算を探す（上限¥1000まで）。
+   *
+   * 【背景】最安運賃×2をそのまま提示すると、その最安の行き先の周りに
+   * スポットが1件もない場合、案内した金額で検索してもやはり0件になり、
+   * 案内が嘘になる。「実際に検索して1件以上出ることを確認した金額」だけを
+   * 案内する。計算はすべてローカルデータ参照のため、ブラウザ内で軽い。
+   * @returns {Promise<number|null>} 案内すべき往復予算。¥1000まで探しても
+   *   見つからなければnull
+   */
+  async findSmallestBudgetWithSpots() {
+    const MAX_BUDGET = 1000;
+    const STEP = 100;
+    const currentBudget = parseInt(this.elements.budgetInput.value, 10) || 0;
+    const start = Math.max(200, (Math.floor(currentBudget / STEP) + 1) * STEP);
+
+    for (let budget = start; budget <= MAX_BUDGET; budget += STEP) {
+      const reachable = await this.fareCalc.calculateReachable(this.currentDepartureStationId, budget);
+      if (reachable.length === 0) continue;
+      const spots = await this.spotFinder.findSpots(reachable);
+      if (spots.length > 0) return budget;
+    }
+    return null;
+  }
+
+  /**
    * 検索結果0件のときの案内文を組み立てる。
    *
    * 【背景】2026-10-01のことでんバス運賃改定で、ＪＲ栗林駅から往復¥400で検索すると
@@ -3495,14 +3499,13 @@ class ReverseTravel {
    * 原因を「予算内に到達できる駅がない」場合と「到達できる駅はあるが近くに
    * スポットがない」場合とで出し分ける。
    */
-  buildNoResultsMessage() {
+  async buildNoResultsMessage() {
     if (this.currentReachableCount === 0) {
-      const cheapestFare = this.fareCalc.findCheapestOneWayFare(this.currentDepartureStationId);
-      if (cheapestFare !== null) {
-        const suggestedBudget = Math.ceil((cheapestFare * 2) / 100) * 100;
+      const suggestedBudget = await this.findSmallestBudgetWithSpots();
+      if (suggestedBudget !== null) {
         return `<p class="no-results">この予算では行ける場所がありません。${this.currentDepartureStationName}からは往復¥${suggestedBudget}から行けます。</p>`;
       }
-      return '<p class="no-results">この駅の運賃データが見つかりませんでした</p>';
+      return `<p class="no-results">${this.currentDepartureStationName}からは往復¥1000以内で行ける場所が見つかりませんでした</p>`;
     }
     return '<p class="no-results">到達できる駅は見つかりましたが、近くに観光スポットが見つかりませんでした</p>';
   }
@@ -3512,10 +3515,12 @@ class ReverseTravel {
    * 変わらないため地図は呼び出し元で再描画しない。
    * カードのクリック／ホバーは initUI で一覧全体に委譲済みのため、
    * ここでは個々のカードへのリスナー登録は不要。
+   * 0件時の案内文組み立てが非同期（findSmallestBudgetWithSpots）のため、
+   * このメソッド自体も非同期にしている。
    */
-  renderResultsList() {
+  async renderResultsList() {
     if (this.currentSpots.length === 0) {
-      this.elements.resultsList.innerHTML = this.buildNoResultsMessage();
+      this.elements.resultsList.innerHTML = await this.buildNoResultsMessage();
       return;
     }
 
