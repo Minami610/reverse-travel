@@ -134,7 +134,7 @@ async function buildOnePrefecture(code, { force, acceptDiff }) {
   console.log(`=====================================\n`);
 
   // 1. カタログスナップショット（取得日付き。取得元がdirectかgtfs-data.jpかをここで確定する）
-  const catalogEntry = loadOrBuildCatalogSnapshot(code, { force });
+  const catalogEntry = await loadOrBuildCatalogSnapshot(code, { force });
   const prefName = catalogEntry.pref_name;
 
   // 2. ライセンス許可リスト・運賃データ有無でフィードを絞り込む

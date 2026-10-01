@@ -10,10 +10,14 @@
  * どのフィードがどこ由来かを出典表示（generate-data-sources-manifest.js）と
  * 突き合わせられるようにする。
  *
- * 【現時点のスコープ】gtfs-data.jp API v2からのカタログ取得は未実装（段階1(b)以降、
- * 富山・石川で実際にgtfs-data.jp由来のフィードを扱うときに実装する）。存在しない
- * 手順を「あるかのように」書かない（CLAUDE.md）ため、direct以外の取得方法が
- * 必要な都道府県コードを渡すと明示的にエラーで止まる。
+ * 【gtfs-data.jp API v2】段階1(b)で富山・石川向けに実装。実際に叩いて確認した構造：
+ * - `GET /v2/organizations/{organization_id}/feeds/{feed_id}` がフィードのメタデータと
+ *   リビジョン一覧（gtfs_files配列）を返す。各リビジョンはrid（current/数値のプレビュー等）を持ち、
+ *   rid==="current"のものが現在公開中のデータ。
+ * - 現在データのダウンロードURLは `gtfs_files[].gtfs_url`
+ *   （`.../files/feed.zip?uid=<gtfs_file_uid>` の形。uidはリビジョンごとに変わる）。
+ * - operator.idはorganization_idとfeed_idの組から作る（gtfs-id.jsのコメント参照：
+ *   feed_idは全国一意ではない。例：野々市市と内灘町が共にfeed_id="communitybus"）。
  */
 import fs from 'fs';
 import path from 'path';
@@ -23,11 +27,47 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const snapshotPath = path.join(__dirname, '../../data/derived/national/gtfs-catalog-snapshot.json');
 const targetOperatorsPath = path.join(__dirname, '../../config/target-operators.json');
 
+const GTFS_DATA_JP_API_BASE = 'https://api.gtfs-data.jp/v2';
+const GTFS_DATA_JP_USER_AGENT = 'reverse-travel/0.1.0 (contact: reverse-travel-maintainer)';
+
 // 都道府県コード → 直接取得(direct)の設定ファイルの対応。gtfs-data.jp由来の
 // 都道府県が増えたら、ここに追加するのではなく別途APIフェッチャーを実装すること
 // （直接取得はこの県固有の少数事業者にしか成立しない前提）。
 const DIRECT_FETCH_PREFECTURES = {
   37: { name: '香川県', configPath: targetOperatorsPath, operatorsKey: 'phase1_operators' },
+};
+
+// 都道府県コード → gtfs-data.jpの{organization_id, feed_id}一覧。
+// Cowork承認済みの構成（段階1(b)指示）をそのまま列挙する。
+// 地鉄市内電車（chitetsu/chitetsushinaidensha）は富山の構成には含めない運用も
+// できるが、「運賃は手書きしない」方針のため、ここでは敢えて含めて取得し、
+// fare-feed-check.jsの実データ判定で運賃データなしとして自動除外させる
+// （除外理由がログに残り、思い込みでの除外にならない）。
+const GTFS_DATA_JP_PREFECTURES = {
+  16: {
+    name: '富山県',
+    feeds: [
+      { organization_id: 'chitetsu', feed_id: 'chitetsushinaidensha' }, // 地鉄市内電車（運賃データなしで自動除外される想定）
+      { organization_id: 'chitetsu', feed_id: 'chitetsubus' }, // 地鉄バス
+      { organization_id: 'manyosen', feed_id: 'manyosen' }, // 万葉線
+      { organization_id: 'kaetsunou', feed_id: 'kaetsunouippan' }, // 加越能バス（一般路線）
+      { organization_id: 'kaetsunou', feed_id: 'kaetsunousekaiisan' }, // 加越能バス（世界遺産バス）
+      { organization_id: 'kaetsunou', feed_id: 'kaetsunouhimi' }, // 加越能バス（氷見市街地周遊バス）
+      { organization_id: 'nantocity', feed_id: 'nanbus' }, // 南砺市営バス
+      { organization_id: 'oyabecity', feed_id: 'oyabecitybus' }, // 小矢部市営バス
+    ],
+  },
+  17: {
+    name: '石川県',
+    feeds: [
+      { organization_id: 'hakusancity', feed_id: 'hakusan_bus_meguru' }, // 白山市コミュニティバス「めぐーる」
+      { organization_id: 'komatsucity', feed_id: 'kibagatasen' }, // 小松市 木場潟線
+      { organization_id: 'komatsucity', feed_id: 'blue' }, // 小松市 市内循環線北コース
+      { organization_id: 'komatsucity', feed_id: 'orange' }, // 小松市 市内循環線南コース
+      { organization_id: 'nonoichicity', feed_id: 'communitybus' }, // 野々市市コミュニティバス
+      { organization_id: 'uchinadatown', feed_id: 'communitybus' }, // 内灘町コミュニティバス
+    ],
+  },
 };
 
 function loadSnapshotFile() {
@@ -55,12 +95,72 @@ function buildDirectFetchEntry(prefCode) {
   };
 }
 
+/** gtfs-data.jp APIから1フィード分のメタデータを取得し、operator形式に変換する */
+async function fetchGtfsDataJpFeed(organizationId, feedId) {
+  const url = `${GTFS_DATA_JP_API_BASE}/organizations/${organizationId}/feeds/${feedId}`;
+  const res = await fetch(url, { headers: { 'User-Agent': GTFS_DATA_JP_USER_AGENT } });
+  if (!res.ok) {
+    throw new Error(`gtfs-data.jp API エラー: HTTP ${res.status}（${organizationId}/${feedId}, ${url}）`);
+  }
+  const json = await res.json();
+  const body = json.body;
+  if (!body) {
+    throw new Error(`gtfs-data.jp API: 想定外のレスポンス形式（${organizationId}/${feedId}）`);
+  }
+
+  const currentFile = (body.gtfs_files || []).find((f) => f.rid === 'current');
+  if (!currentFile) {
+    throw new Error(`gtfs-data.jp: rid="current"のファイルが見つかりません（${organizationId}/${feedId}）。フィードが廃止済みの可能性があります`);
+  }
+
+  const operatorId = `${organizationId}.${feedId}`;
+  return {
+    id: operatorId,
+    name: `${body.organization_name} ${body.feed_name}`,
+    gtfs_url: currentFile.gtfs_url,
+    source: 'gtfs-data.jp',
+    source_category: 'gtfs-data-jp',
+    source_category_label: 'GTFSデータリポジトリ（gtfs-data.jp）から取得',
+    source_category_note: null,
+    license_label: body.feed_license,
+    license_url: body.feed_license_url,
+    license_source_url: body.feed_page_url || null,
+    license_source_note: 'gtfs-data.jp APIのfeed_license/feed_license_urlをそのまま採用',
+    organization_id: organizationId,
+    feed_id: feedId,
+    rid: currentFile.rid,
+    gtfs_file_uid: currentFile.gtfs_file_uid,
+    gtfs_file_from_date: currentFile.from_date,
+    gtfs_file_to_date: currentFile.to_date,
+    gtfs_file_created_at: currentFile.created_at,
+    gtfs_file_published_at: currentFile.published_at,
+  };
+}
+
+async function buildGtfsDataJpEntry(prefCode) {
+  const def = GTFS_DATA_JP_PREFECTURES[prefCode];
+  const operators = [];
+  for (const { organization_id, feed_id } of def.feeds) {
+    console.log(`   → gtfs-data.jp取得中: ${organization_id}/${feed_id}`);
+    operators.push(await fetchGtfsDataJpFeed(organization_id, feed_id));
+  }
+  if (operators.length === 0) {
+    throw new Error(`都道府県コード${prefCode}: gtfs-data.jpのフィード一覧が空です`);
+  }
+  return {
+    pref_code: String(prefCode),
+    pref_name: def.name,
+    snapshot_date: new Date().toISOString().slice(0, 10),
+    operators,
+  };
+}
+
 /**
  * 都道府県コードのカタログスナップショットを読み込む（なければ生成して保存する）。
  * @param {number|string} prefCode
  * @param {{force?: boolean}} options - forceでスナップショットを取り直す
  */
-export function loadOrBuildCatalogSnapshot(prefCode, { force = false } = {}) {
+export async function loadOrBuildCatalogSnapshot(prefCode, { force = false } = {}) {
   const key = String(prefCode);
   const snapshot = loadSnapshotFile();
 
@@ -69,20 +169,27 @@ export function loadOrBuildCatalogSnapshot(prefCode, { force = false } = {}) {
     return snapshot.prefectures[key];
   }
 
-  if (!(prefCode in DIRECT_FETCH_PREFECTURES) && !(Number(prefCode) in DIRECT_FETCH_PREFECTURES)) {
+  const numericCode = Number(prefCode);
+  let entry;
+  if (numericCode in DIRECT_FETCH_PREFECTURES) {
+    entry = buildDirectFetchEntry(numericCode);
+    console.log(
+      `✅ カタログスナップショット: 都道府県コード${key}（${entry.pref_name}）を新規取得（事業者${entry.operators.length}件、取得元: direct）`
+    );
+  } else if (numericCode in GTFS_DATA_JP_PREFECTURES) {
+    entry = await buildGtfsDataJpEntry(numericCode);
+    console.log(
+      `✅ カタログスナップショット: 都道府県コード${key}（${entry.pref_name}）を新規取得（フィード${entry.operators.length}件、取得元: gtfs-data.jp、rid=current）`
+    );
+  } else {
+    const known = [...Object.keys(DIRECT_FETCH_PREFECTURES), ...Object.keys(GTFS_DATA_JP_PREFECTURES)];
     throw new Error(
-      `都道府県コード${key}のカタログ取得方法が未実装です。` +
-      `gtfs-data.jp API連携は段階1(b)以降（富山・石川）で実装予定のため、現時点ではdirect（事業者直接取得）` +
-      `として登録済みの都道府県コード（${Object.keys(DIRECT_FETCH_PREFECTURES).join(', ')}）のみビルドできます。`
+      `都道府県コード${key}のカタログ取得方法が未実装です。現時点で対応している都道府県コードは${known.join(', ')}のみです。`
     );
   }
 
-  const entry = buildDirectFetchEntry(Number(prefCode));
   snapshot.prefectures[key] = entry;
   saveSnapshotFile(snapshot);
-  console.log(
-    `✅ カタログスナップショット: 都道府県コード${key}（${entry.pref_name}）を新規取得（事業者${entry.operators.length}件、取得元: direct）`
-  );
   return entry;
 }
 
