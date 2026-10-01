@@ -80,7 +80,8 @@ export async function parseAndTransform(options = {}) {
   mergeDuplicateStationNames(aggregated);
 
   // 駅名文字列ではなく安定したIDで駅をまとめる（同名かつ近接のときだけ1駅とみなす）
-  const stationClusters = buildStationClusters(aggregated);
+  const operatorIdToName = new Map(operators.map((op) => [op.id, op.name]));
+  const stationClusters = buildStationClusters(aggregated, operatorIdToName);
 
   // 派生JSONを生成
   const stats = saveDerivedData(aggregated, stationClusters, outputDir);
@@ -300,8 +301,16 @@ function loadNearestMunicipalityFinder() {
  * 駅名文字列だけをキーにするのをやめ、「同名かつ閾値以内の距離」でクラスタリングし、
  * 安定したstation_id（クラスタ内の名前空間化済みstop_idのうち辞書順最小のもの）を
  * 割り当てる。表示名（display_name）は駅名と別に持ち、同名の駅が複数クラスタに
- * 分裂した場合は最寄りの市区町村名で曖昧さ回避する（例：「西町（小松市）」）。
- * 市区町村名まで同じで区別できない場合だけ番号を付ける。
+ * 分裂した場合は3段階で曖昧さ回避する：
+ *   1. 現存する市区町村名（例：「西町（小松市）」）
+ *   2. それでも区別できない場合は運行事業者名（例：「中田（地鉄バス）」）
+ *   3. それでも区別できない場合だけ番号
+ * 【2026-10-01修正】municipality-locations.jsonは以前「日本の廃止市区町村」も
+ * 候補に含んでいたため、1940年に富山市へ合併した「東岩瀬町」のような、今の
+ * 利用者には伝わらない地名で曖昧さ回避されることがあった（generate-municipality-
+ * table.jsがP576=廃止日を持つ市区町村を除外するよう修正済み。本関数側は
+ * 「市区町村名が引けてもそれで一意にならない」ケースへの対応として事業者名の
+ * 段を追加した）。
  *
  * 【このクラスタリングが解決する範囲】同一都道府県（＝同一ビルド）内での
  * 同名衝突のみ。stop_id由来の安定IDを使うため、遠く離れた同名停留所が
@@ -312,8 +321,11 @@ function loadNearestMunicipalityFinder() {
  *
  * stop_name が空文字列の停留所（出入口・改札等、乗車できないGTFS要素）は
  * クラスタリング対象から除外する（駅としての意味を持たないため）。
+ *
+ * @param {object} aggregated
+ * @param {Map<string,string>} operatorIdToName - 事業者ID→表示名（曖昧さ回避の第2段で使う）
  */
-function buildStationClusters(aggregated) {
+function buildStationClusters(aggregated, operatorIdToName) {
   const findNearestMunicipality = loadNearestMunicipalityFinder();
 
   const stopsArray = Object.values(aggregated.stops);
@@ -387,31 +399,42 @@ function buildStationClusters(aggregated) {
       splitNameCount += 1;
     }
 
-    // 曖昧さ回避：まず市区町村名を試し、それでも重複するものだけ番号を付ける
-    const withMunicipality = finalClusters.map((clusterStops) => {
+    // 曖昧さ回避：①現存する市区町村名 → ②運行事業者名 → ③番号、の3段階で試す
+    const withMeta = finalClusters.map((clusterStops) => {
       const lat = clusterStops.reduce((sum, s) => sum + s.stop_lat, 0) / clusterStops.length;
       const lon = clusterStops.reduce((sum, s) => sum + s.stop_lon, 0) / clusterStops.length;
       const municipality = finalClusters.length > 1 && findNearestMunicipality
         ? findNearestMunicipality(lat, lon)
         : null;
-      return { clusterStops, lat, lon, municipality };
+      const operatorIds = new Set(clusterStops.map((s) => s.operator_id));
+      // クラスタ内の停留所が単一事業者のときだけ事業者名での区別を試す
+      // （複数事業者が混在するクラスタは「事業者名」1つでは区別の意味をなさない）。
+      const operatorLabel = operatorIds.size === 1
+        ? operatorIdToName?.get([...operatorIds][0]) || null
+        : null;
+      return { clusterStops, lat, lon, municipality, operatorLabel };
     });
     const municipalityCounts = new Map();
-    for (const c of withMunicipality) {
+    for (const c of withMeta) {
       if (!c.municipality) continue;
       municipalityCounts.set(c.municipality, (municipalityCounts.get(c.municipality) || 0) + 1);
     }
+    const operatorLabelCounts = new Map();
+    for (const c of withMeta) {
+      if (!c.operatorLabel) continue;
+      operatorLabelCounts.set(c.operatorLabel, (operatorLabelCounts.get(c.operatorLabel) || 0) + 1);
+    }
     let numberedIndex = 0;
-    withMunicipality.forEach(({ clusterStops, lat, lon, municipality }) => {
+    withMeta.forEach(({ clusterStops, lat, lon, municipality, operatorLabel }) => {
       let displayName = name;
       if (finalClusters.length > 1) {
         if (municipality && municipalityCounts.get(municipality) === 1) {
           displayName = `${name}（${municipality}）`;
+        } else if (operatorLabel && operatorLabelCounts.get(operatorLabel) === 1) {
+          displayName = `${name}（${operatorLabel}）`;
         } else {
           numberedIndex += 1;
-          displayName = municipality
-            ? `${name}（${municipality}${numberedIndex}）` // 同一市区町村内でさらに分裂した稀なケース
-            : `${name}（${numberedIndex}）`;
+          displayName = `${name}（${numberedIndex}）`;
         }
         console.warn(`       → 表示名: ${displayName}`);
       }

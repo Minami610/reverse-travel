@@ -111,33 +111,56 @@ function sanitizeJsonControlChars(text) {
   return result;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// WDQSは同一クエリでも応答時間が13秒〜51秒〜504タイムアウトまで振れることが
+// 既知（CLAUDE.md参照）。本関数の実装中にも、このテーブル生成クエリが
+// 3回中2回「JSON.parseに失敗（位置はそのたび異なる）」で落ち、3回目は成功した
+// （クエリ・パース処理のどちらも変えていないのに結果だけ変わった）。これは
+// WDQS側の応答が時々壊れる既知の不安定さの一種とみなし、他のWikidata呼び出し
+// （generate-spots-by-region.js）と同じ考え方でリトライを入れる。
+const SPARQL_MAX_RETRIES = 2;
+const SPARQL_RETRY_BACKOFF_MS = [5000, 15000];
+
 async function sparqlQuery(query, { post = false } = {}) {
-  const params = new URLSearchParams({ query, format: 'json' });
-  const response = post
-    ? await fetch(WIKIDATA_SPARQL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          Accept: 'application/sparql-results+json',
-          'User-Agent': USER_AGENT,
-        },
-        body: params,
-        signal: AbortSignal.timeout(90000),
-      })
-    : await fetch(`${WIKIDATA_SPARQL}?${params}`, {
-        headers: { Accept: 'application/sparql-results+json', 'User-Agent': USER_AGENT },
-        signal: AbortSignal.timeout(90000),
-      });
-  if (!response.ok) {
-    throw new Error(`SPARQL失敗: HTTP ${response.status} - ${(await response.text()).slice(0, 300)}`);
+  for (let attempt = 0; attempt <= SPARQL_MAX_RETRIES; attempt += 1) {
+    try {
+      const params = new URLSearchParams({ query, format: 'json' });
+      const response = post
+        ? await fetch(WIKIDATA_SPARQL, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              Accept: 'application/sparql-results+json',
+              'User-Agent': USER_AGENT,
+            },
+            body: params,
+            signal: AbortSignal.timeout(90000),
+          })
+        : await fetch(`${WIKIDATA_SPARQL}?${params}`, {
+            headers: { Accept: 'application/sparql-results+json', 'User-Agent': USER_AGENT },
+            signal: AbortSignal.timeout(90000),
+          });
+      if (!response.ok) {
+        throw new Error(`SPARQL失敗: HTTP ${response.status} - ${(await response.text()).slice(0, 300)}`);
+      }
+      // WDQSの一部ラベル文字列に、JSON文字列リテラル内では不正な生の制御文字
+      // （エスケープされていない改行・タブ等）が混入することがあり、
+      // response.json()（内部でJSON.parseと同じ厳格パーサを使う）が例外を投げる。
+      const rawText = await response.text();
+      const sanitized = sanitizeJsonControlChars(rawText);
+      const data = JSON.parse(sanitized);
+      return data.results.bindings;
+    } catch (error) {
+      if (attempt === SPARQL_MAX_RETRIES) throw error;
+      console.warn(
+        `   ⚠️  SPARQLクエリ失敗（${error.message}）。${SPARQL_RETRY_BACKOFF_MS[attempt]}ms 待機後にリトライ ${attempt + 1}/${SPARQL_MAX_RETRIES}`
+      );
+      await sleep(SPARQL_RETRY_BACKOFF_MS[attempt]);
+    }
   }
-  // WDQSの一部ラベル文字列に、JSON文字列リテラル内では不正な生の制御文字
-  // （エスケープされていない改行・タブ等）が混入することがあり、
-  // response.json()（内部でJSON.parseと同じ厳格パーサを使う）が例外を投げる。
-  const rawText = await response.text();
-  const sanitized = sanitizeJsonControlChars(rawText);
-  const data = JSON.parse(sanitized);
-  return data.results.bindings;
 }
 
 export async function generateMunicipalityTable() {
@@ -169,7 +192,7 @@ export async function generateMunicipalityTable() {
     PREFIX wdt: <http://www.wikidata.org/prop/direct/>
     PREFIX wd: <http://www.wikidata.org/entity/>
     PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-    SELECT ?itemLabel ?prefLabel ?coord WHERE {
+    SELECT ?itemLabel ?prefLabel ?coord ?dissolved WHERE {
       VALUES ?class { ${classValues} }
       ?item wdt:P31 ?class.
       ?item wdt:P17 wd:Q17.
@@ -178,12 +201,14 @@ export async function generateMunicipalityTable() {
       ?pref wdt:P31 wd:Q50337.
       ?pref rdfs:label ?prefLabel. FILTER(LANG(?prefLabel) = "ja")
       OPTIONAL { ?item wdt:P625 ?coord. }
+      OPTIONAL { ?item wdt:P576 ?dissolved. }
     }
   `,
     { post: true }
   );
   let resolved = 0;
-  const coordCandidatesByName = new Map(); // name -> [{lat, lon}, ...]（同名で複数座標があれば後で決定的に1件選ぶ）
+  // name -> [{lat, lon, dissolved}, ...]（同名で複数座標があれば後で決定的に1件選ぶ）
+  const coordCandidatesByName = new Map();
   for (const b of muniBindings) {
     const name = b.itemLabel.value;
     if (table[name] === undefined) resolved += 1;
@@ -195,19 +220,33 @@ export async function generateMunicipalityTable() {
         const lon = parseFloat(match[1]);
         const lat = parseFloat(match[2]);
         if (!coordCandidatesByName.has(name)) coordCandidatesByName.set(name, []);
-        coordCandidatesByName.get(name).push({ lat, lon });
+        coordCandidatesByName.get(name).push({ lat, lon, dissolved: Boolean(b.dissolved?.value) });
       }
     }
   }
   console.log(`   ${resolved}件（都道府県への変換が確定したもの）`);
 
+  // municipality-locations.json（駅表示名の曖昧さ回避専用）は、廃止日(P576)を
+  // 持つ市区町村を候補から除く。municipality-to-pref.json（県判定用）は
+  // 「日本の廃止市区町村(Q18663566)」をそのまま含める（過去のGTFSデータに
+  // 残る旧地名からの県判定に必要）が、表示名としてユーザーに見せる場合は
+  // 「東岩瀬町」のような1940年合併済みの地名は伝わらない（2026-10-01、
+  // 富山県のビルドで実際に発生して判明）。
+  // 同名で複数候補がある場合、まず現存（非廃止）のものだけに絞り、
+  // それでも複数あれば緯度→経度昇順で決定的に1件選ぶ。
   const locations = [];
+  let dissolvedExcluded = 0;
   for (const [name, candidates] of coordCandidatesByName.entries()) {
-    candidates.sort((a, b) => a.lat - b.lat || a.lon - b.lon);
-    const { lat, lon } = candidates[0];
+    const active = candidates.filter((c) => !c.dissolved);
+    dissolvedExcluded += candidates.length - active.length;
+    if (active.length === 0) continue; // 現存する候補がなければ曖昧さ回避には使わない
+    active.sort((a, b) => a.lat - b.lat || a.lon - b.lon);
+    const { lat, lon } = active[0];
     locations.push({ name, pref: table[name], lat, lon });
   }
-  console.log(`   ${locations.length}件の市区町村に代表座標あり（駅表示名の曖昧さ回避用）`);
+  console.log(
+    `   ${locations.length}件の市区町村に代表座標あり（駅表示名の曖昧さ回避用。廃止市区町村${dissolvedExcluded}件を除外）`
+  );
 
   // アサーション: 47都道府県すべてに1件以上の市区町村が存在するか検証する。
   // 「日本の市」だけを指定した最初の実装では富山市・金沢市が丸ごと欠落し、

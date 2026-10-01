@@ -14,6 +14,11 @@
  * ダウンロード済みGTFSの feed_info.txt（発行元・フィード版・データ期間。GTFS標準項目で
  * 検証可能な事実）を突き合わせて出力する。ライセンスはGTFSに標準項目がなく
  * feed_info.txtにも記載がないため、「表記なし」を正直に出す（CC BYと決め打ちしない）。
+ *
+ * 【2026-10-01追記】options.excludedOperatorsを渡すと、検索対象から除外した
+ * フィード（運賃データなし・ライセンス非許可等）もexcluded_feedsとして出力する。
+ * 「運賃は手で書き足さない」方針のため使っていないデータがある（例：富山地方鉄道
+ * 市内電車）ことを、ハードコードせずマニフェストから機械的に出典画面に表示する。
  */
 
 import fs from 'fs';
@@ -112,13 +117,25 @@ export function generateDataSourcesManifest(options = {}) {
     note: config.phase1_note || null,
   };
 
+  // 対象外としたフィード（運賃データなし・ライセンス非許可等で除外）。
+  // 「運賃は手で書き足さない」方針のため、富山地方鉄道市内電車のような
+  // フィードを検索対象に含めることはしないが、なぜ使っていないデータが
+  // あるのかをアプリの出典画面で正直に説明する（2026-10-01、段階1(b)で追加）。
+  const excludedFeeds = (options.excludedOperators || []).map((e) => ({
+    operator_id: e.operator,
+    operator_name: e.operator_name || e.operator,
+    reason: e.reason,
+  }));
+
   const manifest = {
     generated_at: new Date().toISOString(),
     feeds,
+    excluded_feeds: excludedFeeds,
     summary: {
       total: feeds.length,
       by_category: byCategory,
       odpt_or_gtfs_data_jp_count: odptOrGtfsDataJpCount,
+      excluded_total: excludedFeeds.length,
     },
     coverage,
   };
@@ -139,6 +156,10 @@ export function generateDataSourcesManifest(options = {}) {
     );
   }
   console.log(`  - 対応地域: ${coverage.prefectures.join('、') || '(未設定)'}`);
+  if (excludedFeeds.length > 0) {
+    console.log(`  - 対象外としたフィード: ${excludedFeeds.length}件`);
+    for (const f of excludedFeeds) console.log(`      ${f.operator_name}: ${f.reason}`);
+  }
   console.log(`✅ データ出典マニフェストを生成: ${outputPath}\n`);
 
   return manifest;

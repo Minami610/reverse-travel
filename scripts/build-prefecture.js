@@ -91,18 +91,18 @@ function filterOperators(operators) {
   for (const operator of operators) {
     const licenseCheck = checkLicenseAllowed(operator);
     if (!licenseCheck.allowed) {
-      excluded.push({ operator: operator.id, reason: `ライセンス許可リスト外（license_label="${operator.license_label || '(未設定)'}"）` });
+      excluded.push({ operator: operator.id, operator_name: operator.name, reason: `ライセンス許可リスト外（license_label="${operator.license_label || '(未設定)'}"）` });
       continue;
     }
 
     const operatorDir = path.join(rawGtfsDir, operator.id);
     if (!fs.existsSync(operatorDir)) {
-      excluded.push({ operator: operator.id, reason: 'GTFSディレクトリが存在しない（フェッチ失敗の可能性）' });
+      excluded.push({ operator: operator.id, operator_name: operator.name, reason: 'GTFSディレクトリが存在しない（フェッチ失敗の可能性）' });
       continue;
     }
     const fareCheck = checkFeedHasFareData(operatorDir);
     if (!fareCheck.hasFareData) {
-      excluded.push({ operator: operator.id, reason: `運賃データなし（${fareCheck.reason}）` });
+      excluded.push({ operator: operator.id, operator_name: operator.name, reason: `運賃データなし（${fareCheck.reason}）` });
       continue;
     }
 
@@ -177,6 +177,7 @@ async function buildOnePrefecture(code, { force, acceptDiff }) {
     rawGtfsDir,
     outputPath: path.join(outputDir, 'data-sources.json'),
     coverage: { prefectures: [prefName], note: `都道府県コード${codeStr}（build-prefecture.js、段階1）` },
+    excludedOperators: excluded,
   });
 
   // 前回ビルドのGTFS構造（駅・停留所・路線）を、上書きする前に読んでおく。

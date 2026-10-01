@@ -185,6 +185,24 @@ class ReverseTravel {
     const summaryEl = document.getElementById('about-feed-summary');
     const footerEl = document.getElementById('footer-data-sources');
     const coverageEl = document.getElementById('howto-coverage');
+    const excludedWrapEl = document.getElementById('about-excluded-feeds');
+    const excludedListEl = document.getElementById('about-excluded-feed-list');
+
+    // 検索対象から除外したフィード（運賃データなし・ライセンス非許可等）があれば、
+    // 「対象外としたデータ」として理由ごと表示する。例：富山地方鉄道市内電車は
+    // 運賃データが公開されていないため対象外（運賃を手で書き足して含めることはしない）。
+    const excludedFeeds = manifest?.excluded_feeds;
+    if (excludedWrapEl && excludedListEl) {
+      if (Array.isArray(excludedFeeds) && excludedFeeds.length > 0) {
+        excludedWrapEl.hidden = false;
+        excludedListEl.innerHTML = excludedFeeds
+          .map((f) => `<li><strong>${f.operator_name}</strong>：${f.reason}のため、検索の対象外</li>`)
+          .join('');
+      } else {
+        excludedWrapEl.hidden = true;
+        excludedListEl.innerHTML = '';
+      }
+    }
 
     // 対応地域（使い方モーダル）はフィード一覧と独立した項目のため、
     // フィードが読めなかった場合でも可能な限り描画する。
