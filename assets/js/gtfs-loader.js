@@ -1,6 +1,20 @@
 /**
  * gtfs-loader.js - GTFS派生データのロード
- * ビルド時に生成された JSON をブラウザメモリにロード
+ *
+ * 【2026-10-02】県ごとに分割したdocs/data/pref/{コード}/を、出発駅の県＋隣接県
+ * だけfetchする構成に変更した（段階1(c)の土台）。以前は全データを単一HTMLに
+ * 埋め込んでいたが、香川だけで埋め込みデータがバンドル全体の92%（2.7MB）を
+ * 占めており、県が増えるほどページが肥大化する構造だった。
+ *
+ * ロードは2段階：
+ * 1. loadStationIndex() - 起動時に一度だけ。全都道府県の軽量駅一覧
+ *    （docs/data/national/station-index.json、駅ID・座標を持たない
+ *    [表示名, 県コード, 県内通し番号]の配列）・隣接県表・スポットランキング設定
+ *    （都道府県に依存しないため、ここで一度だけ取得する）を取得する。
+ *    出発駅のオートコンプリートはこれだけで動く。
+ * 2. loadPrefectures(prefIds) - 出発駅が決まってから。その県＋隣接県の
+ *    フルデータ（運賃・停留所・路線・経路・スポット）をfetchし、
+ *    これまでのloadAll()と同じ形のデータにまとめて返す。
  */
 
 /**
@@ -37,8 +51,38 @@ export function mergeIndexedSpotRegions(regions) {
   return { spots, spotsByStation };
 }
 
+/**
+ * route-details.jsonの圧縮形式（{routeIndex: [...], data: {...}}、route_idが
+ * 整数インデックスになっている）を、従来の{originId: {destId: {operatorId: RouteEntry}}}
+ * 形式（route_idが文字列のまま）へ復元する。これにより、以降のコード
+ * （fare-calculator.js・route-formatter.js・route-duration.js）は一切変更しない。
+ */
+function decodeRouteDetails(indexed) {
+  const { routeIndex, data } = indexed;
+  const decoded = {};
+  for (const [originId, destMap] of Object.entries(data)) {
+    decoded[originId] = {};
+    for (const [destId, byOperator] of Object.entries(destMap)) {
+      decoded[originId][destId] = {};
+      for (const [operatorId, entry] of Object.entries(byOperator)) {
+        decoded[originId][destId][operatorId] = entry.length === 3
+          ? [routeIndex[entry[0]], entry[1], entry[2]]
+          : [entry[0], routeIndex[entry[1]], entry[2], entry[3], routeIndex[entry[4]], entry[5], entry[6]];
+      }
+    }
+  }
+  return decoded;
+}
+
+function prefCodeStr(code) {
+  return String(code).padStart(2, '0');
+}
+
 export class GTFSLoader {
   constructor() {
+    this.stationIndex = null; // [[表示名, 県コード, 県内通し番号], ...]（全都道府県分）
+    this.prefectureAdjacency = null; // { "16": ["15","17",...], ... }
+    this.loadedPrefCodes = new Set(); // 既にfetch済みの県コード（再フェッチを避ける）
     this.fareData = null;
     this.stopsMetadata = null;
     this.routeInfo = null;
@@ -48,75 +92,134 @@ export class GTFSLoader {
     this.spotsByStation = null; // stop_id → [{qid, distance}, ...] の参照配列
   }
 
-  async loadAll() {
-    try {
-      const hasEmbeddedData = typeof window.EMBEDDED_FARE_DATA !== 'undefined';
-
-      if (hasEmbeddedData) {
-        // 本番ビルド：index.html の <script> タグに埋め込まれたデータを参照
-        this.fareData = window.EMBEDDED_FARE_DATA;
-        this.stopsMetadata = window.EMBEDDED_STOPS_METADATA;
-        this.routeInfo = window.EMBEDDED_ROUTE_INFO;
-        this.routeDetails = window.EMBEDDED_ROUTE_DETAILS;
-        this.stations = window.EMBEDDED_STATIONS;
-        // EMBEDDED_SPOTS_BY_STATIONは{spotsIndex, spots, stations}のインデックス化済み形式
-        // （県ごとに1つ）。将来、隣接県を同時ロードする際は配列で複数地域分渡す。
-        const merged = mergeIndexedSpotRegions([window.EMBEDDED_SPOTS_BY_STATION]);
-        this.spots = merged.spots;
-        this.spotsByStation = merged.spotsByStation;
-      } else {
-        // 開発時：埋め込みデータがないため data/derived/*.json を fetch で読み込む
-        console.log('ℹ️ 埋め込みデータなし。data/derived/*.json を fetch で読み込みます（開発モード）');
-        const derivedBase = 'data/derived/';
-        const [fareData, stopsMetadata, stations, routeInfo, routeDetails, spotsData, rankingConfig] =
-          await Promise.all([
-            this.fetchJson(`${derivedBase}fare-lookup-tables.json`),
-            this.fetchJson(`${derivedBase}stops-metadata.json`),
-            this.fetchJson(`${derivedBase}stations.json`),
-            this.fetchJson(`${derivedBase}route-info.json`),
-            this.fetchJson(`${derivedBase}route-details.json`),
-            this.fetchJson(`${derivedBase}spots-by-station.json`),
-            this.fetchJson('config/spot-ranking-config.json'),
-          ]);
-
-        this.fareData = fareData;
-        this.stopsMetadata = stopsMetadata;
-        this.routeInfo = routeInfo;
-        this.routeDetails = routeDetails;
-        this.stations = stations;
-        // spots-by-station.jsonは{spotsIndex, spots, stations}のインデックス化済み形式
-        const merged = mergeIndexedSpotRegions([spotsData]);
-        this.spots = merged.spots;
-        this.spotsByStation = merged.spotsByStation;
-        // spot-finder.js は window.EMBEDDED_SPOT_RANKING_CONFIG を同期的に参照するため、
-        // 本番ビルドと同じ経路で読めるようにここでセットしておく
-        window.EMBEDDED_SPOT_RANKING_CONFIG = rankingConfig;
-      }
-
-      console.log('✅ GTFS派生データをロード');
-      console.log(`  - ${this.stopsMetadata.length} 駅のメタデータ`);
-      console.log(`  - ${Object.keys(this.stations).length} 駅（クラスタリング後）`);
-      console.log(`  - ${Object.keys(this.routeInfo).length} 路線の情報`);
-      console.log(`  - ${Object.keys(this.spots).length} 件のスポット辞書`);
-      console.log(`  - ${Object.keys(this.spotsByStation).length} 駅のスポット参照`);
-
-      return {
-        fareData: this.fareData,
-        stopsMetadata: this.stopsMetadata,
-        routeInfo: this.routeInfo,
-        routeDetails: this.routeDetails,
-        stations: this.stations,
-        spots: this.spots,
-        spotsByStation: this.spotsByStation,
-      };
-    } catch (error) {
-      console.error('❌ GTFS データロード失敗:', error);
-      throw error;
+  /**
+   * 起動時に一度だけ呼ぶ。全国の軽量駅一覧・隣接県表・スポットランキング設定
+   * （都道府県に依存しないため、ここで一度だけ取得すればよい）を取得する。
+   * ランキング設定の取得に失敗しても検索自体は継続できるため、失敗は警告に
+   * 留める（spot-finder.jsのloadRankingConfig()がデフォルト値で補う）。
+   */
+  async loadStationIndex() {
+    const [stationIndex, adjacency, rankingConfig] = await Promise.all([
+      this.fetchJson('data/national/station-index.json'),
+      this.fetchJson('data/national/prefecture-adjacency.json'),
+      this.fetchJson('data/national/spot-ranking-config.json').catch((error) => {
+        console.warn(`⚠️ スポットランキング設定の取得に失敗しました（${error.message}）。デフォルト値を使用します`);
+        return null;
+      }),
+    ]);
+    this.stationIndex = stationIndex;
+    this.prefectureAdjacency = adjacency;
+    if (rankingConfig) {
+      window.EMBEDDED_SPOT_RANKING_CONFIG = rankingConfig;
     }
+    console.log(`✅ 駅一覧をロード（${stationIndex.length}駅、全国分）`);
+    return { stationIndex, adjacency };
   }
 
   /**
-   * JSON を fetch して取得（開発モード用）
+   * 指定した都道府県コードの駅一覧上のエントリ（[表示名, 県コード, 県内通し番号]）から、
+   * 実際のstation_idを復元する。生成側（generate-site-data.jsのgenerateStationIndex）と
+   * 同じ規則（その県のstations.jsonのキーを昇順ソートしたときのインデックス）で
+   * 引くため、既にその県のstations.jsonがロード済みであることが前提。
+   */
+  resolveStationId(prefCode, localIndex) {
+    const codeStr = prefCodeStr(prefCode);
+    const stationsForPref = this._stationsByPref?.[codeStr];
+    if (!stationsForPref) {
+      throw new Error(`都道府県コード${codeStr}のデータが未ロードです。先にloadPrefectures()でロードしてください`);
+    }
+    return stationsForPref[localIndex];
+  }
+
+  /**
+   * 指定した都道府県コード（複数可）のフルデータをfetchし、既存のloadAll()と
+   * 同じ形のデータにまとめて返す。隣接県データがまだ公開されていない場合
+   * （docs/data/pref/配下に存在しない＝404）は、警告を出してその県だけ
+   * スキップする（全体を失敗させない）。
+   * @param {Array<number|string>} prefCodes
+   */
+  async loadPrefectures(prefCodes) {
+    const codesToFetch = [...new Set(prefCodes.map(prefCodeStr))].filter(
+      (code) => !this.loadedPrefCodes.has(code)
+    );
+
+    const results = await Promise.all(
+      codesToFetch.map(async (codeStr) => {
+        try {
+          const base = `data/pref/${codeStr}/`;
+          const [fareData, stopsMetadata, stations, routeInfo, routeDetailsIndexed, spotsData] =
+            await Promise.all([
+              this.fetchJson(`${base}fare-lookup-tables.json`),
+              this.fetchJson(`${base}stops-metadata.json`),
+              this.fetchJson(`${base}stations.json`),
+              this.fetchJson(`${base}route-info.json`),
+              this.fetchJson(`${base}route-details.json`),
+              this.fetchJson(`${base}spots-by-station.json`),
+            ]);
+          return {
+            codeStr, fareData, stopsMetadata, stations,
+            routeInfo, routeDetails: decodeRouteDetails(routeDetailsIndexed),
+            spotsData,
+          };
+        } catch (error) {
+          console.warn(`⚠️ 都道府県コード${codeStr}のデータ取得に失敗しました（${error.message}）。この県はスキップします`);
+          return null;
+        }
+      })
+    );
+
+    this._stationsByPref = this._stationsByPref || {};
+    this.fareData = this.fareData || { od_fares: {}, bus_fares: {} };
+    this.stopsMetadata = this.stopsMetadata || [];
+    this.routeInfo = this.routeInfo || {};
+    this.routeDetails = this.routeDetails || {};
+    this.stations = this.stations || {};
+    const spotRegions = [];
+    if (this._loadedSpotRegions) spotRegions.push(...this._loadedSpotRegions);
+
+    for (const result of results) {
+      if (!result) continue;
+      const { codeStr, fareData, stopsMetadata, stations, routeInfo, routeDetails, spotsData } = result;
+      this.loadedPrefCodes.add(codeStr);
+
+      // 県内通し番号→station_idの復元に使う（resolveStationId参照）。
+      // 生成側（generate-site-data.js）と同じ規則：station_idを昇順ソート。
+      this._stationsByPref[codeStr] = Object.keys(stations).sort();
+
+      Object.assign(this.fareData.od_fares, fareData.od_fares);
+      Object.assign(this.fareData.bus_fares, fareData.bus_fares);
+      this.stopsMetadata.push(...stopsMetadata);
+      Object.assign(this.routeInfo, routeInfo);
+      Object.assign(this.routeDetails, routeDetails);
+      Object.assign(this.stations, stations);
+      spotRegions.push(spotsData);
+    }
+    this._loadedSpotRegions = spotRegions;
+
+    const merged = mergeIndexedSpotRegions(spotRegions);
+    this.spots = merged.spots;
+    this.spotsByStation = merged.spotsByStation;
+
+    console.log(`✅ ${codesToFetch.length}都道府県分のデータをロード（累計: ${[...this.loadedPrefCodes].join(', ')}）`);
+    console.log(`  - ${this.stopsMetadata.length} 駅のメタデータ`);
+    console.log(`  - ${Object.keys(this.stations).length} 駅（クラスタリング後）`);
+    console.log(`  - ${Object.keys(this.routeInfo).length} 路線の情報`);
+    console.log(`  - ${Object.keys(this.spots).length} 件のスポット辞書`);
+    console.log(`  - ${Object.keys(this.spotsByStation).length} 駅のスポット参照`);
+
+    return {
+      fareData: this.fareData,
+      stopsMetadata: this.stopsMetadata,
+      routeInfo: this.routeInfo,
+      routeDetails: this.routeDetails,
+      stations: this.stations,
+      spots: this.spots,
+      spotsByStation: this.spotsByStation,
+    };
+  }
+
+  /**
+   * JSON を fetch して取得
    * @private
    */
   async fetchJson(path) {

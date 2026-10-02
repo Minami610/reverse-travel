@@ -1,17 +1,24 @@
 /**
  * bundle-html.js - 単一HTMLファイル生成
- * 
- * 開発用の分割ファイル（ES6モジュール）と派生JSON を統合して、
+ *
+ * 開発用の分割ファイル（ES6モジュール）と CSS・Leaflet を統合して、
  * 単一の HTML ファイルを生成（GitHub Pages デプロイ用）
- * 
+ *
  * 処理：
  * 1. index.html を読み込む
  * 2. assets/vendor/leaflet（地図ライブラリ）をインライン化
  * 3. assets/js の各スクリプトをインライン化
  * 4. assets/css をインライン化
- * 5. data/derived の JSON をJavaScriptオブジェクトリテラルとしてインライン化
- * 6. dist/index.html と docs/index.html に出力
+ * 5. dist/index.html と docs/index.html に出力
  *    （GitHub Pages は main branch / docs folder を配信元に設定）
+ *
+ * 【2026-10-02】県ごとに分割したdocs/data/配下のJSONはビルド時に埋め込まない
+ * （以前は data/derived の全JSONを単一HTMLに埋め込んでいたが、香川だけで
+ * 埋め込みデータがバンドル全体の92%＝2.7MBを占め、県が増えるほどページが
+ * 肥大化する構造だった）。gtfs-loader.jsが起動時・検索時にdocs/data/配下を
+ * fetchする構成（段階1(c)）に変わったため、このスクリプトはCSS・Leaflet・
+ * アプリJSのインライン化だけを担う。docs/data/の生成は
+ * scripts/build-pipeline/generate-site-data.js が別途行う。
  */
 
 import fs from 'fs';
@@ -28,7 +35,6 @@ const cssPath = path.join(rootDir, 'assets/css/style.css');
 const jsDir = path.join(rootDir, 'assets/js');
 const leafletCssPath = path.join(rootDir, 'assets/vendor/leaflet/leaflet.css');
 const leafletJsPath = path.join(rootDir, 'assets/vendor/leaflet/leaflet.js');
-const derivedDir = path.join(rootDir, 'data/derived');
 const distDir = path.join(rootDir, 'dist');
 const distIndexPath = path.join(distDir, 'index.html');
 const docsDir = path.join(rootDir, 'docs');
@@ -79,19 +85,15 @@ async function bundleHTML() {
       ''
     );
 
-    // 5. 派生JSONをインライン化
-    console.log('💾 派生データをインライン化中...');
-    const inlineDataScript = await generateInlineDataScript(derivedDir);
-
-    // 6. JavaScriptをインライン化
+    // 5. JavaScriptをインライン化
     console.log('⚙️  JavaScriptをインライン化中...');
     const inlineJSScript = await generateInlineJSScript(jsDir);
 
-    // 7. body 終了タグ直前に<script>を追加
-    const combinedScript = `<script>\n${inlineDataScript}\n${inlineJSScript}\n</script>`;
+    // 6. body 終了タグ直前に<script>を追加
+    const combinedScript = `<script>\n${inlineJSScript}\n</script>`;
     html = html.replace('</body>', `  ${combinedScript}\n</body>`);
 
-    // 8. dist/index.html に保存
+    // 7. dist/index.html に保存
     fs.writeFileSync(distIndexPath, html);
 
     const fileSize = fs.statSync(distIndexPath).size;
@@ -121,119 +123,6 @@ async function bundleHTML() {
     console.error('❌ バンドル失敗:', error);
     process.exit(1);
   }
-}
-
-/**
- * spots-by-station.json の健全性チェック。
- *
- * 【背景】旧スポット収集パイプライン（generate-spots.json.js）や
- * refresh-and-normalize-spots.js を誤って実行すると、本番配信中のデータ
- * （新パイプライン=generate-spots-by-region.js産）より明確に劣化した
- * データで上書きされる。両スクリプトはCLAUDE.mdのルールに従い実行時に
- * 即座にエラーで止まるようにしたが、それとは別に「壊れたデータのまま
- * バンドルしてしまう」経路（例：手動でファイルを差し替えた等）も塞ぐため、
- * バンドル時にも構造とデータの健全性を検証する。
- * - spotsIndex/spots/stations を持つ新形式（インデックス化済み）であること
- *   （旧形式は{spots:{qid:詳細}, stations:{...}}でspotsIndexを持たない）
- * - すべてのスポットに sitelinks が設定されていること
- *   （未設定＝旧パイプライン産の証拠。spot-finder.jsの足切りフィルタが
- *   sitelinks===undefinedを「通す」判定にしているため、無言で無効化される）
- * - 停留所に紐づくスポット参照の総数が0でないこと
- *   （空データでの上書きを検出する。過去に実際に発生した事故）
- */
-function validateSpotsData(filePath) {
-  const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-
-  if (!Array.isArray(data.spotsIndex) || !Array.isArray(data.spots) || typeof data.stations !== 'object') {
-    throw new Error(
-      `spots-by-station.json が新形式（spotsIndex/spots/stations）ではありません。` +
-      `旧パイプライン（generate-spots.json.js等）で上書きされた可能性があります。`
-    );
-  }
-
-  const missingSitelinks = data.spots.filter((s) => s.sitelinks === undefined).length;
-  if (missingSitelinks > 0) {
-    throw new Error(
-      `spots-by-station.json 内の ${missingSitelinks}/${data.spots.length} 件のスポットに ` +
-      `sitelinks がありません。旧パイプライン（sitelinksを取得しない）で生成された疑いがあります。` +
-      `spot-finder.jsの足切りフィルタが無言で無効化されるため、このままバンドルしません。`
-    );
-  }
-
-  const totalRefs = Object.values(data.stations).reduce((sum, arr) => sum + arr.length, 0);
-  if (totalRefs === 0) {
-    throw new Error(
-      `spots-by-station.json の停留所に紐づくスポット参照が0件です。空データでの上書きの疑いがあります。`
-    );
-  }
-
-  console.log(
-    `  ✅ spots-by-station.json 健全性チェックOK（スポット${data.spots.length}件、駅参照${totalRefs}件、sitelinks欠落0件）`
-  );
-}
-
-/**
- * 派生データをJavaScriptオブジェクトリテラルとしてインライン化
- */
-async function generateInlineDataScript(derivedDir) {
-  const files = {
-    'fare-lookup-tables.json': 'EMBEDDED_FARE_DATA',
-    'stops-metadata.json': 'EMBEDDED_STOPS_METADATA',
-    'stations.json': 'EMBEDDED_STATIONS',
-    'route-info.json': 'EMBEDDED_ROUTE_INFO',
-    'route-details.json': 'EMBEDDED_ROUTE_DETAILS',
-    'spots-by-station.json': 'EMBEDDED_SPOTS_BY_STATION',
-    'data-sources.json': 'EMBEDDED_DATA_SOURCES',
-  };
-
-  let script = '// ========== 埋め込みデータ ==========\n';
-
-  for (const [filename, varName] of Object.entries(files)) {
-    const filePath = path.join(derivedDir, filename);
-
-    if (!fs.existsSync(filePath)) {
-      if (filename === 'spots-by-station.json') {
-        // スポットデータは他の派生データと違い「なければ空でもアプリは一応動く」
-        // ものではなく、検索結果が常に0件になる致命的な欠落。CLAUDE.mdの
-        // 「必須の生成物は不在時にエラーで停止させる」に従い、警告で済ませず止める。
-        // 【2026-09-29】generate-spots-by-region.jsにはCLIの入口（generateSpotsForRegion()
-        // をエクスポートしているだけ）がまだない。案内できる再生成手順が実在しないため、
-        // 存在しない手順を案内しない（今回の一連の事故も「書かれていることと実際が
-        // 違った」ことが原因のため、同じ轍を踏まない）。
-        throw new Error(
-          `${filename} が見つかりません。現時点ではこのファイルを再生成する手段がありません` +
-          `（generate-spots-by-region.jsはCLIから直接実行できず、都道府県単位のオーケストレーション` +
-          `（build-prefecture.js想定、未実装）を段階1で作るまで待つ必要があります）。` +
-          `dist/index.htmlやdocs/index.htmlに埋め込み済みのデータから復元するか、既存の` +
-          `data/derived/spots-by-station.jsonのバックアップを使ってください。`
-        );
-      }
-      console.warn(`  ⚠️  ${filename} が見つかりません（スキップ）`);
-      script += `window.${varName} = {};\n`;
-      continue;
-    }
-
-    if (filename === 'spots-by-station.json') {
-      validateSpotsData(filePath);
-    }
-
-    // JSON.parse→JSON.stringifyで必ず圧縮してから埋め込む。入力ファイルが
-    // pretty-print（インデント付き）で保存されていた場合、そのまま埋め込むと
-    // 本番HTMLが無駄に肥大化する（実測: 整形済みのまま埋め込んだ結果、
-    // dist/index.htmlが約700KB余分に膨らんだ事故があった）。入力ファイルの
-    // 書き方に依存しない安全な埋め込み方にする。
-    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-    script += `window.${varName} = ${JSON.stringify(parsed)};\n`;
-  }
-
-  // spot-ranking-config.json もインライン化（他と同様、必ず圧縮してから埋め込む）
-  const spotConfigPath = path.join(__dirname, '../config/spot-ranking-config.json');
-  if (fs.existsSync(spotConfigPath)) {
-    const spotConfig = JSON.parse(fs.readFileSync(spotConfigPath, 'utf-8'));
-    script += `window.EMBEDDED_SPOT_RANKING_CONFIG = ${JSON.stringify(spotConfig)};\n`;
-  }
-
-  return script;
 }
 
 /**

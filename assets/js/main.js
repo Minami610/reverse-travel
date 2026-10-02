@@ -29,7 +29,7 @@ class ReverseTravel {
     this.currentSortOrder = 'recommended';
 
     this.initUI();
-    this.loadData();
+    this.initStationIndex();
   }
 
   initUI() {
@@ -158,20 +158,19 @@ class ReverseTravel {
 
   /**
    * フィード出典一覧（#about-feed-list）を、ビルド時生成の
-   * data-sources.json（generate-data-sources-manifest.js参照）から描画する。
-   * ここに固定文言をハードコードしない。実際に使ったフィードの情報だけを
-   * そのまま表示することで、表示内容と実データの食い違いを構造的に防ぐ。
+   * docs/data/national/data-sources.json（generate-site-data.jsの
+   * generateNationalDataSources()参照）から描画する。ここに固定文言を
+   * ハードコードしない。実際に使ったフィードの情報だけをそのまま表示することで、
+   * 表示内容と実データの食い違いを構造的に防ぐ。
    *
-   * 本番ビルドは window.EMBEDDED_DATA_SOURCES に埋め込み済み（同期）。
-   * 開発モード（index.htmlを直接開く場合）はデータが埋め込まれないため
-   * fetchでフォールバックする（gtfs-loader.js の開発モード分岐と同じ考え方）。
+   * 【2026-10-02】県ごとにデータを分割した段階1(c)により、ページ起動直後
+   * （＝まだどの県のデータもロードしていない状態）でも出典画面を開ける必要がある。
+   * 「今ロード済みの県」のdata-sources.jsonではなく、全県分を統合した
+   * 全国版（generateNationalDataSources()が事業者IDで重複排除して生成）を
+   * 常に表示する。
    */
   renderDataSources() {
-    if (typeof window.EMBEDDED_DATA_SOURCES !== 'undefined') {
-      this.populateDataSources(window.EMBEDDED_DATA_SOURCES);
-      return;
-    }
-    fetch('data/derived/data-sources.json')
+    fetch('data/national/data-sources.json')
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
       .then((data) => this.populateDataSources(data))
       .catch((error) => {
@@ -281,15 +280,17 @@ class ReverseTravel {
     this.elements.budgetIncrement.disabled = value >= max;
   }
 
-  async loadData() {
+  /**
+   * 起動時に一度だけ、全国の軽量駅一覧（docs/data/national/station-index.json）を
+   * ロードする。出発駅のオートコンプリートはこれだけで動く。県ごとのフルデータ
+   * （運賃・経路・スポット等）は、出発駅が決まってからperformSearch()内で
+   * ロードする（loadPrefecturesForDeparture参照）。
+   */
+  async initStationIndex() {
     try {
-      this.data = await this.loader.loadAll();
-      this.fareCalc = new FareCalculator(this.data);
-      this.spotFinder = new SpotFinder(this.data);
-      this.routeFormatter = new RouteFormatter(this.data.routeInfo, this.data.routeDetails, this.data.stations);
-      console.log('✅ 全データロード完了');
+      await this.loader.loadStationIndex();
     } catch (error) {
-      console.error('❌ データロード失敗:', error);
+      console.error('❌ 駅一覧ロード失敗:', error);
       this.dataLoadFailed = true;
       // #results-container は検索前は非表示のままなので、エラー表示自体を
       // 隠さないよう明示的に表示状態へ切り替える
@@ -299,22 +300,37 @@ class ReverseTravel {
     }
   }
 
+  /**
+   * 出発駅の都道府県＋隣接都道府県のフルデータをロードし、FareCalculator等を
+   * 作り直す。既にロード済みの県はGTFSLoader側でスキップされるため、
+   * 同じ県からの再検索では実質何もフェッチしない。
+   */
+  async loadPrefecturesForDeparture(prefCode) {
+    const adjacent = this.loader.prefectureAdjacency?.[String(prefCode).padStart(2, '0')] || [];
+    this.data = await this.loader.loadPrefectures([prefCode, ...adjacent]);
+    this.fareCalc = new FareCalculator(this.data);
+    this.spotFinder = new SpotFinder(this.data);
+    this.routeFormatter = new RouteFormatter(this.data.routeInfo, this.data.routeDetails, this.data.stations);
+  }
+
   showDepartureSuggestions(input) {
-    if (!input || !this.data) {
+    if (!input || !this.loader.stationIndex) {
       this.elements.departureSuggestions.innerHTML = '';
       return;
     }
 
-    // プラットフォーム単位のstop_idではなく、駅ID単位で候補を出す。
-    // 検索・表示は display_name で行うが、選択後に内部で使う識別子は
-    // 駅名文字列ではなく安定した駅ID（同名衝突の心配がない）にする。
-    const entries = Object.entries(this.data.stations || {});
-    const filtered = entries
-      .filter(([, station]) => station.display_name.toLowerCase().includes(input.toLowerCase()))
+    // station-index.jsonは[表示名, 県コード, 県内通し番号]の軽量配列（駅ID・座標は
+    // 持たない）。県コード・通し番号はデータ属性に積んでおき、検索実行時
+    // （performSearch）に該当県のフルデータをロードしてから実際のstation_idへ解決する。
+    const lower = input.toLowerCase();
+    const filtered = this.loader.stationIndex
+      .filter((entry) => entry[0].toLowerCase().includes(lower))
       .slice(0, 10);
 
     const html = filtered
-      .map(([stationId, station]) => `<div class="suggestion-item" data-station-id="${stationId}" data-station-name="${station.display_name}">${station.display_name}</div>`)
+      .map(([name, prefCode, localIndex]) =>
+        `<div class="suggestion-item" data-pref-code="${prefCode}" data-local-index="${localIndex}" data-station-name="${name}">${name}</div>`
+      )
       .join('');
 
     this.elements.departureSuggestions.innerHTML = html;
@@ -322,38 +338,47 @@ class ReverseTravel {
     // クリックリスナー
     this.elements.departureSuggestions.querySelectorAll('.suggestion-item').forEach(item => {
       item.addEventListener('click', (e) => {
-        const stationId = e.target.getAttribute('data-station-id');
+        const prefCode = e.target.getAttribute('data-pref-code');
+        const localIndex = e.target.getAttribute('data-local-index');
         const stationName = e.target.getAttribute('data-station-name');
         this.elements.departureInput.value = stationName;
-        this.elements.departureInput.dataset.stationId = stationId;
+        this.elements.departureInput.dataset.prefCode = prefCode;
+        this.elements.departureInput.dataset.localIndex = localIndex;
+        delete this.elements.departureInput.dataset.stationId;
         this.elements.departureSuggestions.innerHTML = '';
       });
     });
   }
 
   async performSearch() {
-    if (this.dataLoadFailed || !this.data) {
+    if (this.dataLoadFailed || !this.loader.stationIndex) {
       alert('データの読み込みに失敗しました。ページを再読み込みしてください。');
       return;
     }
 
-    const stationId = this.elements.departureInput.dataset.stationId;
+    const prefCode = this.elements.departureInput.dataset.prefCode;
+    const localIndex = this.elements.departureInput.dataset.localIndex;
     const budget = parseInt(this.elements.budgetInput.value, 10);
 
-    if (!stationId || !budget) {
+    if (!prefCode || localIndex === undefined || !budget) {
       alert('出発駅と予算を選択してください');
       return;
     }
 
-    // キャッシュチェック（メモリ上のMapのみ。ページを離れると消える軽量キャッシュで足りる）
-    const cacheKey = `route_${stationId}_${budget}`;
-    if (this.cache.has(cacheKey)) {
-      const cached = this.cache.get(cacheKey);
-      this.displayResults(cached.spots, stationId, cached.reachableCount);
-      return;
-    }
-
     try {
+      // 出発駅の県＋隣接県のフルデータをロード（既にロード済みなら即return）してから、
+      // 県内通し番号から実際のstation_idを解決する。
+      await this.loadPrefecturesForDeparture(prefCode);
+      const stationId = this.loader.resolveStationId(prefCode, parseInt(localIndex, 10));
+
+      // キャッシュチェック（メモリ上のMapのみ。ページを離れると消える軽量キャッシュで足りる）
+      const cacheKey = `route_${stationId}_${budget}`;
+      if (this.cache.has(cacheKey)) {
+        const cached = this.cache.get(cacheKey);
+        this.displayResults(cached.spots, stationId, cached.reachableCount);
+        return;
+      }
+
       // 到達可能な駅を計算
       const reachableStations = await this.fareCalc.calculateReachable(stationId, budget);
       console.log('到達可能駅:', reachableStations);

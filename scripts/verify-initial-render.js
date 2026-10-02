@@ -19,16 +19,66 @@
  * 効いているか」「要素が実際にDOM上に存在するか」まで。実際に何px描画されるかは
  * 引き続きブラウザでの確認が必要。
  * 画面幅（PC/スマホ）はwindow.matchMediaをスタブして両パターンを検証する。
+ *
+ * 【2026-10-02】県ごとにデータを分割した段階1(c)により、本番ページは起動時・
+ * 検索時にdocs/data/配下をfetchする（単一HTMLへの埋め込みをやめた）。jsdomは
+ * windowにfetchを実装していないため、docs/配下のファイルをそのまま返す
+ * 簡易fetchシム（stubFetch）を用意する。また、window.EMBEDDED_STATIONSが
+ * 無くなったため、出発駅の選択はハードコードではなく実際のオートコンプリート
+ * （入力→候補クリック）を操作して検証する（waitForSuggestion）。
  */
 
 import fs from 'fs';
 import path from 'path';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { fileURLToPath } from 'url';
-import { assertBundleFresh } from './check-bundle-freshness.js';
+import { assertBundleFresh, assertSiteDataFresh } from './check-bundle-freshness.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distIndexPath = path.join(__dirname, '../dist/index.html');
+const docsDir = path.join(__dirname, '../docs');
+
+/**
+ * window.fetch のシム。gtfs-loader.js・main.js は常に相対パス文字列
+ * （例: "data/national/station-index.json"）でfetchを呼ぶため、
+ * docsDir を基準にそのままファイルを読む。本番のGitHub Pagesでは
+ * docs/ がサイトルートとして配信されるため、相対パスの解決は一致する。
+ * ファイルが無い場合（未ビルドの隣接県など）はok:false/404を返し、
+ * gtfs-loader.jsのグレースフルスキップ処理をそのまま検証できるようにする。
+ */
+function stubFetch(window) {
+  window.fetch = async (url) => {
+    const relPath = String(url).replace(/^\//, '');
+    const filePath = path.join(docsDir, relPath);
+    if (!fs.existsSync(filePath)) {
+      return { ok: false, status: 404, json: async () => { throw new Error(`stubFetch: ${relPath} not found`); } };
+    }
+    const text = fs.readFileSync(filePath, 'utf-8');
+    return { ok: true, status: 200, json: async () => JSON.parse(text) };
+  };
+}
+
+/**
+ * 出発駅のオートコンプリートを実際に操作し、候補アイテムを取得する。
+ * loadStationIndex()（起動時の非同期fetch）が完了するまでは候補が
+ * 出ないため、完了するまで入力イベントをポーリングで再送する。
+ * @param {string} inputText - 入力欄に入れる文字列（候補を絞り込む）
+ * @param {string} exactName - 候補の中からdata-station-nameで一致させる表示名
+ */
+async function waitForSuggestion(doc, window, inputText, exactName, timeoutMs = 8000) {
+  const departureInput = doc.getElementById('departure-input');
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    departureInput.value = inputText;
+    departureInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+    const item = [...doc.querySelectorAll('.suggestion-item')].find(
+      (el) => el.getAttribute('data-station-name') === exactName
+    );
+    if (item) return item;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return null;
+}
 
 function stubMatchMedia(window, matches) {
   window.matchMedia = (query) => ({
@@ -70,13 +120,18 @@ async function checkVisible(html, matches, label) {
   });
   const { window } = dom;
   stubMatchMedia(window, matches);
+  stubFetch(window);
 
   window.addEventListener('error', (e) => {
     errors.push(e.error ? (e.error.stack || e.error.message) : e.message);
   });
 
   // main.js は DOMContentLoaded を待って起動する。jsdomは非同期でイベントを
-  // 発火するため、発火後に少し待ってからDOMの状態を確認する。
+  // 発火するため、発火後にDOMの状態を確認する。出典・使い方の表示内容は
+  // fetch（stubFetch経由でdocs/を読む）で非同期に描画されるため、
+  // 「読み込み中」のプレースホルダーが消えるまでポーリングで待つ
+  // （埋め込みデータ時代の固定50ms待ちでは、fetchのPromise解決前に
+  // チェックしてしまう可能性があるため）。
   await new Promise((resolve) => {
     const done = () => setTimeout(resolve, 50);
     if (window.document.readyState === 'complete') {
@@ -87,6 +142,8 @@ async function checkVisible(html, matches, label) {
   });
 
   const doc = window.document;
+  await waitFor(() => !/読み込み中/.test(doc.getElementById('app-footer')?.textContent || ''), 5000);
+
   const searchForm = doc.getElementById('search-form');
 
   console.log(`\n=== ${label}（matchMedia matches=${matches}） ===`);
@@ -244,6 +301,7 @@ async function checkResultCards(html) {
   });
   const { window } = dom;
   stubMatchMedia(window, true);
+  stubFetch(window);
   window.addEventListener('error', (e) => {
     errors.push(e.error ? (e.error.stack || e.error.message) : e.message);
   });
@@ -258,20 +316,17 @@ async function checkResultCards(html) {
 
   console.log('\n=== 検索実行後の結果カード検証 ===');
 
-  // 実際のユーザー操作を模して検索を実行する（出発駅・予算をセットしてフォーム送信）。
-  // 駅IDは名前ではなく安定IDなので、display_nameから逆引きして取得する
-  // （ハードコードするとクラスタリングの実装詳細が変わるたびに壊れるため）。
-  const departureInput = doc.getElementById('departure-input');
-  const takamatsuId = Object.entries(window.EMBEDDED_STATIONS || {}).find(
-    ([, s]) => s.display_name === '高松築港'
-  )?.[0];
-  if (!takamatsuId) {
-    console.log('❌ 検証用の出発駅「高松築港」がEMBEDDED_STATIONSに見つかりません');
+  // 実際のユーザー操作を模して検索を実行する（出発駅名を入力→オートコンプリート
+  // の候補をクリック→予算を設定→フォーム送信）。段階1(c)でwindow.EMBEDDED_STATIONS
+  // が無くなったため、駅IDを直接セットする手段がない。実際の操作フロー自体を
+  // 検証できる利点もある（候補クリック時のdataset設定ロジックも通る）。
+  const takamatsuItem = await waitForSuggestion(doc, window, '高松築港', '高松築港');
+  if (!takamatsuItem) {
+    console.log('❌ 検証用の出発駅「高松築港」の候補が見つかりません（駅一覧ロード失敗の可能性）');
     window.close();
     return false;
   }
-  departureInput.value = '高松築港';
-  departureInput.dataset.stationId = takamatsuId;
+  takamatsuItem.dispatchEvent(new window.Event('click', { bubbles: true }));
   doc.getElementById('budget-input').value = '1000';
   doc.getElementById('search-form').dispatchEvent(
     new window.Event('submit', { bubbles: true, cancelable: true })
@@ -386,10 +441,8 @@ async function checkResultCards(html) {
  * このチェック自体をスキップする（0件になる特定の組み合わせに依存しすぎないため）。
  */
 async function checkNoResultsMessage(doc, window) {
-  const kuribayashiId = Object.entries(window.EMBEDDED_STATIONS || {}).find(
-    ([, s]) => s.display_name === 'ＪＲ栗林駅'
-  )?.[0];
-  if (!kuribayashiId) {
+  const kuribayashiItem = await waitForSuggestion(doc, window, 'ＪＲ栗林駅', 'ＪＲ栗林駅');
+  if (!kuribayashiItem) {
     console.log('ℹ️  0件案内文チェック: 検証用の出発駅「ＪＲ栗林駅」が見つからないためスキップします');
     return true;
   }
@@ -401,9 +454,7 @@ async function checkNoResultsMessage(doc, window) {
   // 直前の内容を記録し、内容が変化したことをもって新しい検索の完了とみなす。
   const beforeHtml = doc.getElementById('results-list').innerHTML;
 
-  const departureInput = doc.getElementById('departure-input');
-  departureInput.value = 'ＪＲ栗林駅';
-  departureInput.dataset.stationId = kuribayashiId;
+  kuribayashiItem.dispatchEvent(new window.Event('click', { bubbles: true }));
   doc.getElementById('budget-input').value = '400';
   doc.getElementById('search-form').dispatchEvent(
     new window.Event('submit', { bubbles: true, cancelable: true })
@@ -460,6 +511,7 @@ async function main() {
     process.exit(1);
   }
   assertBundleFresh('verify-render');
+  assertSiteDataFresh('verify-render');
   const html = fs.readFileSync(distIndexPath, 'utf-8');
 
   const desktopOk = await checkVisible(html, true, 'PC幅相当');
