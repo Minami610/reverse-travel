@@ -847,6 +847,13 @@ header p {
   padding: 2rem;
 }
 
+.loading {
+  text-align: center;
+  color: var(--color-text-sub);
+  font-size: 1.1rem;
+  padding: 2rem;
+}
+
 /* ========================================
    フッター（必須表示3点。アプリシェル最下段に常時表示）
    ======================================== */

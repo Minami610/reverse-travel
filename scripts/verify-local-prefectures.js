@@ -309,7 +309,16 @@ async function searchFromFirstStation(prefCode) {
   doc.getElementById('budget-input').value = '1000';
   doc.getElementById('search-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
 
-  const rendered = await waitFor(() => doc.getElementById('results-list').children.length > 0, 15000);
+  // 【2026-10-03追記】performSearch()が県データのfetch待ちの間に一時的な
+  // 「データを読み込んでいます…」プレースホルダーを結果欄へ挿入するようになったため
+  // （main.js参照）、「children.length > 0」だけでは検索完了前のプレースホルダー
+  // 挿入を検索完了と誤認する。スポットカードか0件案内文のどちらかが実際に
+  // 描画された状態を完了条件にする。
+  const rendered = await waitFor(
+    () => !!(doc.getElementById('results-list').querySelector('.spot-card') ||
+      doc.getElementById('results-list').querySelector('.no-results')),
+    15000
+  );
   const elapsedMs = Date.now() - t0;
 
   if (errors.length > 0) {

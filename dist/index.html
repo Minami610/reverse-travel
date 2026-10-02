@@ -1527,6 +1527,13 @@ header p {
   padding: 2rem;
 }
 
+.loading {
+  text-align: center;
+  color: var(--color-text-sub);
+  font-size: 1.1rem;
+  padding: 2rem;
+}
+
 /* ========================================
    フッター（必須表示3点。アプリシェル最下段に常時表示）
    ======================================== */
@@ -3211,7 +3218,11 @@ class ReverseTravel {
     this.currentSortOrder = 'recommended';
 
     this.initUI();
-    this.initStationIndex();
+    // initStationIndex()のPromiseを保持し、読み込み中にperformSearch()が
+    // 呼ばれた場合はこれをawaitしてから続行する（「読み込み中」と「失敗」を
+    // 区別するため。以前はthis.loader.stationIndexがまだnullというだけで
+    // 「読み込みに失敗しました」を出してしまっていた）。
+    this.stationIndexPromise = this.initStationIndex();
   }
 
   initUI() {
@@ -3241,6 +3252,11 @@ class ReverseTravel {
     this.initModal(this.elements.aboutBtn, this.elements.aboutModal, this.elements.aboutModalClose);
     this.initModal(this.elements.howtoBtn, this.elements.howtoModal, this.elements.howtoModalClose);
     this.renderDataSources();
+
+    // 全国の軽量駅一覧（起動時に一度だけfetch）の読み込みが終わるまで、
+    // 入力欄のプレースホルダーで読み込み中であることを伝える（入力自体は
+    // 最初から可能）。読み込み完了・失敗時にinitStationIndex()が元に戻す。
+    this.elements.departureInput.placeholder = '駅の一覧を読み込んでいます…';
 
     this.layoutController = new LayoutController({
       mapEl: document.getElementById('spots-map'),
@@ -3501,9 +3517,15 @@ class ReverseTravel {
   async initStationIndex() {
     try {
       await this.loader.loadStationIndex();
+      this.elements.departureInput.placeholder = '駅名を入力...';
+      // 読み込み中に何か入力されていた場合、今ロードされた駅一覧で候補を
+      // 出し直す（入力時点ではthis.loader.stationIndexがまだnullで
+      // 候補が出ていなかったため）。
+      this.showDepartureSuggestions(this.elements.departureInput.value);
     } catch (error) {
       console.error('❌ 駅一覧ロード失敗:', error);
       this.dataLoadFailed = true;
+      this.elements.departureInput.placeholder = '駅名を入力...';
       // #results-container は検索前は非表示のままなので、エラー表示自体を
       // 隠さないよう明示的に表示状態へ切り替える
       this.elements.appLayout.classList.add('has-results');
@@ -3569,10 +3591,36 @@ class ReverseTravel {
     });
   }
 
+  /**
+   * 検索実行中（県データのfetch待ち）に結果欄へ出す一時メッセージ。
+   * displayResults()と同じ表示切り替え（data-view/has-results）を使い、
+   * 検索前のレイアウトのまま隠れて見えなくなることを防ぐ。
+   */
+  showLoadingMessage() {
+    this.elements.appLayout.setAttribute('data-view', 'results');
+    this.elements.appLayout.classList.add('has-results');
+    this.elements.resultsList.innerHTML = '<p class="loading">データを読み込んでいます…</p>';
+  }
+
+  /**
+   * 【2026-10-03修正】以前は`!this.loader.stationIndex`（駅一覧がまだ読み込み中、
+   * ＝失敗ではない）を「読み込みに失敗しました」と同じ扱いにしていた。
+   * 「読み込み中」と「失敗」を区別し、読み込み中なら完了を待って自動的に
+   * 検索を続行する（もう一度ボタンを押させない）。失敗の文言は実際に
+   * fetchが失敗したとき（dataLoadFailed===true）だけ出す。
+   */
   async performSearch() {
-    if (this.dataLoadFailed || !this.loader.stationIndex) {
+    if (this.dataLoadFailed) {
       alert('データの読み込みに失敗しました。ページを再読み込みしてください。');
       return;
+    }
+    if (!this.loader.stationIndex) {
+      this.showLoadingMessage();
+      await this.stationIndexPromise;
+      if (this.dataLoadFailed) {
+        alert('データの読み込みに失敗しました。ページを再読み込みしてください。');
+        return;
+      }
     }
 
     const prefCode = this.elements.departureInput.dataset.prefCode;
@@ -3584,20 +3632,28 @@ class ReverseTravel {
       return;
     }
 
+    // 出発駅の県＋隣接県のフルデータをロード（既にロード済みなら実質待ち時間なし）してから、
+    // 県内通し番号から実際のstation_idを解決する。ロード中は結果欄に専用メッセージを出す。
+    let stationId;
     try {
-      // 出発駅の県＋隣接県のフルデータをロード（既にロード済みなら即return）してから、
-      // 県内通し番号から実際のstation_idを解決する。
+      this.showLoadingMessage();
       await this.loadPrefecturesForDeparture(prefCode);
-      const stationId = this.loader.resolveStationId(prefCode, parseInt(localIndex, 10));
+      stationId = this.loader.resolveStationId(prefCode, parseInt(localIndex, 10));
+    } catch (error) {
+      console.error('県データの読み込み失敗:', error);
+      alert('データの読み込みに失敗しました。ページを再読み込みしてください。');
+      return;
+    }
 
-      // キャッシュチェック（メモリ上のMapのみ。ページを離れると消える軽量キャッシュで足りる）
-      const cacheKey = `route_${stationId}_${budget}`;
-      if (this.cache.has(cacheKey)) {
-        const cached = this.cache.get(cacheKey);
-        this.displayResults(cached.spots, stationId, cached.reachableCount);
-        return;
-      }
+    // キャッシュチェック（メモリ上のMapのみ。ページを離れると消える軽量キャッシュで足りる）
+    const cacheKey = `route_${stationId}_${budget}`;
+    if (this.cache.has(cacheKey)) {
+      const cached = this.cache.get(cacheKey);
+      this.displayResults(cached.spots, stationId, cached.reachableCount);
+      return;
+    }
 
+    try {
       // 到達可能な駅を計算
       const reachableStations = await this.fareCalc.calculateReachable(stationId, budget);
       console.log('到達可能駅:', reachableStations);

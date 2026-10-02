@@ -134,9 +134,15 @@ function checkPublishedPrefecturesConsistency() {
  * ファイルが無い場合（未ビルドの隣接県など）はok:false/404を返し、
  * gtfs-loader.jsのグレースフルスキップ処理をそのまま検証できるようにする。
  */
-function stubFetch(window) {
+function stubFetch(window, { delayMsForPrefData = 0 } = {}) {
   window.fetch = async (url) => {
     const relPath = String(url).replace(/^\//, '');
+    // 県データ（data/pref/配下）の読み込み中表示を検証するため、意図的に
+    // 遅延させられるようにする（delayMsForPrefData、checkLoadingStates参照）。
+    // 駅一覧（national/配下）は遅延させない＝オートコンプリート自体の検証を妨げない。
+    if (delayMsForPrefData > 0 && /^data\/pref\//.test(relPath)) {
+      await new Promise((r) => setTimeout(r, delayMsForPrefData));
+    }
     const filePath = path.join(docsDir, relPath);
     if (!fs.existsSync(filePath)) {
       return { ok: false, status: 404, json: async () => { throw new Error(`stubFetch: ${relPath} not found`); } };
@@ -351,6 +357,22 @@ async function checkVisible(html, matches, label) {
   return formOk && footerOk && modalOk && howtoOk;
 }
 
+/**
+ * #results-list が「検索結果の最終状態」（スポットカード、または0件案内文）に
+ * なっているかを判定する。
+ * 【背景】performSearch()は県データのfetch待ちの間、結果欄に一時的な
+ * 「データを読み込んでいます…」プレースホルダー（<p class="loading">）を
+ * 挿入するようになった（2026-10-03）。「children.length > 0」や
+ * 「innerHTMLが変化したか」だけを完了条件にすると、この一時プレースホルダーの
+ * 挿入を検索完了と誤認し、実際の結果が描画される前に判定してしまう
+ * （実際にこのチェック自体がこの誤検出を起こした）。
+ */
+function resultsSettled(doc) {
+  const list = doc.getElementById('results-list');
+  if (!list) return false;
+  return !!(list.querySelector('.spot-card') || list.querySelector('.no-results'));
+}
+
 /** 条件が満たされるまでポーリングする（jsdomにはMutationObserverの完全な非同期解決保証がないため） */
 async function waitFor(predicate, timeoutMs, intervalMs = 50) {
   const start = Date.now();
@@ -420,10 +442,7 @@ async function checkResultCards(html) {
     new window.Event('submit', { bubbles: true, cancelable: true })
   );
 
-  const rendered = await waitFor(
-    () => doc.getElementById('results-list').children.length > 0,
-    8000
-  );
+  const rendered = await waitFor(() => resultsSettled(doc), 8000);
 
   if (errors.length > 0) {
     console.log('⚠️  ページ実行中に発生したエラー:');
@@ -536,10 +555,12 @@ async function checkNoResultsMessage(doc, window) {
   }
 
   // 直前の検索（高松築港）の結果がすでに#results-listに残っているため、
-  // 「children.length > 0」だけを条件にすると新しい検索の完了を待たずに
-  // 即座に真になってしまう（実際にこれでレースコンディションが起きた：
-  // 新しい検索が終わる前に古いカードのままチェックしてしまっていた）。
-  // 直前の内容を記録し、内容が変化したことをもって新しい検索の完了とみなす。
+  // 「内容が変化したか」だけでは「データを読み込んでいます…」の一時
+  // プレースホルダーへの変化で早期にtrueになってしまう。「前回から内容が
+  // 変化していて、かつ最終状態（スポットカードか0件案内文）になっている」の
+  // 両方を新しい検索の完了条件にする（2026-10-03：読み込み中プレースホルダー
+  // 導入に伴う修正。古いカードのままの誤判定・プレースホルダーでの早期判定の
+  // 両方を防ぐ）。
   const beforeHtml = doc.getElementById('results-list').innerHTML;
 
   kuribayashiItem.dispatchEvent(new window.Event('click', { bubbles: true }));
@@ -548,7 +569,10 @@ async function checkNoResultsMessage(doc, window) {
     new window.Event('submit', { bubbles: true, cancelable: true })
   );
 
-  const rendered = await waitFor(() => doc.getElementById('results-list').innerHTML !== beforeHtml, 8000);
+  const rendered = await waitFor(
+    () => doc.getElementById('results-list').innerHTML !== beforeHtml && resultsSettled(doc),
+    8000
+  );
   if (!rendered) {
     console.log('❌ 0件案内文チェック: 検索後も #results-list の内容が更新されませんでした（タイムアウト）');
     return false;
@@ -579,7 +603,10 @@ async function checkNoResultsMessage(doc, window) {
   doc.getElementById('search-form').dispatchEvent(
     new window.Event('submit', { bubbles: true, cancelable: true })
   );
-  const rendered2 = await waitFor(() => doc.getElementById('results-list').innerHTML !== beforeHtml2, 8000);
+  const rendered2 = await waitFor(
+    () => doc.getElementById('results-list').innerHTML !== beforeHtml2 && resultsSettled(doc),
+    8000
+  );
   if (!rendered2) {
     console.log('❌ 0件案内文チェック: 案内額での再検索後も #results-list の内容が更新されませんでした（タイムアウト）');
     return false;
@@ -591,6 +618,81 @@ async function checkNoResultsMessage(doc, window) {
   }
   console.log(`✅ 0件案内文チェック: 案内した往復¥${suggestedBudget}で実際に検索すると${cardsAtSuggestedBudget}件のスポットが出ました`);
   return true;
+}
+
+/**
+ * 県データ（data/pref/配下）の読み込みをわざと遅延させ、検索ボタンを押した
+ * 直後（読み込み完了前）に以下を確認する：
+ * 1. 「データの読み込みに失敗しました」の警告（alert）が出ないこと
+ *    （以前は!this.loader.stationIndexを「失敗」と誤判定していた不具合の再発防止）
+ * 2. 結果欄に「データを読み込んでいます…」が表示されること
+ * 遅延が解けたあとは、もう一度ボタンを押さなくても検索結果が出ることも確認する。
+ */
+async function checkLoadingState(html) {
+  console.log('\n=== 読み込み中の表示チェック（県データのfetchを意図的に遅延） ===');
+  const errors = [];
+  const alerts = [];
+  const DELAY_MS = 1500;
+
+  const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'dangerously', pretendToBeVisual: true });
+  const { window } = dom;
+  stubMatchMedia(window, true);
+  stubFetch(window, { delayMsForPrefData: DELAY_MS });
+  window.alert = (msg) => alerts.push(msg);
+  window.addEventListener('error', (e) => errors.push(e.error ? (e.error.stack || e.error.message) : e.message));
+
+  await new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 50);
+    if (window.document.readyState === 'complete') done();
+    else window.addEventListener('load', done);
+  });
+  const doc = window.document;
+
+  const item = await waitForSuggestion(doc, window, '高松築港', '高松築港');
+  if (!item) {
+    console.log('❌ 検証用の出発駅「高松築港」の候補が見つかりません');
+    window.close();
+    return false;
+  }
+  item.dispatchEvent(new window.Event('click', { bubbles: true }));
+  doc.getElementById('budget-input').value = '1000';
+  doc.getElementById('search-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+
+  // 遅延中（県データのfetchがまだ解決していない状態）を狙って確認する
+  await new Promise((r) => setTimeout(r, 200));
+  const duringLoadText = doc.getElementById('results-list').textContent;
+  const showsLoadingMessage = /データを読み込んでいます/.test(duringLoadText);
+  const noFailureAlertYet = alerts.length === 0;
+
+  console.log(
+    showsLoadingMessage
+      ? '✅ 読み込み中、結果欄に「データを読み込んでいます…」が表示されています'
+      : `❌ 読み込み中の結果欄の表示が想定と異なります（実際: "${duringLoadText.trim()}"）`
+  );
+  console.log(
+    noFailureAlertYet
+      ? '✅ 読み込み中に「読み込みに失敗しました」の警告は出ていません'
+      : `❌ 読み込み中にもかかわらず警告が出ました: ${JSON.stringify(alerts)}`
+  );
+
+  // 遅延が解けるのを待ち、ボタンを再度押さなくても結果が表示されることを確認する
+  const rendered = await waitFor(
+    () => doc.getElementById('results-list').querySelectorAll('.spot-card').length > 0,
+    DELAY_MS + 8000
+  );
+  console.log(
+    rendered
+      ? '✅ 読み込み完了後、再度ボタンを押さなくても検索結果が表示されました'
+      : '❌ 読み込み完了後も検索結果が表示されませんでした（タイムアウト）'
+  );
+
+  if (errors.length > 0) {
+    console.log('⚠️  ページ実行中に発生したエラー:');
+    errors.forEach((e) => console.log('  - ' + e));
+  }
+
+  window.close();
+  return showsLoadingMessage && noFailureAlertYet && rendered && errors.length === 0;
 }
 
 async function main() {
@@ -606,8 +708,9 @@ async function main() {
   const desktopOk = await checkVisible(html, true, 'PC幅相当');
   const mobileOk = await checkVisible(html, false, 'スマホ幅相当');
   const cardsOk = await checkResultCards(html);
+  const loadingStateOk = await checkLoadingState(html);
 
-  if (publishedOk && desktopOk && mobileOk && cardsOk) {
+  if (publishedOk && desktopOk && mobileOk && cardsOk && loadingStateOk) {
     console.log('\n✅ 検証成功: 初期表示・検索結果カードともに想定通りです');
   } else {
     console.error('\n❌ 検証失敗: 上記のいずれかで問題が見つかりました');
