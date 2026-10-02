@@ -13,6 +13,7 @@
     "generate-route-details": "node scripts/build-pipeline/generate-route-details.js",
     "verify-render": "node scripts/verify-initial-render.js",
     "verify-regression": "node scripts/verify-regression.js",
+    "verify-local": "node scripts/verify-local-prefectures.js",
     "test:wikidata": "node scripts/test-wikidata.js",
     "test:spot-candidates": "node scripts/test-spot-candidates.js",
     "dev": "echo 'Open index.html with Live Server'"
