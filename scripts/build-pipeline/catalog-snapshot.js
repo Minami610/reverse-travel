@@ -11,13 +11,26 @@
  * 突き合わせられるようにする。
  *
  * 【gtfs-data.jp API v2】段階1(b)で富山・石川向けに実装。実際に叩いて確認した構造：
- * - `GET /v2/organizations/{organization_id}/feeds/{feed_id}` がフィードのメタデータと
+ * - `GET /v2/feeds?pref={都道府県コード}` が、その都道府県に属する全フィードの一覧
+ *   （organization_id/feed_id・ライセンス・廃止フラグ等）を返す。
+ * - `GET /v2/organizations/{organization_id}/feeds/{feed_id}` がフィード1件分のメタデータと
  *   リビジョン一覧（gtfs_files配列）を返す。各リビジョンはrid（current/数値のプレビュー等）を持ち、
  *   rid==="current"のものが現在公開中のデータ。
  * - 現在データのダウンロードURLは `gtfs_files[].gtfs_url`
  *   （`.../files/feed.zip?uid=<gtfs_file_uid>` の形。uidはリビジョンごとに変わる）。
  * - operator.idはorganization_idとfeed_idの組から作る（gtfs-id.jsのコメント参照：
  *   feed_idは全国一意ではない。例：野々市市と内灘町が共にfeed_id="communitybus"）。
+ *
+ * 【2026-10-03修正】段階1(b)では`/v2/feeds?pref=`の存在に気づかず、富山・石川向けに
+ * Cowork承認済みの{organization_id, feed_id}一覧（富山8件・石川6件）を手書きしていた。
+ * 実際に`/v2/feeds?pref=16`を叩くと31件のフィードが存在し（富山市のコミュニティバス9件、
+ * 高岡市公営バス、射水市のきときとバス、立山町営バス、上市町営バス、魚津・黒部・滑川・
+ * 入善・朝日町・砺波市のバス、西日本JRバス名金線等）、23件が手書きの一覧から漏れていた。
+ * 石川（6件）はたまたま手書きの一覧と一致していたが、再発防止のため両県とも
+ * このAPIを一覧の唯一の情報源にする。手書きで県の一覧から外すのではなく、
+ * 取得した全件をいったん候補にしたうえで、廃止フィード（feed_is_discontinued）は
+ * 理由付きでexcluded_operatorsに回す（ライセンス・運賃データの判定は引き続き
+ * build-prefecture.js側で機械的に行う）。
  */
 import fs from 'fs';
 import path from 'path';
@@ -37,38 +50,31 @@ const DIRECT_FETCH_PREFECTURES = {
   37: { name: '香川県', configPath: targetOperatorsPath, operatorsKey: 'phase1_operators' },
 };
 
-// 都道府県コード → gtfs-data.jpの{organization_id, feed_id}一覧。
-// Cowork承認済みの構成（段階1(b)指示）をそのまま列挙する。
-// 地鉄市内電車（chitetsu/chitetsushinaidensha）は富山の構成には含めない運用も
-// できるが、「運賃は手書きしない」方針のため、ここでは敢えて含めて取得し、
-// fare-feed-check.jsの実データ判定で運賃データなしとして自動除外させる
-// （除外理由がログに残り、思い込みでの除外にならない）。
-const GTFS_DATA_JP_PREFECTURES = {
-  16: {
-    name: '富山県',
-    feeds: [
-      { organization_id: 'chitetsu', feed_id: 'chitetsushinaidensha' }, // 地鉄市内電車（運賃データなしで自動除外される想定）
-      { organization_id: 'chitetsu', feed_id: 'chitetsubus' }, // 地鉄バス
-      { organization_id: 'manyosen', feed_id: 'manyosen' }, // 万葉線
-      { organization_id: 'kaetsunou', feed_id: 'kaetsunouippan' }, // 加越能バス（一般路線）
-      { organization_id: 'kaetsunou', feed_id: 'kaetsunousekaiisan' }, // 加越能バス（世界遺産バス）
-      { organization_id: 'kaetsunou', feed_id: 'kaetsunouhimi' }, // 加越能バス（氷見市街地周遊バス）
-      { organization_id: 'nantocity', feed_id: 'nanbus' }, // 南砺市営バス
-      { organization_id: 'oyabecity', feed_id: 'oyabecitybus' }, // 小矢部市営バス
-    ],
-  },
-  17: {
-    name: '石川県',
-    feeds: [
-      { organization_id: 'hakusancity', feed_id: 'hakusan_bus_meguru' }, // 白山市コミュニティバス「めぐーる」
-      { organization_id: 'komatsucity', feed_id: 'kibagatasen' }, // 小松市 木場潟線
-      { organization_id: 'komatsucity', feed_id: 'blue' }, // 小松市 市内循環線北コース
-      { organization_id: 'komatsucity', feed_id: 'orange' }, // 小松市 市内循環線南コース
-      { organization_id: 'nonoichicity', feed_id: 'communitybus' }, // 野々市市コミュニティバス
-      { organization_id: 'uchinadatown', feed_id: 'communitybus' }, // 内灘町コミュニティバス
-    ],
-  },
+// 都道府県コード(01〜47) → 都道府県名。gtfs-data.jpの/v2/feeds APIは都道府県名を
+// 返さないため、カタログスナップショットのpref_nameに使う静的な対応表（地理的事実）。
+const PREF_NAMES_BY_CODE = {
+  1: '北海道', 2: '青森県', 3: '岩手県', 4: '宮城県', 5: '秋田県', 6: '山形県', 7: '福島県',
+  8: '茨城県', 9: '栃木県', 10: '群馬県', 11: '埼玉県', 12: '千葉県', 13: '東京都', 14: '神奈川県',
+  15: '新潟県', 16: '富山県', 17: '石川県', 18: '福井県', 19: '山梨県', 20: '長野県', 21: '岐阜県',
+  22: '静岡県', 23: '愛知県', 24: '三重県', 25: '滋賀県', 26: '京都府', 27: '大阪府', 28: '兵庫県',
+  29: '奈良県', 30: '和歌山県', 31: '鳥取県', 32: '島根県', 33: '岡山県', 34: '広島県', 35: '山口県',
+  36: '徳島県', 37: '香川県', 38: '愛媛県', 39: '高知県', 40: '福岡県', 41: '佐賀県', 42: '長崎県',
+  43: '熊本県', 44: '大分県', 45: '宮崎県', 46: '鹿児島県', 47: '沖縄県',
 };
+
+/** gtfs-data.jp APIから、指定した都道府県コードに属する全フィードの一覧を取得する */
+async function fetchFeedListFromApi(prefCode) {
+  const url = `${GTFS_DATA_JP_API_BASE}/feeds?pref=${prefCode}`;
+  const res = await fetch(url, { headers: { 'User-Agent': GTFS_DATA_JP_USER_AGENT } });
+  if (!res.ok) {
+    throw new Error(`gtfs-data.jp API エラー: HTTP ${res.status}（/v2/feeds?pref=${prefCode}）`);
+  }
+  const json = await res.json();
+  if (!Array.isArray(json.body)) {
+    throw new Error(`gtfs-data.jp API: 想定外のレスポンス形式（/v2/feeds?pref=${prefCode}）`);
+  }
+  return json.body;
+}
 
 function loadSnapshotFile() {
   if (!fs.existsSync(snapshotPath)) return { prefectures: {} };
@@ -137,21 +143,59 @@ async function fetchGtfsDataJpFeed(organizationId, feedId) {
   };
 }
 
+/**
+ * 指定した都道府県コードについて、/v2/feeds?pref= で見つかった全フィードを
+ * 候補にする。廃止フィード（feed_is_discontinued）はダウンロードを試みず、
+ * 理由付きでexcluded_operatorsに回す。残りは1件ずつ詳細取得（rid=current）を
+ * 試み、失敗したものも理由付きで除外に回す（1件の失敗で都道府県全体の
+ * ビルドを止めない）。
+ */
 async function buildGtfsDataJpEntry(prefCode) {
-  const def = GTFS_DATA_JP_PREFECTURES[prefCode];
+  const feedList = await fetchFeedListFromApi(prefCode);
+  if (feedList.length === 0) {
+    throw new Error(`都道府県コード${prefCode}: gtfs-data.jpのフィード一覧が空です（/v2/feeds?pref=${prefCode}）`);
+  }
+  const prefName = PREF_NAMES_BY_CODE[Number(prefCode)];
+  if (!prefName) {
+    throw new Error(`都道府県コード${prefCode}の名称が不明です（PREF_NAMES_BY_CODEに未登録）`);
+  }
+
   const operators = [];
-  for (const { organization_id, feed_id } of def.feeds) {
-    console.log(`   → gtfs-data.jp取得中: ${organization_id}/${feed_id}`);
-    operators.push(await fetchGtfsDataJpFeed(organization_id, feed_id));
+  const excludedOperators = [];
+
+  for (const feed of feedList) {
+    const operatorId = `${feed.organization_id}.${feed.feed_id}`;
+    if (feed.feed_is_discontinued) {
+      excludedOperators.push({
+        operator: operatorId,
+        operator_name: `${feed.organization_name} ${feed.feed_name}`,
+        reason: `gtfs-data.jp上で廃止済み（feed_is_discontinued=true${feed.feed_discontinued_date ? `、廃止日 ${feed.feed_discontinued_date}` : ''}）`,
+      });
+      continue;
+    }
+    console.log(`   → gtfs-data.jp取得中: ${operatorId}`);
+    try {
+      operators.push(await fetchGtfsDataJpFeed(feed.organization_id, feed.feed_id));
+    } catch (error) {
+      console.warn(`   ⚠️  ${operatorId}: 詳細取得に失敗したため除外します（${error.message}）`);
+      excludedOperators.push({
+        operator: operatorId,
+        operator_name: `${feed.organization_name} ${feed.feed_name}`,
+        reason: `gtfs-data.jpからの詳細取得に失敗（${error.message}）`,
+      });
+    }
   }
+
   if (operators.length === 0) {
-    throw new Error(`都道府県コード${prefCode}: gtfs-data.jpのフィード一覧が空です`);
+    throw new Error(`都道府県コード${prefCode}: 取得できたフィードが1件もありません（${excludedOperators.length}件すべて除外）`);
   }
+
   return {
     pref_code: String(prefCode),
-    pref_name: def.name,
+    pref_name: prefName,
     snapshot_date: new Date().toISOString().slice(0, 10),
     operators,
+    excluded_operators: excludedOperators,
   };
 }
 
@@ -176,15 +220,14 @@ export async function loadOrBuildCatalogSnapshot(prefCode, { force = false } = {
     console.log(
       `✅ カタログスナップショット: 都道府県コード${key}（${entry.pref_name}）を新規取得（事業者${entry.operators.length}件、取得元: direct）`
     );
-  } else if (numericCode in GTFS_DATA_JP_PREFECTURES) {
+  } else {
+    // direct以外は常にgtfs-data.jpの/v2/feeds?pref=から動的に取得する（手書きの
+    // 一覧は持たない。2026-10-03修正：以前は都道府県コードごとの手書き一覧しか
+    // 受け付けず、富山で31件中23件が一覧から漏れる事故があった）。
     entry = await buildGtfsDataJpEntry(numericCode);
     console.log(
-      `✅ カタログスナップショット: 都道府県コード${key}（${entry.pref_name}）を新規取得（フィード${entry.operators.length}件、取得元: gtfs-data.jp、rid=current）`
-    );
-  } else {
-    const known = [...Object.keys(DIRECT_FETCH_PREFECTURES), ...Object.keys(GTFS_DATA_JP_PREFECTURES)];
-    throw new Error(
-      `都道府県コード${key}のカタログ取得方法が未実装です。現時点で対応している都道府県コードは${known.join(', ')}のみです。`
+      `✅ カタログスナップショット: 都道府県コード${key}（${entry.pref_name}）を新規取得` +
+      `（フィード${entry.operators.length}件、除外${entry.excluded_operators.length}件、取得元: gtfs-data.jp、rid=current）`
     );
   }
 

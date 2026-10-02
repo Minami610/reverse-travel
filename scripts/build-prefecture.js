@@ -141,10 +141,20 @@ async function buildOnePrefecture(code, { force, acceptDiff }) {
   //    （このチェックはGTFSダウンロード前のconfig情報だけで判定できるライセンス面と、
   //    ダウンロード後でないと判定できない運賃面の2段階にまたがるため、
   //    いったん全件フェッチしてから絞り込む）
+  // 【2026-10-03修正】ライセンス不許可で外したフィードがconsole.warnだけで、
+  // 出典画面の「対象外としたデータ」に出ていなかった（手書きで一覧から消すのと
+  // 実質同じ状態だった）。catalogEntry.excluded_operators（gtfs-data.jp側で廃止・
+  // 詳細取得失敗のもの）と合わせて、理由付きで下のdata-sources.json生成に渡す。
+  const licenseExcluded = [];
   const licenseFiltered = catalogEntry.operators.filter((op) => {
     const check = checkLicenseAllowed(op);
     if (!check.allowed) {
       console.warn(`  ⚠️  ${op.name}: ライセンス許可リスト外のため取得前に除外（license_label="${op.license_label || '(未設定)'}"）`);
+      licenseExcluded.push({
+        operator: op.id,
+        operator_name: op.name,
+        reason: `ライセンス許可リスト外（license_label="${op.license_label || '未設定'}"）`,
+      });
     }
     return check.allowed;
   });
@@ -162,7 +172,10 @@ async function buildOnePrefecture(code, { force, acceptDiff }) {
   recordFetchedFeedVersions(code, feedInfos);
 
   // 3. 運賃データの有無で最終的な対象事業者を確定する（除外理由を記録）
-  const { included: operators, excluded } = filterOperators(licenseFiltered);
+  const { included: operators, excluded: fareExcluded } = filterOperators(licenseFiltered);
+  // カタログ取得段階（廃止フィード・gtfs-data.jp詳細取得失敗）・ライセンス・運賃データの
+  // 3段階すべての除外理由を1つにまとめ、出典画面の「対象外としたデータ」にそのまま出す。
+  const excluded = [...(catalogEntry.excluded_operators || []), ...licenseExcluded, ...fareExcluded];
   if (excluded.length > 0) {
     console.log(`\n⚠️  除外したフィード: ${excluded.length}件`);
     for (const e of excluded) console.log(`   - ${e.operator}: ${e.reason}`);
