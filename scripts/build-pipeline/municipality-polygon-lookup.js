@@ -12,13 +12,23 @@
  * 抜け漏れがあった。
  *
  * 「代表点に近いか」ではなく「市区町村の境界ポリゴンの中に実際に入っているか」で
- * 判定するよう、国土数値情報（国土交通省、PDL1.0＝政府標準利用規約、出典表記必須の
- * オープンデータ）の行政区域データ(N03)を使う。ODPTが連携を推奨する国土交通省
- * データでもあり、応募の「使用したオープンデータ」にも記載できる。
+ * 判定するよう、国土数値情報（国土交通省、出典表記必須のオープンデータ）の
+ * 行政区域データ(N03)を使う。ODPTが連携を推奨する国土交通省データでもあり、
+ * 応募の「使用したオープンデータ」にも記載できる。
  *
  * 出典：国土交通省 国土数値情報「行政区域データ」(N03)
  *   https://nlftp.mlit.go.jp/ksj/gml/datalist/KsjTmplt-N03-v3_1.html
- * 利用規約：政府標準利用規約(PDL)1.0
+ * 利用規約：国土数値情報ダウンロードサイトコンテンツ利用規約（政府標準利用規約 第2.0版 準拠）
+ *   https://nlftp.mlit.go.jp/ksj/other/agreement_01.html
+ * 【2026-10-03訂正】当初「PDL1.0（政府標準利用規約1.0）」と記載していたが誤りだった。
+ * N03データリストページの「このデータの使用許諾条件」リンク先（上記agreement_01.html）
+ * を直接確認したところ、正式名称は「国土数値情報ダウンロードサイトコンテンツ利用規約」で、
+ * 準拠するのは政府標準利用規約の**第2.0版**（制定：令和2年4月1日）であり、PDLという略称も
+ * 1.0という版番号もこのページには登場しない。「PDL1.0」はダウンロードサイト側の
+ * 「使用許諾条件」一覧表の要約表現（「適用する利用規約に基づく」）を、全く別の
+ * （デジタル庁が定める）「公共データ利用規約（PDL）」と取り違えたことによる誤記だった。
+ * index.htmlへの手書きをやめ、ここ（N03_DATA_SOURCE）を唯一の情報源として
+ * generate-site-data.js経由でdata-sources.jsonマニフェストに反映する。
  */
 import fs from 'fs';
 import path from 'path';
@@ -32,9 +42,25 @@ import booleanPointInPolygon from '@turf/boolean-point-in-polygon';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const cacheDir = path.join(__dirname, '../../data/raw-gis/n03');
 
-// 令和5年（2023年1月1日時点）版。N03は年1回更新・平成30年以降はPDL1.0が
-// 適用されるオープンデータ（出典：使用許諾条件ページで確認、2026-10-02）。
+// 令和5年（2023年1月1日時点）版。
 const N03_VINTAGE = '20230101';
+
+/**
+ * data-sources.jsonマニフェスト（generate-site-data.jsのgenerateNationalDataSources()）
+ * に載せる、N03の出典情報。GTFSフィードのfeed_info.txtに相当する機械可読な出典情報が
+ * N03には無いため、ここに人間が確認した値を一元管理する（上記コメントの訂正履歴参照）。
+ */
+export const N03_DATA_SOURCE = {
+  id: 'n03',
+  category: 'build-time-tool',
+  category_label: 'ビルド時にのみ使用（検索結果の表示には含まれません）',
+  provider_name: '国土交通省',
+  dataset_name: '国土数値情報「行政区域データ」(N03)',
+  dataset_url: 'https://nlftp.mlit.go.jp/ksj/gml/datalist/KsjTmplt-N03-v3_1.html',
+  license_label: '国土数値情報ダウンロードサイトコンテンツ利用規約（政府標準利用規約第2.0版準拠）',
+  license_url: 'https://nlftp.mlit.go.jp/ksj/other/agreement_01.html',
+  usage_note: '同名の駅・停留所の表示名を区別するため、停留所の座標がどの市区町村の境界ポリゴンに含まれるかの判定にのみ使用しています。',
+};
 
 function zipUrl(prefCode) {
   const code = String(prefCode).padStart(2, '0');

@@ -186,6 +186,36 @@ class ReverseTravel {
     const coverageEl = document.getElementById('howto-coverage');
     const excludedWrapEl = document.getElementById('about-excluded-feeds');
     const excludedListEl = document.getElementById('about-excluded-feed-list');
+    const buildTimeListEl = document.getElementById('about-build-time-data-list');
+
+    // GTFSフィード以外に「ビルド時にのみ使用したデータ」（例：国土数値情報N03、
+    // 同名駅の市区町村判定に使用。検索結果には一切含まれない）があれば表示する。
+    // 以前はindex.htmlに出典を手書きしていたが、出典はハードコードせずマニフェストから
+    // 出すという方針（#about-feed-listと同じ考え方）に合わせた。
+    if (buildTimeListEl) {
+      const buildTimeSources = manifest?.build_time_data_sources;
+      if (Array.isArray(buildTimeSources) && buildTimeSources.length > 0) {
+        buildTimeListEl.innerHTML = buildTimeSources
+          .map((src) => {
+            const datasetLink = src.dataset_url
+              ? `<a href="${src.dataset_url}" target="_blank" rel="noopener">${src.dataset_name}</a>`
+              : src.dataset_name;
+            const licenseText = src.license_url
+              ? `<a href="${src.license_url}" target="_blank" rel="noopener">${src.license_label}</a>`
+              : src.license_label;
+            return `
+              <li>
+                <strong>${src.provider_name} ${datasetLink}</strong>（${src.category_label}）
+                <span class="feed-meta">${src.usage_note || ''}</span>
+                <span class="feed-meta">ライセンス：${licenseText}</span>
+              </li>
+            `;
+          })
+          .join('');
+      } else {
+        buildTimeListEl.innerHTML = '';
+      }
+    }
 
     // 検索対象から除外したフィード（運賃データなし・ライセンス非許可等）があれば、
     // 「対象外としたデータ」として理由ごと表示する。例：富山地方鉄道市内電車は
@@ -304,9 +334,16 @@ class ReverseTravel {
    * 出発駅の都道府県＋隣接都道府県のフルデータをロードし、FareCalculator等を
    * 作り直す。既にロード済みの県はGTFSLoader側でスキップされるため、
    * 同じ県からの再検索では実質何もフェッチしない。
+   *
+   * 隣接県表（prefectureAdjacency）は47都道府県すべてを網羅した地理的事実の表で、
+   * 公開状況とは無関係。公開していない隣接県まで律儀にfetchすると、ほぼ確実に
+   * 404になるだけの無駄なリクエストが毎回走るため、公開中都道府県一覧
+   * （publishedPrefectures、generate-site-data.jsが生成）で絞り込む。
    */
   async loadPrefecturesForDeparture(prefCode) {
-    const adjacent = this.loader.prefectureAdjacency?.[String(prefCode).padStart(2, '0')] || [];
+    const allAdjacent = this.loader.prefectureAdjacency?.[String(prefCode).padStart(2, '0')] || [];
+    const published = new Set(this.loader.publishedPrefectures || []);
+    const adjacent = allAdjacent.filter((code) => published.has(code));
     this.data = await this.loader.loadPrefectures([prefCode, ...adjacent]);
     this.fareCalc = new FareCalculator(this.data);
     this.spotFinder = new SpotFinder(this.data);

@@ -1876,11 +1876,11 @@ header p {
       <p>
         地図には<strong>国土地理院</strong>の地理院タイル（標準地図）を使用しています。<br>
         観光地の説明・画像・座標は <strong>Wikipedia 日本語版</strong>および <strong>Wikidata</strong>
-        （<a href="https://creativecommons.org/licenses/by-sa/4.0/deed.ja" target="_blank" rel="noopener">CC BY-SA 4.0</a>）に基づきます。<br>
-        同名の駅・停留所の区別には、<strong>国土交通省 国土数値情報「行政区域データ」(N03)</strong>
-        （<a href="https://nlftp.mlit.go.jp/ksj/gml/datalist/KsjTmplt-N03-v3_1.html" target="_blank" rel="noopener">出典</a>、政府標準利用規約(PDL)1.0）を
-        ビルド時にのみ使用しています。
+        （<a href="https://creativecommons.org/licenses/by-sa/4.0/deed.ja" target="_blank" rel="noopener">CC BY-SA 4.0</a>）に基づきます。
       </p>
+      <ul id="about-build-time-data-list">
+        <li>読み込み中…</li>
+      </ul>
 
       <h3>2. データの正確性・完全性について</h3>
       <p>
@@ -2004,8 +2004,9 @@ function prefCodeStr(code) {
 
 class GTFSLoader {
   constructor() {
-    this.stationIndex = null; // [[表示名, 県コード, 県内通し番号], ...]（全都道府県分）
-    this.prefectureAdjacency = null; // { "16": ["15","17",...], ... }
+    this.stationIndex = null; // [[表示名, 県コード, 県内通し番号], ...]（公開中の都道府県分のみ）
+    this.prefectureAdjacency = null; // { "16": ["15","17",...], ... }（全47都道府県分、地理的事実）
+    this.publishedPrefectures = null; // ["37", ...] docs/data/pref/配下に実在する＝公開中の都道府県コード
     this.loadedPrefCodes = new Set(); // 既にfetch済みの県コード（再フェッチを避ける）
     this.fareData = null;
     this.stopsMetadata = null;
@@ -2017,15 +2018,21 @@ class GTFSLoader {
   }
 
   /**
-   * 起動時に一度だけ呼ぶ。全国の軽量駅一覧・隣接県表・スポットランキング設定
-   * （都道府県に依存しないため、ここで一度だけ取得すればよい）を取得する。
-   * ランキング設定の取得に失敗しても検索自体は継続できるため、失敗は警告に
-   * 留める（spot-finder.jsのloadRankingConfig()がデフォルト値で補う）。
+   * 起動時に一度だけ呼ぶ。全国の軽量駅一覧・隣接県表・公開中都道府県一覧・
+   * スポットランキング設定（都道府県に依存しないため、ここで一度だけ取得すればよい）
+   * を取得する。ランキング設定の取得に失敗しても検索自体は継続できるため、失敗は
+   * 警告に留める（spot-finder.jsのloadRankingConfig()がデフォルト値で補う）。
+   *
+   * 【2026-10-03追記】publishedPrefecturesは、隣接県読み込み時に「公開していない県へは
+   * 404を出しに行かない」フィルタに使う（main.jsのloadPrefecturesForDeparture()参照）。
+   * stationIndex自体はgenerate-site-data.jsが公開中の都道府県分しか出力しないため、
+   * 出発駅として選べる時点で既に公開中の県に絞られている。
    */
   async loadStationIndex() {
-    const [stationIndex, adjacency, rankingConfig] = await Promise.all([
+    const [stationIndex, adjacency, publishedPrefectures, rankingConfig] = await Promise.all([
       this.fetchJson('data/national/station-index.json'),
       this.fetchJson('data/national/prefecture-adjacency.json'),
+      this.fetchJson('data/national/published-prefectures.json'),
       this.fetchJson('data/national/spot-ranking-config.json').catch((error) => {
         console.warn(`⚠️ スポットランキング設定の取得に失敗しました（${error.message}）。デフォルト値を使用します`);
         return null;
@@ -2033,11 +2040,12 @@ class GTFSLoader {
     ]);
     this.stationIndex = stationIndex;
     this.prefectureAdjacency = adjacency;
+    this.publishedPrefectures = publishedPrefectures;
     if (rankingConfig) {
       window.EMBEDDED_SPOT_RANKING_CONFIG = rankingConfig;
     }
-    console.log(`✅ 駅一覧をロード（${stationIndex.length}駅、全国分）`);
-    return { stationIndex, adjacency };
+    console.log(`✅ 駅一覧をロード（${stationIndex.length}駅、公開中${publishedPrefectures.length}都道府県分）`);
+    return { stationIndex, adjacency, publishedPrefectures };
   }
 
   /**
@@ -3360,6 +3368,36 @@ class ReverseTravel {
     const coverageEl = document.getElementById('howto-coverage');
     const excludedWrapEl = document.getElementById('about-excluded-feeds');
     const excludedListEl = document.getElementById('about-excluded-feed-list');
+    const buildTimeListEl = document.getElementById('about-build-time-data-list');
+
+    // GTFSフィード以外に「ビルド時にのみ使用したデータ」（例：国土数値情報N03、
+    // 同名駅の市区町村判定に使用。検索結果には一切含まれない）があれば表示する。
+    // 以前はindex.htmlに出典を手書きしていたが、出典はハードコードせずマニフェストから
+    // 出すという方針（#about-feed-listと同じ考え方）に合わせた。
+    if (buildTimeListEl) {
+      const buildTimeSources = manifest?.build_time_data_sources;
+      if (Array.isArray(buildTimeSources) && buildTimeSources.length > 0) {
+        buildTimeListEl.innerHTML = buildTimeSources
+          .map((src) => {
+            const datasetLink = src.dataset_url
+              ? `<a href="${src.dataset_url}" target="_blank" rel="noopener">${src.dataset_name}</a>`
+              : src.dataset_name;
+            const licenseText = src.license_url
+              ? `<a href="${src.license_url}" target="_blank" rel="noopener">${src.license_label}</a>`
+              : src.license_label;
+            return `
+              <li>
+                <strong>${src.provider_name} ${datasetLink}</strong>（${src.category_label}）
+                <span class="feed-meta">${src.usage_note || ''}</span>
+                <span class="feed-meta">ライセンス：${licenseText}</span>
+              </li>
+            `;
+          })
+          .join('');
+      } else {
+        buildTimeListEl.innerHTML = '';
+      }
+    }
 
     // 検索対象から除外したフィード（運賃データなし・ライセンス非許可等）があれば、
     // 「対象外としたデータ」として理由ごと表示する。例：富山地方鉄道市内電車は
@@ -3478,9 +3516,16 @@ class ReverseTravel {
    * 出発駅の都道府県＋隣接都道府県のフルデータをロードし、FareCalculator等を
    * 作り直す。既にロード済みの県はGTFSLoader側でスキップされるため、
    * 同じ県からの再検索では実質何もフェッチしない。
+   *
+   * 隣接県表（prefectureAdjacency）は47都道府県すべてを網羅した地理的事実の表で、
+   * 公開状況とは無関係。公開していない隣接県まで律儀にfetchすると、ほぼ確実に
+   * 404になるだけの無駄なリクエストが毎回走るため、公開中都道府県一覧
+   * （publishedPrefectures、generate-site-data.jsが生成）で絞り込む。
    */
   async loadPrefecturesForDeparture(prefCode) {
-    const adjacent = this.loader.prefectureAdjacency?.[String(prefCode).padStart(2, '0')] || [];
+    const allAdjacent = this.loader.prefectureAdjacency?.[String(prefCode).padStart(2, '0')] || [];
+    const published = new Set(this.loader.publishedPrefectures || []);
+    const adjacent = allAdjacent.filter((code) => published.has(code));
     this.data = await this.loader.loadPrefectures([prefCode, ...adjacent]);
     this.fareCalc = new FareCalculator(this.data);
     this.spotFinder = new SpotFinder(this.data);

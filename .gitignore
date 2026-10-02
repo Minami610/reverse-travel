@@ -2,6 +2,9 @@
 data/raw-gtfs/
 data/raw-gis/
 data/derived/
+# generate-site-data.js --local-verify の出力（公開前の都道府県を手元で確認するための
+# 一時データ。docs/data/とは別の場所に出し、絶対に公開しない）
+data/site-preview/
 
 # Node.js
 node_modules/

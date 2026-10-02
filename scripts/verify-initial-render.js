@@ -35,8 +35,96 @@ import { fileURLToPath } from 'url';
 import { assertBundleFresh, assertSiteDataFresh } from './check-bundle-freshness.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const rootDir = path.join(__dirname, '..');
 const distIndexPath = path.join(__dirname, '../dist/index.html');
 const docsDir = path.join(__dirname, '../docs');
+
+/**
+ * 公開する都道府県の一覧（config/published-prefectures.json）と、実際にdocs/data/に
+ * 出力されている内容が一致するかを確認する。
+ *
+ * 【背景】026525fで、段階1(b)検証用に手元でビルドした富山・石川
+ * （本番には採用しない方針だった）が、docs/data/pref/16・17としてそのまま
+ * push・公開されてしまう事故があった。verify-renderが通っていても、この種の
+ * 「意図しない公開」は#search-formの表示可否やカード生成とは無関係なため、
+ * 既存のチェックでは検出できなかった。このチェックはjsdomを使わず、
+ * docs/data/配下のファイルを直接読んで判定する（軽量・高速に失敗させるため）。
+ */
+function checkPublishedPrefecturesConsistency() {
+  console.log('\n=== 公開都道府県の一覧チェック ===');
+  const errors = [];
+
+  const publishedConfigPath = path.join(rootDir, 'config/published-prefectures.json');
+  const publishedConfig = JSON.parse(fs.readFileSync(publishedConfigPath, 'utf-8'));
+  const published = new Set((publishedConfig.published || []).map((c) => String(c).padStart(2, '0')));
+  if (published.size === 0) {
+    errors.push('config/published-prefectures.json の published が空です');
+  }
+
+  // docs/data/pref/ に実在するディレクトリが、公開リストと完全一致するか
+  const prefDir = path.join(docsDir, 'data/pref');
+  const actualPrefDirs = fs.existsSync(prefDir)
+    ? new Set(fs.readdirSync(prefDir).filter((f) => fs.statSync(path.join(prefDir, f)).isDirectory()))
+    : new Set();
+  const extraDirs = [...actualPrefDirs].filter((c) => !published.has(c));
+  const missingDirs = [...published].filter((c) => !actualPrefDirs.has(c));
+  if (extraDirs.length > 0) {
+    errors.push(`docs/data/pref/ に公開リスト外の都道府県が存在します: ${extraDirs.join(', ')}`);
+  }
+  if (missingDirs.length > 0) {
+    errors.push(`docs/data/pref/ に公開リストの都道府県が見つかりません: ${missingDirs.join(', ')}`);
+  }
+
+  // docs/data/national/published-prefectures.json 自体の内容
+  const publishedListPath = path.join(docsDir, 'data/national/published-prefectures.json');
+  if (!fs.existsSync(publishedListPath)) {
+    errors.push('docs/data/national/published-prefectures.json が見つかりません');
+  } else {
+    const actualList = new Set(JSON.parse(fs.readFileSync(publishedListPath, 'utf-8')));
+    const extra = [...actualList].filter((c) => !published.has(c));
+    const missing = [...published].filter((c) => !actualList.has(c));
+    if (extra.length > 0 || missing.length > 0) {
+      errors.push(
+        `docs/data/national/published-prefectures.json が公開リストと食い違います` +
+        `（余分: ${extra.join(',') || 'なし'} / 不足: ${missing.join(',') || 'なし'}）`
+      );
+    }
+  }
+
+  // 駅一覧（出発駅の選択肢）に、公開リスト外の都道府県コードが混ざっていないか
+  const stationIndexPath = path.join(docsDir, 'data/national/station-index.json');
+  if (fs.existsSync(stationIndexPath)) {
+    const stationIndex = JSON.parse(fs.readFileSync(stationIndexPath, 'utf-8'));
+    const codesInStationIndex = new Set(stationIndex.map(([, prefCode]) => String(prefCode).padStart(2, '0')));
+    const extraCodes = [...codesInStationIndex].filter((c) => !published.has(c));
+    if (extraCodes.length > 0) {
+      errors.push(`station-index.json に公開リスト外の都道府県コードが含まれます: ${extraCodes.join(', ')}`);
+    }
+  }
+
+  // 出典マニフェストの対応地域件数が、公開県数と一致するか（県ごとに重複しない
+  // prefecture名が1件ずつ入る設計のため、件数が一致しなければ混入を疑える）
+  const dataSourcesPath = path.join(docsDir, 'data/national/data-sources.json');
+  if (fs.existsSync(dataSourcesPath)) {
+    const manifest = JSON.parse(fs.readFileSync(dataSourcesPath, 'utf-8'));
+    const coveragePrefCount = manifest.coverage?.prefectures?.length ?? -1;
+    if (coveragePrefCount !== published.size) {
+      errors.push(
+        `data-sources.json の coverage.prefectures 件数（${coveragePrefCount}）が公開県数（${published.size}）と一致しません` +
+        `（実際: ${JSON.stringify(manifest.coverage?.prefectures)}）`
+      );
+    }
+  }
+
+  if (errors.length > 0) {
+    console.log('❌ 公開都道府県の一覧に食い違いがあります:');
+    errors.forEach((e) => console.log(`  - ${e}`));
+    return false;
+  }
+
+  console.log(`✅ 公開都道府県の一覧は config/published-prefectures.json（${[...published].join(', ')}）と一致しています`);
+  return true;
+}
 
 /**
  * window.fetch のシム。gtfs-loader.js・main.js は常に相対パス文字列
@@ -512,13 +600,14 @@ async function main() {
   }
   assertBundleFresh('verify-render');
   assertSiteDataFresh('verify-render');
+  const publishedOk = checkPublishedPrefecturesConsistency();
   const html = fs.readFileSync(distIndexPath, 'utf-8');
 
   const desktopOk = await checkVisible(html, true, 'PC幅相当');
   const mobileOk = await checkVisible(html, false, 'スマホ幅相当');
   const cardsOk = await checkResultCards(html);
 
-  if (desktopOk && mobileOk && cardsOk) {
+  if (publishedOk && desktopOk && mobileOk && cardsOk) {
     console.log('\n✅ 検証成功: 初期表示・検索結果カードともに想定通りです');
   } else {
     console.error('\n❌ 検証失敗: 上記のいずれかで問題が見つかりました');

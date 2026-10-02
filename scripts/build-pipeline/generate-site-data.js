@@ -20,14 +20,32 @@
  *    spots-by-station/data-sources）はそのままコピーする（JSON.parse→
  *    JSON.stringifyで整形を除去するのみ）。
  *
- * 使い方: node scripts/build-pipeline/generate-site-data.js 37,16,17
+ * 【2026-10-03追記】docs/data（公開ページが実際に配信する場所）に書き込めるのは、
+ * config/published-prefectures.json に載っている県だけに限定した。
+ * 【背景】026525fで「段階1(b)：本番には採用しない」としていた富山・石川を、
+ * 検証目的で `node generate-site-data.js 37,16,17` と手で実行してそのまま
+ * docs/dataに出力・pushしてしまい、公開ページで富山・石川が出発駅として
+ * 検索できる状態になる事故があった（県境の重複スポット統合・県境駅の連結
+ * ・番号0判定など、段階1(c)で確認する予定だった点が未検証のまま公開されていた）。
+ * 再発防止のため、docs/dataへ出力する唯一の経路を「引数なしで実行し、
+ * config/published-prefectures.jsonを読む」ルートだけに絞った。手元で
+ * 公開前の県を検証したい場合は `--local-verify <コード,...>` を使う
+ * （docs/data/ではなくdata/site-preview/に出力する。公開されない）。
+ *
+ * 使い方:
+ *   node scripts/build-pipeline/generate-site-data.js
+ *     → 公開モード。config/published-prefectures.jsonの県をdocs/dataに出力
+ *   node scripts/build-pipeline/generate-site-data.js --local-verify 37,16,17
+ *     → ローカル検証モード。指定県をdata/site-preview/に出力（docs/は変更しない）
  */
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { N03_DATA_SOURCE } from './municipality-polygon-lookup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, '../..');
+const DOCS_DATA_ROOT = path.join(rootDir, 'docs/data');
 
 const ODPT_OR_GTFS_DATA_JP = new Set(['odpt', 'gtfs-data-jp']);
 
@@ -70,11 +88,11 @@ function indexRouteIds(routeDetails) {
   return { routeIndex, data };
 }
 
-/** 都道府県コード1件分をdocs/data/pref/{code}/へ変換出力する */
-export function generateSiteDataForPrefecture(prefCode) {
+/** 都道府県コード1件分を {outRoot}/pref/{code}/ へ変換出力する */
+export function generateSiteDataForPrefecture(prefCode, outRoot = DOCS_DATA_ROOT) {
   const codeStr = prefCodeStr(prefCode);
   const srcDir = path.join(rootDir, 'data/derived/pref', codeStr);
-  const destDir = path.join(rootDir, 'docs/data/pref', codeStr);
+  const destDir = path.join(outRoot, 'pref', codeStr);
   fs.mkdirSync(destDir, { recursive: true });
 
   const plainCopyFiles = [
@@ -102,7 +120,7 @@ export function generateSiteDataForPrefecture(prefCode) {
   const beforeSize = fs.statSync(routeDetailsPath).size;
   const afterSize = fs.statSync(path.join(destDir, 'route-details.json')).size;
   console.log(
-    `✅ docs/data/pref/${codeStr}/ を生成（route-details.json: ${(beforeSize / 1024).toFixed(1)}KB → ` +
+    `✅ ${path.relative(rootDir, destDir)}/ を生成（route-details.json: ${(beforeSize / 1024).toFixed(1)}KB → ` +
     `${(afterSize / 1024).toFixed(1)}KB、routeIndex ${indexed.routeIndex.length}件）`
   );
 
@@ -176,11 +194,11 @@ export const PREFECTURE_ADJACENCY = {
  * 県内通し番号は、その県のstations.jsonのキー（station_id）を昇順ソートした
  * ときのインデックスで決める（生成側・参照側で同じソート規則を使えば一致する）。
  */
-export function generateStationIndex(prefCodes) {
+export function generateStationIndex(prefCodes, outRoot = DOCS_DATA_ROOT) {
   const entries = [];
   for (const prefCode of prefCodes) {
     const codeStr = prefCodeStr(prefCode);
-    const stationsPath = path.join(rootDir, 'docs/data/pref', codeStr, 'stations.json');
+    const stationsPath = path.join(outRoot, 'pref', codeStr, 'stations.json');
     if (!fs.existsSync(stationsPath)) {
       throw new Error(`${stationsPath} が見つかりません。先にgenerateSiteDataForPrefecture(${prefCode})を実行してください`);
     }
@@ -191,15 +209,15 @@ export function generateStationIndex(prefCodes) {
     });
   }
 
-  const outDir = path.join(rootDir, 'docs/data/national');
+  const outDir = path.join(outRoot, 'national');
   fs.mkdirSync(outDir, { recursive: true });
   const outPath = path.join(outDir, 'station-index.json');
   fs.writeFileSync(outPath, JSON.stringify(entries));
-  console.log(`✅ docs/data/national/station-index.json を生成（${entries.length}駅、${prefCodes.length}都道府県分）`);
+  console.log(`✅ ${path.relative(rootDir, outPath)} を生成（${entries.length}駅、${prefCodes.length}都道府県分）`);
 
   const adjacencyPath = path.join(outDir, 'prefecture-adjacency.json');
   fs.writeFileSync(adjacencyPath, JSON.stringify(PREFECTURE_ADJACENCY));
-  console.log(`✅ docs/data/national/prefecture-adjacency.json を生成`);
+  console.log(`✅ ${path.relative(rootDir, adjacencyPath)} を生成`);
 
   return { stationCount: entries.length };
 }
@@ -212,13 +230,14 @@ export function generateStationIndex(prefCodes) {
  * fetchする構成に変える。この設定は都道府県に依存しないため、
  * docs/data/pref/配下ではなくnational配下に置く。
  */
-export function copySpotRankingConfig() {
+export function copySpotRankingConfig(outRoot = DOCS_DATA_ROOT) {
   const srcPath = path.join(rootDir, 'config/spot-ranking-config.json');
-  const outDir = path.join(rootDir, 'docs/data/national');
+  const outDir = path.join(outRoot, 'national');
   fs.mkdirSync(outDir, { recursive: true });
   const parsed = JSON.parse(fs.readFileSync(srcPath, 'utf-8'));
-  fs.writeFileSync(path.join(outDir, 'spot-ranking-config.json'), JSON.stringify(parsed));
-  console.log(`✅ docs/data/national/spot-ranking-config.json を生成`);
+  const outPath = path.join(outDir, 'spot-ranking-config.json');
+  fs.writeFileSync(outPath, JSON.stringify(parsed));
+  console.log(`✅ ${path.relative(rootDir, outPath)} を生成`);
 }
 
 /**
@@ -233,15 +252,24 @@ export function copySpotRankingConfig() {
  * 常に表示する方式にする（ハードコードした文言を増やさない）。
  * feeds/excluded_feedsはoperator_idで重複排除（最初に見つかった県の記述を採用）、
  * coverage.prefecturesは全県分の和集合（登場順）。
+ *
+ * 【2026-10-03追記】GTFSフィード以外に「ビルド時にのみ使用したデータ」
+ * （国土数値情報N03、同名駅の市区町村判定に使用。フロントエンドには一切含まれない）も
+ * build_time_data_sourcesとして載せる。以前はindex.htmlに出典を手書きしていたが、
+ * このアプリの方針（出典はハードコードせずマニフェートから出す）に反するため、
+ * ここで機械的に組み立てる。値そのもの（提供元・ライセンス名・URL）は
+ * municipality-polygon-lookup.jsのN03_DATA_SOURCEを単一の情報源とする
+ * （GTFSフィードのfeed_info.txtに相当する機械可読な出典情報がN03には無いため、
+ * 人間が公式ページを確認して書いた値をコード側で一元管理する）。
  */
-export function generateNationalDataSources(prefCodes) {
+export function generateNationalDataSources(prefCodes, outRoot = DOCS_DATA_ROOT) {
   const feedsById = new Map();
   const excludedById = new Map();
   const prefectures = [];
 
   for (const prefCode of prefCodes) {
     const codeStr = prefCodeStr(prefCode);
-    const srcPath = path.join(rootDir, 'docs/data/pref', codeStr, 'data-sources.json');
+    const srcPath = path.join(outRoot, 'pref', codeStr, 'data-sources.json');
     if (!fs.existsSync(srcPath)) {
       throw new Error(`${srcPath} が見つかりません。先にgenerateSiteDataForPrefecture(${prefCode})を実行してください`);
     }
@@ -270,6 +298,7 @@ export function generateNationalDataSources(prefCodes) {
     generated_at: new Date().toISOString(),
     feeds,
     excluded_feeds: excludedFeeds,
+    build_time_data_sources: [N03_DATA_SOURCE],
     summary: {
       total: feeds.length,
       by_category: byCategory,
@@ -282,24 +311,88 @@ export function generateNationalDataSources(prefCodes) {
     },
   };
 
-  const outDir = path.join(rootDir, 'docs/data/national');
+  const outDir = path.join(outRoot, 'national');
   fs.mkdirSync(outDir, { recursive: true });
-  fs.writeFileSync(path.join(outDir, 'data-sources.json'), JSON.stringify(manifest));
+  const outPath = path.join(outDir, 'data-sources.json');
+  fs.writeFileSync(outPath, JSON.stringify(manifest));
   console.log(
-    `✅ docs/data/national/data-sources.json を生成（フィード${feeds.length}件、対象外${excludedFeeds.length}件、対応${prefectures.length}都道府県）`
+    `✅ ${path.relative(rootDir, outPath)} を生成（フィード${feeds.length}件、対象外${excludedFeeds.length}件、対応${prefectures.length}都道府県）`
   );
 }
 
+/**
+ * 公開中の都道府県コード一覧をdocs/data/national/published-prefectures.jsonに
+ * 書き出す。フロントエンド（gtfs-loader.js）が、隣接県表（全47都道府県分の
+ * 地理的事実）と突き合わせて「公開していない県へは404を出しに行かない」
+ * フィルタに使う。
+ */
+export function writePublishedPrefecturesList(prefCodes, outRoot = DOCS_DATA_ROOT) {
+  const outDir = path.join(outRoot, 'national');
+  fs.mkdirSync(outDir, { recursive: true });
+  const codes = prefCodes.map(prefCodeStr);
+  const outPath = path.join(outDir, 'published-prefectures.json');
+  fs.writeFileSync(outPath, JSON.stringify(codes));
+  console.log(`✅ ${path.relative(rootDir, outPath)} を生成（${codes.join(', ')}）`);
+}
+
+/**
+ * {outRoot}/pref/ 配下から、prefCodesに含まれない都道府県のディレクトリを削除する。
+ * 【背景】026525fの事故は、docs/data/pref/16・17が「生成はしたが消さなかった」
+ * ために公開され続けた。公開対象から外した県が docs/data/ に残り続けないよう、
+ * 毎回の生成で公開リストと実際のディレクトリを一致させる。
+ */
+export function prunePrefDirs(prefCodes, outRoot = DOCS_DATA_ROOT) {
+  const keep = new Set(prefCodes.map(prefCodeStr));
+  const prefRoot = path.join(outRoot, 'pref');
+  if (!fs.existsSync(prefRoot)) return;
+  for (const entry of fs.readdirSync(prefRoot)) {
+    if (keep.has(entry)) continue;
+    const target = path.join(prefRoot, entry);
+    fs.rmSync(target, { recursive: true, force: true });
+    console.log(`🗑️  ${path.relative(rootDir, target)}/ を削除（公開対象外）`);
+  }
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const prefCodes = (process.argv[2] || '').split(',').map((s) => s.trim()).filter(Boolean);
-  if (prefCodes.length === 0) {
-    console.error('都道府県コードを指定してください（例: node scripts/build-pipeline/generate-site-data.js 37,16,17）');
+  const args = process.argv.slice(2);
+  let prefCodes;
+  let outRoot;
+
+  if (args[0] === '--local-verify') {
+    prefCodes = (args[1] || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (prefCodes.length === 0) {
+      console.error('ローカル検証モード: 都道府県コードを指定してください（例: --local-verify 37,16,17）');
+      process.exit(1);
+    }
+    outRoot = path.join(rootDir, 'data/site-preview');
+    console.log(`ℹ️  ローカル検証モード: ${path.relative(rootDir, outRoot)}/ に出力します（docs/は変更しません。公開されません）\n`);
+  } else if (args.length > 0) {
+    // docs/dataへ出力する経路は「引数なし＝公開リストを読む」だけに絞っている
+    // （経緯は冒頭のコメント、2026-10-03追記を参照）。誤って任意の県をdocs/data
+    // へ出力できてしまうと、同じ事故が再発する。
+    console.error(
+      '引数なしで実行してください（config/published-prefectures.jsonを読み、docs/dataに出力します）。\n' +
+      '公開前の県を手元で検証する場合は --local-verify 37,16,17 の形式を使ってください（docs/には出力されません）。'
+    );
     process.exit(1);
+  } else {
+    const publishedPath = path.join(rootDir, 'config/published-prefectures.json');
+    const published = JSON.parse(fs.readFileSync(publishedPath, 'utf-8'));
+    prefCodes = published.published;
+    if (!Array.isArray(prefCodes) || prefCodes.length === 0) {
+      console.error(`${publishedPath} の published が空です`);
+      process.exit(1);
+    }
+    outRoot = DOCS_DATA_ROOT;
+    console.log(`📢 公開モード: config/published-prefectures.json の${prefCodes.length}県をdocs/dataに出力します（${prefCodes.join(', ')}）\n`);
   }
+
+  prunePrefDirs(prefCodes, outRoot);
   for (const code of prefCodes) {
-    generateSiteDataForPrefecture(code);
+    generateSiteDataForPrefecture(code, outRoot);
   }
-  generateStationIndex(prefCodes);
-  copySpotRankingConfig();
-  generateNationalDataSources(prefCodes);
+  generateStationIndex(prefCodes, outRoot);
+  copySpotRankingConfig(outRoot);
+  generateNationalDataSources(prefCodes, outRoot);
+  writePublishedPrefecturesList(prefCodes, outRoot);
 }

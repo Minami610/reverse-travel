@@ -1,0 +1,4 @@
+{
+  "description": "公開ページ（docs/data/）に出力する都道府県コードの一覧。ここに無い県は data/derived/pref/ にビルド結果があっても docs/data/ には出力されない＝検索対象にならない。generate-site-data.js が引数なしで実行されたときはこのファイルを読む（段階1(b)検証済みだが本番未採用の県を誤って公開しないため）。公開する県を増やすときはここに追記してから node scripts/build-pipeline/generate-site-data.js を実行する。",
+  "published": ["37"]
+}

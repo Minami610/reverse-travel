@@ -80,8 +80,9 @@ function prefCodeStr(code) {
 
 export class GTFSLoader {
   constructor() {
-    this.stationIndex = null; // [[表示名, 県コード, 県内通し番号], ...]（全都道府県分）
-    this.prefectureAdjacency = null; // { "16": ["15","17",...], ... }
+    this.stationIndex = null; // [[表示名, 県コード, 県内通し番号], ...]（公開中の都道府県分のみ）
+    this.prefectureAdjacency = null; // { "16": ["15","17",...], ... }（全47都道府県分、地理的事実）
+    this.publishedPrefectures = null; // ["37", ...] docs/data/pref/配下に実在する＝公開中の都道府県コード
     this.loadedPrefCodes = new Set(); // 既にfetch済みの県コード（再フェッチを避ける）
     this.fareData = null;
     this.stopsMetadata = null;
@@ -93,15 +94,21 @@ export class GTFSLoader {
   }
 
   /**
-   * 起動時に一度だけ呼ぶ。全国の軽量駅一覧・隣接県表・スポットランキング設定
-   * （都道府県に依存しないため、ここで一度だけ取得すればよい）を取得する。
-   * ランキング設定の取得に失敗しても検索自体は継続できるため、失敗は警告に
-   * 留める（spot-finder.jsのloadRankingConfig()がデフォルト値で補う）。
+   * 起動時に一度だけ呼ぶ。全国の軽量駅一覧・隣接県表・公開中都道府県一覧・
+   * スポットランキング設定（都道府県に依存しないため、ここで一度だけ取得すればよい）
+   * を取得する。ランキング設定の取得に失敗しても検索自体は継続できるため、失敗は
+   * 警告に留める（spot-finder.jsのloadRankingConfig()がデフォルト値で補う）。
+   *
+   * 【2026-10-03追記】publishedPrefecturesは、隣接県読み込み時に「公開していない県へは
+   * 404を出しに行かない」フィルタに使う（main.jsのloadPrefecturesForDeparture()参照）。
+   * stationIndex自体はgenerate-site-data.jsが公開中の都道府県分しか出力しないため、
+   * 出発駅として選べる時点で既に公開中の県に絞られている。
    */
   async loadStationIndex() {
-    const [stationIndex, adjacency, rankingConfig] = await Promise.all([
+    const [stationIndex, adjacency, publishedPrefectures, rankingConfig] = await Promise.all([
       this.fetchJson('data/national/station-index.json'),
       this.fetchJson('data/national/prefecture-adjacency.json'),
+      this.fetchJson('data/national/published-prefectures.json'),
       this.fetchJson('data/national/spot-ranking-config.json').catch((error) => {
         console.warn(`⚠️ スポットランキング設定の取得に失敗しました（${error.message}）。デフォルト値を使用します`);
         return null;
@@ -109,11 +116,12 @@ export class GTFSLoader {
     ]);
     this.stationIndex = stationIndex;
     this.prefectureAdjacency = adjacency;
+    this.publishedPrefectures = publishedPrefectures;
     if (rankingConfig) {
       window.EMBEDDED_SPOT_RANKING_CONFIG = rankingConfig;
     }
-    console.log(`✅ 駅一覧をロード（${stationIndex.length}駅、全国分）`);
-    return { stationIndex, adjacency };
+    console.log(`✅ 駅一覧をロード（${stationIndex.length}駅、公開中${publishedPrefectures.length}都道府県分）`);
+    return { stationIndex, adjacency, publishedPrefectures };
   }
 
   /**
