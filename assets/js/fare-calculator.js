@@ -6,8 +6,12 @@
  *
  * フェーズ1スコープ：
  * 1. OD運賃表から「出発駅から¥X以内の到達駅」を駅ID単位で直接検索（鉄道・バスとも同じOD表として扱う）
- * 2. 鉄道系の停留所で直接到達した駅から、その駅に併設するバス系の停留所経由で
+ * 2. 直接到達した駅（鉄道・バスいずれでも可）から、その駅に併設するバス系の停留所経由で
  *    さらにバスのOD運賃を1回分加算し、ラストワンマイルを探索
+ *    【2026-10-02】起点を鉄道系に限定していたが、富山・石川（ほぼバスのみ）で
+ *    実測したところ、起点をバスにも広げることで到達駅数が最大+57%増える例があり、
+ *    起点の制限を鉄道・バス問わずに広げた（併設停留所側は引き続きバス限定＝
+ *    「ラストワンマイル」の趣旨のまま）。
  * 3. 乗り継ぎは最大1回に限定
  *
  * 【鉄道／バスの判定はstop_idのmode（route_typeベース、parse-and-transform.js産）を使う。
@@ -20,9 +24,6 @@
 
 import { estimateSelectionMinutes, estimateRideMinutes } from './route-duration.js';
 
-function isRailEligible(mode) {
-  return mode === 'rail' || mode === 'mixed';
-}
 function isBusEligible(mode) {
   return mode === 'bus' || mode === 'mixed';
 }
@@ -53,9 +54,6 @@ export class FareCalculator {
     this.stopIdToStationId = new Map(
       this.stopsMetadata.map((s) => [s.stop_id, s.station_id])
     );
-    this.stopIdToMode = new Map(
-      this.stopsMetadata.map((s) => [s.stop_id, s.mode])
-    );
   }
 
   /**
@@ -66,7 +64,7 @@ export class FareCalculator {
    *                  運賃商品しか存在しないため、帰りも往路と同額と仮定して判定する。
    * @returns {Array} [{station_id, display_name, stop_ids, fare, roundTripFare, reachBy, viaOperator, transferAt, legOperators, legFares}, ...]
    *                  fare は片道総額、roundTripFare は fare*2（予算と比較すべき実際の負担額）
-   *                  reachBy: 'direct'(直接), 'transfer'(鉄道→バス1回乗換)
+   *                  reachBy: 'direct'(直接), 'transfer'(1回乗換。起点は鉄道・バスいずれも可)
    */
   async calculateReachable(departureStationId, budget) {
     try {
@@ -109,19 +107,29 @@ export class FareCalculator {
       const directCount = reachable.size;
       console.log(`✅ 直接到達駅: ${directCount}駅`);
 
-      // ステップ2：鉄道系の停留所で直接到達した駅から、併設バス系停留所経由でラストワンマイル
-      const directRailStations = Array.from(reachable.entries()).filter(
-        ([, info]) => info.reachBy === 'direct' && isRailEligible(this.stopIdToMode.get(info.viaStopId))
+      // ステップ2：直接到達した駅（鉄道・バスいずれでも可）から、併設するバス系
+      // 停留所経由でラストワンマイルを1回だけ乗り継ぐ。
+      // 【2026-10-02変更】以前は起点を鉄道系の停留所に限定していた（isRailEligible）。
+      // 香川は鉄道があるため成り立っていたが、富山・石川はほぼバスのみで、起点を
+      // 鉄道に限ると「1本で行ける範囲」しか出ない。富山・石川での実測
+      // （松任駅、単一の小規模コミュニティバスにしか接続しない駅）では、起点を
+      // バスにも広げることで往復¥1000の到達駅数が164→258駅（+57%）に増えた。
+      // 小規模バスが市町村ごとに分かれる全国のgtfs-data.jpフィードでは、この
+      // 効果は無視できない。所要時間・待ち時間はroute-details.json・
+      // estimateSelectionMinutes()が駅ID×駅ID×事業者IDで汎用的に引く設計のため、
+      // 起点の制限を外すだけで追加の仕組みなしに解決できる（実測で確認済み）。
+      const directHubStations = Array.from(reachable.entries()).filter(
+        ([, info]) => info.reachBy === 'direct'
       );
 
-      for (const [railStationId, railInfo] of directRailStations) {
-        const remainingBudget = budget - railInfo.fare;
+      for (const [hubStationId, hubInfo] of directHubStations) {
+        const remainingBudget = budget - hubInfo.fare;
         if (remainingBudget <= 0) continue;
 
-        const railStation = this.stations[railStationId];
-        if (!railStation) continue;
+        const hubStation = this.stations[hubStationId];
+        if (!hubStation) continue;
 
-        const busStops = railStation.stops.filter((s) => isBusEligible(s.mode));
+        const busStops = hubStation.stops.filter((s) => isBusEligible(s.mode));
         if (busStops.length === 0) continue; // この駅にはバス乗換拠点がない
 
         for (const busStop of busStops) {
@@ -131,15 +139,15 @@ export class FareCalculator {
           for (const [destStopId, busFare] of Object.entries(busDestinations)) {
             if (busFare > remainingBudget) continue;
             const destStationId = this.stopIdToStationId.get(destStopId);
-            if (!destStationId || destStationId === departureStationId || destStationId === railStationId) continue;
+            if (!destStationId || destStationId === departureStationId || destStationId === hubStationId) continue;
 
-            const totalFare = railInfo.fare + busFare;
+            const totalFare = hubInfo.fare + busFare;
             const existing = reachable.get(destStationId);
-            const legOperators = [railInfo.viaOperator, busStop.operator_id];
+            const legOperators = [hubInfo.viaOperator, busStop.operator_id];
             const selectionMinutes = estimateSelectionMinutes(this.routeDetails, departureStationId, {
               reachBy: 'transfer',
               station_id: destStationId,
-              transferAt: railStationId,
+              transferAt: hubStationId,
               legOperators,
             });
             if (isBetterCandidate(totalFare, selectionMinutes, existing)) {
@@ -147,9 +155,9 @@ export class FareCalculator {
                 fare: totalFare,
                 selectionMinutes,
                 reachBy: 'transfer',
-                transferAt: railStationId,
+                transferAt: hubStationId,
                 legOperators,
-                legFares: [railInfo.fare, busFare],
+                legFares: [hubInfo.fare, busFare],
               });
             }
           }

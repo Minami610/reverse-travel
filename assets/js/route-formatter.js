@@ -108,7 +108,7 @@ export class RouteFormatter {
     `;
   }
 
-  /** 鉄道→バスなど、事業者をまたぐ乗換（運賃は区間ごとに別建て） */
+  /** 事業者をまたぐ乗換（鉄道→バス・バス→バスいずれも対象、運賃は区間ごとに別建て） */
   formatCrossOperatorTransfer(departureStationId, spot) {
     const transferAtId = spot.source_transfer_at;
     const destId = spot.source_station_id;
