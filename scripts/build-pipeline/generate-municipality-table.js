@@ -15,17 +15,19 @@
  * 以下のクラスリストを起点に、生成後に必ず「47都道府県すべてに1件以上の
  * 市区町村があるか」のアサーションで検証すること。
  *
+ * 【2026-10-02】駅表示名の曖昧さ回避用に、以前はここで市区町村の代表座標
+ * （municipality-locations.json、最近傍探索用）も生成していたが、国土数値情報
+ * N03（行政区域ポリゴン）による判定に置き換えた（municipality-polygon-lookup.js
+ * 参照）ため削除した。代表点への最近傍は市域の広い自治体で原理的に誤判定しうる
+ * （実例：富山市中心部が隣の舟橋村に誤判定）ため、ポリゴンでの判定に移行した。
+ * 本ファイルが生成するmunicipality-to-pref.jsonは、過去のGTFSデータに残る
+ * 旧地名からの県判定という別用途（generate-spots-by-region.jsのresolvePrefecture()）
+ * に引き続き使うため、そのまま残す。
+ *
  * 使い方: node scripts/build-pipeline/generate-municipality-table.js
  * 出力:
  * - data/derived/national/municipality-to-pref.json
  *   { "富山市": "富山県", "高岡市": "富山県", ... }
- * - data/derived/national/municipality-locations.json
- *   [{ "name": "富山市", "pref": "富山県", "lat": ..., "lon": ... }, ...]
- *   駅の表示名の曖昧さ回避（例：「西町（小松市）」、parse-and-transform.jsの
- *   buildStationClusters()参照）用に、市区町村の代表座標から最近傍の市区町村名を
- *   引くためのテーブル。市区町村の境界ポリゴンは持たないため、これは
- *   「代表点への最近傍」による近似であり、境界付近では隣接市区町村と誤ることが
- *   ありうる（表示名の曖昧さ回避という用途上、実害は限定的と判断）。
  */
 
 import fs from 'fs';
@@ -35,7 +37,6 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const outDir = path.join(__dirname, '../../data/derived/national');
 const outPath = path.join(outDir, 'municipality-to-pref.json');
-const locationsOutPath = path.join(outDir, 'municipality-locations.json');
 
 const WIKIDATA_SPARQL = 'https://query.wikidata.org/sparql';
 const USER_AGENT = 'reverse-travel/0.1.0 (contact: reverse-travel-maintainer)';
@@ -180,19 +181,14 @@ export async function generateMunicipalityTable() {
   }
   console.log(`   ${prefBindings.length}件`);
 
-  console.log('🏘️  市区町村とその所属都道府県・代表座標を取得中...（P131*で祖先を遡るため数十秒かかる場合あり）');
+  console.log('🏘️  市区町村とその所属都道府県を取得中...（P131*で祖先を遡るため数十秒かかる場合あり）');
   const classValues = MUNICIPALITY_CLASSES.map((q) => `wd:${q}`).join(' ');
-  // P625（代表座標）はOPTIONAL：一部の廃止市区町村等は座標を持たない場合がある。
-  // 複数座標を持つ項目があるとCartesian積で行数が水増しされるため
-  // （CLAUDE.mdの「GROUP BY/DISTINCTを書かないと水増しされる」の罠）、
-  // GROUP BYせず全行取得したうえで、JS側で決定的な選択規則（緯度→経度昇順）で
-  // 1件に絞る（SPARQLの行順に依存する「最初の1行」は使わない）。
   const muniBindings = await sparqlQuery(
     `
     PREFIX wdt: <http://www.wikidata.org/prop/direct/>
     PREFIX wd: <http://www.wikidata.org/entity/>
     PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-    SELECT ?itemLabel ?prefLabel ?coord ?dissolved WHERE {
+    SELECT DISTINCT ?itemLabel ?prefLabel WHERE {
       VALUES ?class { ${classValues} }
       ?item wdt:P31 ?class.
       ?item wdt:P17 wd:Q17.
@@ -200,53 +196,17 @@ export async function generateMunicipalityTable() {
       ?item wdt:P131* ?pref.
       ?pref wdt:P31 wd:Q50337.
       ?pref rdfs:label ?prefLabel. FILTER(LANG(?prefLabel) = "ja")
-      OPTIONAL { ?item wdt:P625 ?coord. }
-      OPTIONAL { ?item wdt:P576 ?dissolved. }
     }
   `,
     { post: true }
   );
   let resolved = 0;
-  // name -> [{lat, lon, dissolved}, ...]（同名で複数座標があれば後で決定的に1件選ぶ）
-  const coordCandidatesByName = new Map();
   for (const b of muniBindings) {
     const name = b.itemLabel.value;
     if (table[name] === undefined) resolved += 1;
     table[name] = b.prefLabel.value;
-
-    if (b.coord?.value) {
-      const match = b.coord.value.match(/Point\(([^ ]+) ([^ ]+)\)/);
-      if (match) {
-        const lon = parseFloat(match[1]);
-        const lat = parseFloat(match[2]);
-        if (!coordCandidatesByName.has(name)) coordCandidatesByName.set(name, []);
-        coordCandidatesByName.get(name).push({ lat, lon, dissolved: Boolean(b.dissolved?.value) });
-      }
-    }
   }
   console.log(`   ${resolved}件（都道府県への変換が確定したもの）`);
-
-  // municipality-locations.json（駅表示名の曖昧さ回避専用）は、廃止日(P576)を
-  // 持つ市区町村を候補から除く。municipality-to-pref.json（県判定用）は
-  // 「日本の廃止市区町村(Q18663566)」をそのまま含める（過去のGTFSデータに
-  // 残る旧地名からの県判定に必要）が、表示名としてユーザーに見せる場合は
-  // 「東岩瀬町」のような1940年合併済みの地名は伝わらない（2026-10-01、
-  // 富山県のビルドで実際に発生して判明）。
-  // 同名で複数候補がある場合、まず現存（非廃止）のものだけに絞り、
-  // それでも複数あれば緯度→経度昇順で決定的に1件選ぶ。
-  const locations = [];
-  let dissolvedExcluded = 0;
-  for (const [name, candidates] of coordCandidatesByName.entries()) {
-    const active = candidates.filter((c) => !c.dissolved);
-    dissolvedExcluded += candidates.length - active.length;
-    if (active.length === 0) continue; // 現存する候補がなければ曖昧さ回避には使わない
-    active.sort((a, b) => a.lat - b.lat || a.lon - b.lon);
-    const { lat, lon } = active[0];
-    locations.push({ name, pref: table[name], lat, lon });
-  }
-  console.log(
-    `   ${locations.length}件の市区町村に代表座標あり（駅表示名の曖昧さ回避用。廃止市区町村${dissolvedExcluded}件を除外）`
-  );
 
   // アサーション: 47都道府県すべてに1件以上の市区町村が存在するか検証する。
   // 「日本の市」だけを指定した最初の実装では富山市・金沢市が丸ごと欠落し、
@@ -265,9 +225,6 @@ export async function generateMunicipalityTable() {
   if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
   fs.writeFileSync(outPath, JSON.stringify(table));
   console.log(`✅ 保存: ${outPath}（${Object.keys(table).length}エントリ）`);
-
-  fs.writeFileSync(locationsOutPath, JSON.stringify(locations));
-  console.log(`✅ 保存: ${locationsOutPath}（${locations.length}エントリ）`);
 
   return table;
 }

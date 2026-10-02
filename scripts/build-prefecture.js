@@ -200,7 +200,7 @@ async function buildOnePrefecture(code, { force, acceptDiff }) {
   const previousGtfs = readGtfsSnapshot();
 
   console.log('\n【ステップ2】GTFSをパース・変換');
-  const parseStats = await parseAndTransform({ operators, rawGtfsDir, outputDir });
+  const parseStats = await parseAndTransform({ operators, rawGtfsDir, outputDir, prefCode: code });
   if (!parseStats.stationCount) {
     throw new Error(`${prefName}: 駅数が0件です`);
   }

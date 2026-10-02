@@ -1,5 +1,6 @@
 # ビルド時に自動取得・生成されるファイル
 data/raw-gtfs/
+data/raw-gis/
 data/derived/
 
 # Node.js

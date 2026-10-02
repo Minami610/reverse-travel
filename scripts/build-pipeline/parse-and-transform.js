@@ -15,6 +15,7 @@ import path from 'path';
 import { parse } from 'csv-parse/sync';
 import { fileURLToPath } from 'url';
 import { namespacedId } from './gtfs-id.js';
+import { buildMunicipalityPolygonFinder } from './municipality-polygon-lookup.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,7 +25,6 @@ const dataDir = path.join(__dirname, '../../data');
 const defaultRawGtfsDir = path.join(dataDir, 'raw-gtfs');
 const defaultDerivedDir = path.join(dataDir, 'derived');
 const configPath = path.join(__dirname, '../../config/target-operators.json');
-const municipalityLocationsPath = path.join(dataDir, 'derived/national/municipality-locations.json');
 
 /**
  * GTFS パース・派生JSON生成のメイン処理
@@ -39,6 +39,7 @@ export async function parseAndTransform(options = {}) {
     || JSON.parse(fs.readFileSync(configPath, 'utf-8')).phase1_operators;
   const rawGtfsDir = options.rawGtfsDir || defaultRawGtfsDir;
   const outputDir = options.outputDir || defaultDerivedDir;
+  const prefCode = options.prefCode || null;
 
   // 出力ディレクトリ作成
   if (!fs.existsSync(outputDir)) {
@@ -81,7 +82,8 @@ export async function parseAndTransform(options = {}) {
 
   // 駅名文字列ではなく安定したIDで駅をまとめる（同名かつ近接のときだけ1駅とみなす）
   const operatorIdToName = new Map(operators.map((op) => [op.id, op.name]));
-  const stationClusters = buildStationClusters(aggregated, operatorIdToName);
+  const findMunicipality = await loadMunicipalityFinder(prefCode);
+  const stationClusters = buildStationClusters(aggregated, operatorIdToName, findMunicipality);
 
   // 派生JSONを生成
   const stats = saveDerivedData(aggregated, stationClusters, outputDir);
@@ -270,31 +272,32 @@ function splitClusterByDiameter(stops, thresholdMeters) {
 }
 
 /**
- * 市区町村の代表座標（generate-municipality-table.jsが生成した
- * municipality-locations.json）から、最も近い市区町村名を返す最近傍探索。
- * 市区町村の境界ポリゴンは持たないため「代表点への最近傍」による近似であり、
- * 境界付近では隣接市区町村と誤ることがありうる（駅の表示名の曖昧さ回避という
- * 用途上、実害は限定的と判断）。ファイルが存在しない場合はnullを返し、
- * 呼び出し側が番号での曖昧さ回避にフォールバックする。
+ * 都道府県コードから、国土数値情報N03ポリゴン判定の市区町村検索関数を構築する。
+ * 【2026-10-02修正】以前はWikidataの市区町村代表座標への最近傍探索だったが、
+ * 富山市のように市域が広い自治体では代表点が市街地から離れた場所（南部の山間部）
+ * にあり、市中心部の停留所が隣接する小さな自治体に誤判定される実例が出た
+ * （例：富山市中心部の「永楽町」「中田」等が隣の舟橋村と誤判定）。さらに
+ * Wikidataの母集団には上市町・朝日町の欠落、合併で消滅した旧大山町の残存
+ * といった抜け漏れもあった。「代表点に近いか」ではなく「市区町村の境界
+ * ポリゴンの中に実際に入っているか」で判定する（municipality-polygon-lookup.js
+ * 参照、出典：国土交通省 国土数値情報「行政区域データ」N03）。
+ * ネットワーク障害等でN03が取得できない場合はnullを返し、呼び出し側が
+ * 事業者名・番号での曖昧さ回避にフォールバックする。
  */
-function loadNearestMunicipalityFinder() {
-  if (!fs.existsSync(municipalityLocationsPath)) {
+async function loadMunicipalityFinder(prefCode) {
+  if (!prefCode) {
+    console.warn('    ⚠️  prefCodeが指定されていないため、駅名の曖昧さ回避はN03市区町村判定を使わず事業者名・番号にフォールバックします。');
+    return null;
+  }
+  try {
+    return await buildMunicipalityPolygonFinder([prefCode]);
+  } catch (error) {
     console.warn(
-      `    ⚠️  ${municipalityLocationsPath} が見つかりません。駅名の曖昧さ回避は市区町村名ではなく` +
-      `番号にフォールバックします（node scripts/build-pipeline/generate-municipality-table.js で生成できます）。`
+      `    ⚠️  国土数値情報N03の取得に失敗しました（${error.message}）。駅名の曖昧さ回避は市区町村名を使わず` +
+      '事業者名・番号にフォールバックします。'
     );
     return null;
   }
-  const locations = JSON.parse(fs.readFileSync(municipalityLocationsPath, 'utf-8'));
-  return (lat, lon) => {
-    let best = null;
-    let bestDist = Infinity;
-    for (const loc of locations) {
-      const d = haversineMeters(lat, lon, loc.lat, loc.lon);
-      if (d < bestDist) { bestDist = d; best = loc; }
-    }
-    return best?.name ?? null;
-  };
 }
 
 /**
@@ -324,9 +327,12 @@ function loadNearestMunicipalityFinder() {
  *
  * @param {object} aggregated
  * @param {Map<string,string>} operatorIdToName - 事業者ID→表示名（曖昧さ回避の第2段で使う）
+ * @param {((lat:number, lon:number)=>string|null)|null} findMunicipality - N03ポリゴン判定関数
+ *   （loadMunicipalityFinder()参照）。nullなら市区町村名の段をスキップする。
  */
-function buildStationClusters(aggregated, operatorIdToName) {
-  const findNearestMunicipality = loadNearestMunicipalityFinder();
+function buildStationClusters(aggregated, operatorIdToName, findMunicipality) {
+  let municipalityUnresolvedCount = 0;
+  const municipalityUnresolvedSamples = [];
 
   const stopsArray = Object.values(aggregated.stops);
   const byName = new Map();
@@ -403,9 +409,15 @@ function buildStationClusters(aggregated, operatorIdToName) {
     const withMeta = finalClusters.map((clusterStops) => {
       const lat = clusterStops.reduce((sum, s) => sum + s.stop_lat, 0) / clusterStops.length;
       const lon = clusterStops.reduce((sum, s) => sum + s.stop_lon, 0) / clusterStops.length;
-      const municipality = finalClusters.length > 1 && findNearestMunicipality
-        ? findNearestMunicipality(lat, lon)
+      const municipality = finalClusters.length > 1 && findMunicipality
+        ? findMunicipality(lat, lon)
         : null;
+      if (finalClusters.length > 1 && findMunicipality && !municipality) {
+        municipalityUnresolvedCount += 1;
+        if (municipalityUnresolvedSamples.length < 10) {
+          municipalityUnresolvedSamples.push(`${name}(${lat.toFixed(4)},${lon.toFixed(4)})`);
+        }
+      }
       const operatorIds = new Set(clusterStops.map((s) => s.operator_id));
       // クラスタ内の停留所が単一事業者のときだけ事業者名での区別を試す
       // （複数事業者が混在するクラスタは「事業者名」1つでは区別の意味をなさない）。
@@ -458,6 +470,12 @@ function buildStationClusters(aggregated, operatorIdToName) {
     `  - 駅クラスタリング: ${byName.size}駅名 → ${clusters.length}駅` +
     `（分裂した駅名: ${splitNameCount}件、うち直径超過による分割: ${diameterSplitCount}件）`
   );
+  if (findMunicipality && municipalityUnresolvedCount > 0) {
+    console.log(
+      `  - N03のどのポリゴンにも入らなかった停留所クラスタ: ${municipalityUnresolvedCount}件` +
+      `（例: ${municipalityUnresolvedSamples.join('、')}）`
+    );
+  }
 
   // 各県のビルドで、クラスタ直径の最大値と上位10件をログに出す（B-8）
   const multiStopDiameters = diameters.filter((d) => d.diameter > 0).sort((a, b) => b.diameter - a.diameter);
