@@ -5,6 +5,18 @@
  * 「駅ID→駅ID」の組み合わせについて、trips.txt + stop_times.txt から
  * 実際にその区間を直通する便があるかを検証し、使用路線と所要時間を確定する。
  *
+ * 【2026-10-05追記】均一運賃型の路線（fare-lookup-tables.jsonのbus_fares）を
+ * od_faresへ展開する処理もここで行う。fare-calculator.js（検索エンジン）は
+ * od_faresしか読まない設計のため、bus_fares止まりだと均一運賃路線は検索結果に
+ * 一切出てこないという不具合があった（富山の再取得で発覚：21事業者中13事業者が
+ * 均一運賃型で、2,785駅中1,442駅がOD運賃表に出発点として1件も登録されない
+ * 状態だった）。
+ * 展開は「路線の全停留所の総当たり」ではなく、このスクリプトが元々trips.txt+
+ * stop_times.txtを停留所順序どおりに走査している処理（stationDirect構築と同じ
+ * ループ）に相乗りし、実際に「この順序で通った」物理停留所ペアだけを対象にする
+ * （uniformRouteStopPairs）。同じペアに既にOD型の運賃がある場合は安い方を残す。
+ * フロントエンドの運賃を引く経路は一本（od_fares）のまま変えていない。
+ *
  * 【方針】
  * - 「両端を通る路線の積集合」だけでは判定しない。GTFSの各tripのstop_times
  *   を停留所順序どおりに走査し、出発停留所→到着停留所を「この順序で」
@@ -113,6 +125,15 @@ export async function generateRouteDetails(options = {}) {
   const stationDirect = new Map();
   let totalTrips = 0;
 
+  // 均一運賃路線（fareLookup.bus_fares）をod_faresへ展開するための、実際の
+  // stop_idペア（Map<routeId, Set<"originStopId\tdestStopId">>）。station_id単位
+  // ではなく実際に乗車・降車する物理停留所のstop_idペアを使う（fare-calculator.js
+  // がdepartureStation.stopsの各stop_idでod_faresを引くため、どのstop_idで
+  // 登録しても正しく参照できるが、実在するGTFSの停留所を使うことで架空の
+  // 乗降ペアを作らない）。「停留所の総当たり」にしないため、下のtrip走査で
+  // 実際にその順序で通ったペアだけをここに記録する（2026-10-05、Cowork指示）。
+  const uniformRouteStopPairs = new Map();
+
   for (const operator of operators) {
     const operatorDir = path.join(rawGtfsDir, operator.id);
     const tripsPath = path.join(operatorDir, 'trips.txt');
@@ -160,10 +181,55 @@ export async function generateRouteDetails(options = {}) {
           const routeMap = destMap.get(stationJ);
           if (!routeMap.has(routeId)) routeMap.set(routeId, []);
           routeMap.get(routeId).push({ duration, departureMin });
+
+          // 均一運賃路線のod_fares展開用：このtripが実際に「この順序で」通った
+          // 物理停留所ペアだけを記録する（停留所の総当たりではない）
+          if (fareLookup.bus_fares[routeId] !== undefined) {
+            if (!uniformRouteStopPairs.has(routeId)) uniformRouteStopPairs.set(routeId, new Set());
+            uniformRouteStopPairs.get(routeId).add(`${stops[i].stop_id}\t${stops[j].stop_id}`);
+          }
         }
       }
     }
   }
+
+  // 均一運賃路線をod_faresへ展開する。同じstop_idペアに既にOD型の運賃が
+  // あれば安い方を残す（運賃0円の無料路線も正しく扱うため、すべて
+  // ===undefinedで判定する。!fareやfare||…は0円を「なし」と誤判定するため使わない）。
+  let uniformExpandedCount = 0;
+  let uniformCheaperCount = 0;
+  for (const [routeId, pairs] of uniformRouteStopPairs.entries()) {
+    const fareEntry = fareLookup.bus_fares[routeId];
+    if (fareEntry === undefined) continue;
+    const price = fareEntry.fare;
+    if (price === undefined) continue;
+    for (const pairKey of pairs) {
+      const [originStopId, destStopId] = pairKey.split('\t');
+      if (originStopId === destStopId) continue;
+      if (fareLookup.od_fares[originStopId] === undefined) {
+        fareLookup.od_fares[originStopId] = {};
+      }
+      const existing = fareLookup.od_fares[originStopId][destStopId];
+      if (existing === undefined) {
+        fareLookup.od_fares[originStopId][destStopId] = price;
+        uniformExpandedCount += 1;
+      } else if (price < existing) {
+        fareLookup.od_fares[originStopId][destStopId] = price;
+        uniformCheaperCount += 1;
+      }
+    }
+  }
+  console.log(
+    `  - 均一運賃路線をod_faresへ展開: ${uniformRouteStopPairs.size}路線、` +
+    `新規追加${uniformExpandedCount}件、既存のOD運賃より安く上書き${uniformCheaperCount}件`
+  );
+  // フロントエンドが読む運賃の経路はod_fares一本のまま保つため、展開結果を
+  // fare-lookup-tables.jsonへ書き戻す（bus_fares自体はビルド時のみ使う中間データ
+  // として残す。以降のroute-details生成はこの更新後のod_faresを読む）。
+  fs.writeFileSync(
+    path.join(derivedDir, 'fare-lookup-tables.json'),
+    JSON.stringify(fareLookup)
+  );
 
   console.log(`  - 処理trip数: ${totalTrips}`);
   console.log(`  - 直行ペアを持つ出発駅数: ${stationDirect.size}`);
