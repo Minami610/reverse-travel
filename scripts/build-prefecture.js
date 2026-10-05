@@ -43,6 +43,7 @@ import { checkLicenseAllowed } from './build-pipeline/license-check.js';
 import { checkFeedHasFareData } from './build-pipeline/fare-feed-check.js';
 import { computeSpotDiff, logSpotDiff } from './build-pipeline/spot-diff-report.js';
 import { computeGtfsDiff, logGtfsDiff } from './build-pipeline/gtfs-diff-report.js';
+import { checkOperatorReachability } from './build-pipeline/operator-reachability-check.js';
 
 // 前回件数に対する削除率がこれを超えたら--accept-diffなしでは失敗にする
 const SPOT_REMOVAL_RATIO_THRESHOLD = 0.03;
@@ -228,6 +229,34 @@ async function buildOnePrefecture(code, { force, acceptDiff }) {
     throw new Error(`${prefName}: 経路情報が0件です`);
   }
 
+  // 【ステップ2c】事業者ごとの到達可否チェック（丸ごと使えない事業者を検出）。
+  // 県全体の到達駅数・経路情報数は0件チェックで守られているが、「事業者Xの駅は
+  // 存在するがどこへも行けない」状態（実例：富山で21事業者中13事業者が均一運賃型
+  // のため検索結果に一切出てこなかった）は県全体の集計では見えない。採用した
+  // 事業者ごとに検証し、1つでも到達0駅の事業者があれば（許可リストに無い限り）
+  // ここでビルドを止める。スポット生成（Wikidataへの問い合わせ、最も時間がかかる
+  // ステップ）より前に行うことで、失敗時の手戻りを減らす。
+  console.log('\n【ステップ2c】事業者ごとの到達可否チェック');
+  const stationsForReachCheck = JSON.parse(fs.readFileSync(path.join(outputDir, 'stations.json'), 'utf-8'));
+  const fareLookupForReachCheck = JSON.parse(fs.readFileSync(path.join(outputDir, 'fare-lookup-tables.json'), 'utf-8'));
+  const reachabilityCheck = checkOperatorReachability(stationsForReachCheck, fareLookupForReachCheck.od_fares, operators);
+  for (const s of reachabilityCheck.perOperator) {
+    console.log(`  - ${s.name}（${s.operator}）: ${s.reachableCount}/${s.stationCount}駅`);
+  }
+  if (reachabilityCheck.allowlisted.length > 0) {
+    console.log(
+      `  ⚠️  到達0駅だが許可リストにより続行: ` +
+      reachabilityCheck.allowlisted.map((s) => `${s.operator}（${s.reason}）`).join('、')
+    );
+  }
+  if (reachabilityCheck.failing.length > 0) {
+    throw new Error(
+      `${prefName}: 採用した事業者のうち、どこにも行けない（到達0駅）事業者があります: ` +
+      reachabilityCheck.failing.map((s) => `${s.name}（${s.operator}、${s.stationCount}駅）`).join('、') +
+      `。config/zero-reach-operators-allowlist.jsonに理由付きで追加して明示的に許容するか、運賃データを確認してください。`
+    );
+  }
+
   console.log('\n【ステップ3】観光スポット情報を生成（Wikidata bbox一括取得）');
   const stopsMeta = JSON.parse(fs.readFileSync(path.join(outputDir, 'stops-metadata.json'), 'utf-8'));
   const { normalizedOutput, excludedItems } = await generateSpotsForRegion(stopsMeta, { label: prefName });
@@ -264,6 +293,7 @@ async function buildOnePrefecture(code, { force, acceptDiff }) {
     completed_at: new Date().toISOString(),
     operators: operators.map((op) => op.id),
     excluded_operators: excluded,
+    operator_reachability: reachabilityCheck.perOperator,
     counts: {
       stops: parseStats.stopCount,
       stations: parseStats.stationCount,
