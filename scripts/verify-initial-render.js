@@ -695,6 +695,88 @@ async function checkLoadingState(html) {
   return showsLoadingMessage && noFailureAlertYet && rendered && errors.length === 0;
 }
 
+/**
+ * 乗換の表示が事実に合っているかを確認する（2026-10-05追加）：
+ * 1. 乗換の注記が「※乗り換えの待ち時間は、運行本数から見積もった目安です」に
+ *    なっていること（以前の「※乗換の待ち時間は考慮していません」は、選定ロジック
+ *    自体は運行本数から見積もった待ち時間を考慮しているため実態と違っていた）
+ * 2. 1本目の降り場と2本目の乗り場が100m以上離れている例があれば、
+ *    「乗り場まで約○○m」の表示が出ること。香川に該当例が無い場合は、
+ *    そのことを報告する（無いことを失敗にはしない）。
+ * ＪＲ栗林駅（往復¥1000）は乗換到達駅89駅・乗換専属の新規スポット29件を持つ
+ * ことを別の調査で確認済みのため、検証対象に使う。
+ */
+async function checkTransferDisplay(html) {
+  console.log('\n=== 乗換表示の事実確認 ===');
+  const errors = [];
+  const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'dangerously', pretendToBeVisual: true });
+  const { window } = dom;
+  stubMatchMedia(window, true);
+  stubFetch(window);
+  window.addEventListener('error', (e) => errors.push(e.error ? (e.error.stack || e.error.message) : e.message));
+
+  await new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 50);
+    if (window.document.readyState === 'complete') done();
+    else window.addEventListener('load', done);
+  });
+  const doc = window.document;
+
+  const item = await waitForSuggestion(doc, window, 'ＪＲ栗林駅', 'ＪＲ栗林駅');
+  if (!item) {
+    console.log('❌ 検証用の出発駅「ＪＲ栗林駅」の候補が見つかりません');
+    window.close();
+    return false;
+  }
+  item.dispatchEvent(new window.Event('click', { bubbles: true }));
+  doc.getElementById('budget-input').value = '1000';
+  doc.getElementById('search-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+
+  const rendered = await waitFor(() => resultsSettled(doc), 8000);
+  if (!rendered) {
+    console.log('❌ 検索結果が表示されませんでした（タイムアウト）');
+    window.close();
+    return false;
+  }
+
+  const cards = [...doc.querySelectorAll('.spot-card')];
+  let disclaimerFound = false;
+  let distanceExampleFound = false;
+  let distanceExampleText = null;
+
+  for (const card of cards) {
+    card.dispatchEvent(new window.Event('click', { bubbles: true }));
+    const detailHtml = doc.getElementById('detail-content').innerHTML;
+    if (/乗り換えの待ち時間は、運行本数から見積もった目安です/.test(detailHtml)) {
+      disclaimerFound = true;
+    }
+    const match = detailHtml.match(/乗り換え（乗り場まで約(\d+)m）/);
+    if (match && !distanceExampleFound) {
+      distanceExampleFound = true;
+      distanceExampleText = match[0];
+    }
+  }
+
+  console.log(
+    disclaimerFound
+      ? '✅ 新しい注記「※乗り換えの待ち時間は、運行本数から見積もった目安です」が表示されています'
+      : '❌ 新しい注記が見つかりませんでした（乗換を含む詳細画面が描画されなかった可能性）'
+  );
+  console.log(
+    distanceExampleFound
+      ? `✅ 乗り場の距離表示の例が見つかりました: ${distanceExampleText}`
+      : 'ℹ️  香川（ＪＲ栗林駅、往復¥1000）には乗り場の距離表示（100m以上）に該当する例がありませんでした'
+  );
+
+  if (errors.length > 0) {
+    console.log('⚠️  ページ実行中に発生したエラー:');
+    errors.forEach((e) => console.log('  - ' + e));
+  }
+
+  window.close();
+  return disclaimerFound && errors.length === 0;
+}
+
 async function main() {
   if (!fs.existsSync(distIndexPath)) {
     console.error('dist/index.html が見つかりません。先に npm run bundle を実行してください');
@@ -709,8 +791,9 @@ async function main() {
   const mobileOk = await checkVisible(html, false, 'スマホ幅相当');
   const cardsOk = await checkResultCards(html);
   const loadingStateOk = await checkLoadingState(html);
+  const transferDisplayOk = await checkTransferDisplay(html);
 
-  if (publishedOk && desktopOk && mobileOk && cardsOk && loadingStateOk) {
+  if (publishedOk && desktopOk && mobileOk && cardsOk && loadingStateOk && transferDisplayOk) {
     console.log('\n✅ 検証成功: 初期表示・検索結果カードともに想定通りです');
   } else {
     console.error('\n❌ 検証失敗: 上記のいずれかで問題が見つかりました');

@@ -99,6 +99,10 @@ export class FareCalculator {
               reachBy: 'direct',
               viaOperator: originOperator,
               viaStopId: originStopId,
+              // この駅（将来乗換のhubになりうる）に実際に到着する物理停留所。
+              // 乗換2本目の乗り場（busStop.stop_id、下のステップ2参照）との距離を
+              // 画面に出すために使う（route-formatter.js参照）。
+              arrivalStopId: destStopId,
             });
           }
         }
@@ -158,6 +162,11 @@ export class FareCalculator {
                 transferAt: hubStationId,
                 legOperators,
                 legFares: [hubInfo.fare, busFare],
+                // hub駅クラスタ内で、1本目の降り場（hubInfo.arrivalStopId）と
+                // 2本目の乗り場（busStop.stop_id）が実際にどれだけ離れているかを
+                // 画面に出すための組（route-formatter.jsが距離を計算する）。
+                transferAlightStopId: hubInfo.arrivalStopId,
+                transferBoardStopId: busStop.stop_id,
               });
             }
           }
@@ -207,6 +216,10 @@ export class FareCalculator {
           transferAt: info.transferAt || null,
           legOperators: info.legOperators || null,
           legFares: info.legFares || null,
+          // 乗換2回目の乗り場が1回目の降り場と離れている場合の画面表示用
+          // （route-formatter.js参照）。乗換でない場合はどちらもundefined。
+          transferAlightStopId: info.transferAlightStopId,
+          transferBoardStopId: info.transferBoardStopId,
         };
         // タイブレークのために探索中に既に算出済み（isBetterCandidate参照）。
         // 再計算せず同じ値を使い回すことで、両者が食い違う余地をなくす。

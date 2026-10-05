@@ -14,15 +14,63 @@
  * 最速の事業者で食い違うことがあった（香川の高松築港で実測6件：¥250はバスの
  * 運賃なのにことでん線の経路を表示）。route-details.jsonは事業者別に経路を
  * 持つため、必ずspot側が記録している「運賃を決めた事業者」のIDを渡して引く。
+ *
+ * 【2026-10-05追記】事業者をまたぐ乗換（formatCrossOperatorTransfer）では、
+ * 1本目の降り場と2本目の乗り場が同じ駅クラスタ内の別の物理停留所になることが
+ * ある（最大1000m、駅クラスタリングの閾値）。乗り場が変わり、かつ一定以上
+ * 離れている場合は画面にその旨と距離を出す（stopsMetadataが必要になったため
+ * コンストラクタの4番目の引数として追加）。
  */
 
 import { parseRouteEntry, routeEntryMinutes, lookupRouteEntry } from './route-duration.js';
 
+/** 2点間の距離をメートルで返す（Haversine公式） */
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// 乗り場の違いを画面に出す距離の下限（メートル）。これ未満は「乗り場が変わった」
+// ことを利用者に伝える実益が薄いため、今までどおりの表示のままにする。
+const TRANSFER_WALK_DISTANCE_THRESHOLD_METERS = 100;
+
 export class RouteFormatter {
-  constructor(routeInfo, routeDetails, stations) {
+  constructor(routeInfo, routeDetails, stations, stopsMetadata) {
     this.routeInfo = routeInfo || {};
     this.routeDetails = routeDetails || {};
     this.stations = stations || {};
+    this.stopCoordsById = new Map(
+      (stopsMetadata || []).map((s) => [s.stop_id, { lat: s.stop_lat, lon: s.stop_lon }])
+    );
+  }
+
+  /**
+   * 乗換の1本目の降り場と2本目の乗り場が実際にどれだけ離れているかを
+   * 100m単位で四捨五入して返す。どちらかのstop_idが無い・同じ・座標が
+   * 引けない場合はnull（「乗り場は変わらない」扱い＝今までどおりの表示）。
+   */
+  transferWalkDistanceMeters(alightStopId, boardStopId) {
+    if (!alightStopId || !boardStopId || alightStopId === boardStopId) return null;
+    const alight = this.stopCoordsById.get(alightStopId);
+    const board = this.stopCoordsById.get(boardStopId);
+    if (!alight || !board) return null;
+    const meters = haversineMeters(alight.lat, alight.lon, board.lat, board.lon);
+    return Math.round(meters / 100) * 100;
+  }
+
+  /** 乗換の行（↓ ○○で乗換）。乗り場が100m以上離れているときだけ距離を添える */
+  renderTransferNote(hubName, alightStopId, boardStopId) {
+    const distance = this.transferWalkDistanceMeters(alightStopId, boardStopId);
+    if (distance !== null && distance >= TRANSFER_WALK_DISTANCE_THRESHOLD_METERS) {
+      return `<div class="route-transfer-note">↓ ${hubName}で乗り換え（乗り場まで約${distance}m）</div>`;
+    }
+    return `<div class="route-transfer-note">↓ ${hubName}で乗換</div>`;
   }
 
   /** 駅IDから表示名を引く（見つからなければIDをそのまま出す＝フェイルセーフ） */
@@ -102,7 +150,7 @@ export class RouteFormatter {
         <div class="route-transfer-note">↓ ${viaName}で乗換</div>
         ${this.renderLegLine(parsed.legs[1].route_id, viaName, destName, parsed.legs[1].duration_min, null)}
         <div class="route-total">合計（片道） ¥${fare}（通し運賃）・約${totalMinutes}分</div>
-        <p class="route-disclaimer">※乗換の待ち時間は考慮していません</p>
+        <p class="route-disclaimer">※乗り換えの待ち時間は、運行本数から見積もった目安です</p>
         ${roundTripNote}
       </div>
     `;
@@ -127,13 +175,19 @@ export class RouteFormatter {
     const leg2Minutes = this.totalMinutes(leg2);
     const totalMinutes = leg1Minutes !== null && leg2Minutes !== null ? leg1Minutes + leg2Minutes : null;
 
+    const transferNote = this.renderTransferNote(
+      transferAtName,
+      spot.source_transfer_alight_stop_id,
+      spot.source_transfer_board_stop_id
+    );
+
     return `
       <div class="route-info">
         ${this.renderLegOrSegment(departureName, transferAtName, leg1, fare1)}
-        <div class="route-transfer-note">↓ ${transferAtName}で乗換</div>
+        ${transferNote}
         ${this.renderLegOrSegment(transferAtName, destName, leg2, fare2)}
         <div class="route-total">合計（片道） ¥${fare}${totalMinutes !== null ? `・約${totalMinutes}分` : ''}</div>
-        <p class="route-disclaimer">※乗換の待ち時間は考慮していません</p>
+        <p class="route-disclaimer">※乗り換えの待ち時間は、運行本数から見積もった目安です</p>
         ${roundTripNote}
       </div>
     `;

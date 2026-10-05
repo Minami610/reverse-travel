@@ -83,6 +83,8 @@ export class SpotFinder {
             source_transfer_at: station.transferAt,
             source_leg_operators: station.legOperators,
             source_leg_fares: station.legFares,
+            source_transfer_alight_stop_id: station.transferAlightStopId,
+            source_transfer_board_stop_id: station.transferBoardStopId,
             source_ride_duration_min: station.rideDurationMin,
             source_total_time_min:
               (station.selectionTimeMin ?? Infinity) + walkMinutes(ref.distance),

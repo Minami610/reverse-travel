@@ -362,7 +362,7 @@ class ReverseTravel {
     this.data = await this.loader.loadPrefectures([prefCode, ...adjacent]);
     this.fareCalc = new FareCalculator(this.data);
     this.spotFinder = new SpotFinder(this.data);
-    this.routeFormatter = new RouteFormatter(this.data.routeInfo, this.data.routeDetails, this.data.stations);
+    this.routeFormatter = new RouteFormatter(this.data.routeInfo, this.data.routeDetails, this.data.stations, this.data.stopsMetadata);
   }
 
   showDepartureSuggestions(input) {
