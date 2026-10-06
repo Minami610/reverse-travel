@@ -261,11 +261,21 @@ export function copySpotRankingConfig(outRoot = DOCS_DATA_ROOT) {
  * municipality-polygon-lookup.jsのN03_DATA_SOURCEを単一の情報源とする
  * （GTFSフィードのfeed_info.txtに相当する機械可読な出典情報がN03には無いため、
  * 人間が公式ページを確認して書いた値をコード側で一元管理する）。
+ *
+ * 【2026-10-06追記】県名の直後に「（補足）」を付けられるようにした
+ * （config/published-prefectures.jsonのarea_notes、都道府県コード→補足文字列）。
+ * 石川県のように、対応エリアが県内の一部市町のコミュニティバスに限られ県全域を
+ * カバーしていない場合に、使い方画面の対応地域表示でその旨を正直に示すため。
  */
 export function generateNationalDataSources(prefCodes, outRoot = DOCS_DATA_ROOT) {
   const feedsById = new Map();
   const excludedById = new Map();
   const prefectures = [];
+
+  const publishedConfigPath = path.join(rootDir, 'config/published-prefectures.json');
+  const areaNotes = fs.existsSync(publishedConfigPath)
+    ? JSON.parse(fs.readFileSync(publishedConfigPath, 'utf-8')).area_notes || {}
+    : {};
 
   for (const prefCode of prefCodes) {
     const codeStr = prefCodeStr(prefCode);
@@ -282,7 +292,9 @@ export function generateNationalDataSources(prefCodes, outRoot = DOCS_DATA_ROOT)
       if (!excludedById.has(excluded.operator_id)) excludedById.set(excluded.operator_id, excluded);
     }
     for (const pref of manifest.coverage?.prefectures || []) {
-      if (!prefectures.includes(pref)) prefectures.push(pref);
+      const note = areaNotes[codeStr];
+      const label = note ? `${pref}（${note}）` : pref;
+      if (!prefectures.includes(label)) prefectures.push(label);
     }
   }
 

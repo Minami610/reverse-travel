@@ -248,7 +248,7 @@ class ReverseTravel {
       const prefectures = manifest?.coverage?.prefectures;
       coverageEl.textContent =
         Array.isArray(prefectures) && prefectures.length > 0
-          ? `現在は${prefectures.join('・')}に対応しています（全国対応へ拡大予定）。`
+          ? `現在は${prefectures.join('・')}に対応しています。対応している路線は「出典の詳細」で確認できます。`
           : '対応地域の情報を取得できませんでした。';
     }
 

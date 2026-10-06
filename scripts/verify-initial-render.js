@@ -134,6 +134,21 @@ function checkPublishedPrefecturesConsistency() {
  * ファイルが無い場合（未ビルドの隣接県など）はok:false/404を返し、
  * gtfs-loader.jsのグレースフルスキップ処理をそのまま検証できるようにする。
  */
+/**
+ * main.jsのpopulateDataSources()が#howto-coverageに描画するはずの文字列を、
+ * 実際に生成済みのdocs/data/national/data-sources.jsonから組み立てる
+ * （期待値をここにハードコードせず、ビルド成果物から導く）。
+ * ファイルが無い場合はnullを返す。
+ */
+function buildExpectedCoverageText() {
+  const dataSourcesPath = path.join(docsDir, 'data/national/data-sources.json');
+  if (!fs.existsSync(dataSourcesPath)) return null;
+  const manifest = JSON.parse(fs.readFileSync(dataSourcesPath, 'utf-8'));
+  const prefectures = manifest.coverage?.prefectures;
+  if (!Array.isArray(prefectures) || prefectures.length === 0) return null;
+  return `現在は${prefectures.join('・')}に対応しています。対応している路線は「出典の詳細」で確認できます。`;
+}
+
 function stubFetch(window, { delayMsForPrefData = 0 } = {}) {
   window.fetch = async (url) => {
     const relPath = String(url).replace(/^\//, '');
@@ -338,7 +353,12 @@ async function checkVisible(html, matches, label) {
     doc.getElementById('howto-btn')?.dispatchEvent(new window.Event('click', { bubbles: true }));
     const opensOnClick = window.getComputedStyle(howtoModal).display !== 'none';
     const coverageText = doc.getElementById('howto-coverage')?.textContent || '';
-    const coverageRendered = coverageText.length > 0 && !/読み込み中/.test(coverageText);
+    // 対応地域の文言は、docs/data/national/data-sources.jsonのcoverage.prefectures
+    // （generate-site-data.jsがconfig/published-prefectures.jsonのarea_notesを
+    // 織り込んで生成済み）から、main.jsのpopulateDataSources()と同じ組み立て規則で
+    // 期待文字列を作り、ハードコードした文言でなく実データと一致するかを確認する。
+    const expectedCoverageText = buildExpectedCoverageText();
+    const coverageRendered = expectedCoverageText !== null && coverageText === expectedCoverageText;
 
     // 予算は往復基準（2026-09-12決定）。「帰りの交通費は含まれません」という
     // 片道基準時代の記述が戻っていないか、往復である旨の説明があるかを確認する。
@@ -349,7 +369,8 @@ async function checkVisible(html, matches, label) {
     console.log(
       howtoOk
         ? `✅ #howto-modal は初期非表示→ボタンで開き、対応地域「${coverageText}」・往復基準の説明を含みます`
-        : `❌ #howto-modal 挙動NG（初期非表示=${initiallyHidden}, クリックで開く=${opensOnClick}, カバレッジ描画=${coverageRendered}, 往復表記=${roundTripWordingOk}）`
+        : `❌ #howto-modal 挙動NG（初期非表示=${initiallyHidden}, クリックで開く=${opensOnClick}, ` +
+          `対応地域=${coverageRendered}[実際:"${coverageText}" / 期待:"${expectedCoverageText}"], 往復表記=${roundTripWordingOk}）`
     );
   }
 
