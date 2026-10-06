@@ -91,7 +91,7 @@ export class FareCalculator {
             reachBy: 'direct',
             station_id: destStationId,
             viaOperator: originOperator,
-          });
+          }, this.routeInfo);
           if (isBetterCandidate(fare, selectionMinutes, existing)) {
             reachable.set(destStationId, {
               fare,
@@ -153,7 +153,7 @@ export class FareCalculator {
               station_id: destStationId,
               transferAt: hubStationId,
               legOperators,
-            });
+            }, this.routeInfo);
             if (isBetterCandidate(totalFare, selectionMinutes, existing)) {
               reachable.set(destStationId, {
                 fare: totalFare,

@@ -75,11 +75,14 @@ function indexRouteIds(routeDetails) {
     for (const [destId, byOperator] of Object.entries(destMap)) {
       data[originId][destId] = {};
       for (const [operatorId, entry] of Object.entries(byOperator)) {
-        if (entry.length === 3) {
-          data[originId][destId][operatorId] = [indexOf(entry[0]), entry[1], entry[2]];
+        // 2026-10-06: RouteEntryからwait_minを削除した（期待待ち時間は
+        // route-info.json側のroute_id→expected_wait_minへ一本化）ため、
+        // 直行は長さ2、乗換1回は長さ5になった（旧: 3/7）。
+        if (entry.length === 2) {
+          data[originId][destId][operatorId] = [indexOf(entry[0]), entry[1]];
         } else {
           data[originId][destId][operatorId] = [
-            entry[0], indexOf(entry[1]), entry[2], entry[3], indexOf(entry[4]), entry[5], entry[6],
+            entry[0], indexOf(entry[1]), entry[2], indexOf(entry[3]), entry[4],
           ];
         }
       }

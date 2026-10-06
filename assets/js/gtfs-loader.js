@@ -65,9 +65,10 @@ function decodeRouteDetails(indexed) {
     for (const [destId, byOperator] of Object.entries(destMap)) {
       decoded[originId][destId] = {};
       for (const [operatorId, entry] of Object.entries(byOperator)) {
-        decoded[originId][destId][operatorId] = entry.length === 3
-          ? [routeIndex[entry[0]], entry[1], entry[2]]
-          : [entry[0], routeIndex[entry[1]], entry[2], entry[3], routeIndex[entry[4]], entry[5], entry[6]];
+        // 2026-10-06: wait_minを削除した新形式。直行は長さ2、乗換1回は長さ5（旧: 3/7）。
+        decoded[originId][destId][operatorId] = entry.length === 2
+          ? [routeIndex[entry[0]], entry[1]]
+          : [entry[0], routeIndex[entry[1]], entry[2], routeIndex[entry[3]], entry[4]];
       }
     }
   }

@@ -30,7 +30,7 @@
  *   最短値ではなく中央値を選んだのは、始発・終電などの外れ値に引っ張られず
  *   「実際に乗るとだいたいこのくらい」という値になるため。
  *
- * 各区間には「期待待ち時間」（expected_wait_min）も付与する。これは
+ * 各路線には「期待待ち時間」（expected_wait_min）も付与する。これは
  * アクセス駅選定（fare-calculator.js / spot-finder.js）が「乗車時間だけが
  * 短い低頻度路線」を不当に優先しないようにするための指標で、
  *   平均運行間隔 = 運行時間帯の幅（最終便の出発時刻－始発便の出発時刻） ÷ 便数
@@ -40,6 +40,18 @@
  * 便数が1便しかない区間は運行間隔を算出できないため、フォールバック値
  * FALLBACK_INTERVAL_FOR_SINGLE_TRIP_MIN を運行間隔とみなす（＝実質的に
  * 「他に選択肢があればまず選ばれない」程度の大きなペナルティを与える）。
+ *
+ * 【2026-10-06追記】expected_wait_minは、以前は「駅ペア×路線」ごとに
+ * route-details.jsonの各エントリへ埋め込んでいたが、富山でroute-details.jsonが
+ * 大きくなった（均一運賃展開で経路数が倍増）ことを受け、路線単位の1つの値に
+ * まとめてroute-info.jsonへ持たせるよう変更した。同じ路線なら「乗車時間だけが
+ * 短い低頻度路線を不当に優先しない」という目的上は駅ペアによらず同じ値で
+ * 十分なため（路線全体のtripから計算：始発〜最終の運行時間帯の幅÷便数÷2、
+ * 以前の「駅ペアごと」の値は同一路線内でもtripの通過範囲によりわずかに
+ * ばらつくことがあったが、簡易な推定という位置づけ自体は変えていない）。
+ * route-details.jsonのRouteEntryからはwait_minを削除し、表示・選定ロジック側は
+ * route_idからroute-info.jsonのexpected_wait_minを引く形にした
+ * （route-duration.jsのestimateSelectionMinutes()がroute_infoを追加引数で受け取る）。
  *
  * 【事業者別に引けるようにする理由（2026-09-29）】
  * 以前は駅名ペアごとに「頻度下限＋最短」で1つだけ経路を選んでいたため、
@@ -54,11 +66,13 @@
  * - route-details.json : {出発駅ID: {到着駅ID: {事業者ID: RouteEntry}}}
  *   RouteEntry は配列で、長さでdirect/transferを判別する（キー名の繰り返しを避けて
  *   ファイルサイズを抑えるため）：
- *     - 直行:   [route_id, duration_min, expected_wait_min]                                        （長さ3）
- *     - 乗換1回: [via, route_id_1, duration_min_1, wait_min_1, route_id_2, duration_min_2, wait_min_2] （長さ7）
+ *     - 直行:   [route_id, duration_min]                               （長さ2）
+ *     - 乗換1回: [via, route_id_1, duration_min_1, route_id_2, duration_min_2] （長さ5）
+ *   wait_minは含まない（route-info.json側のroute_id→expected_wait_minを見る）。
  *   乗換1回はfare_rulesがゾーン制の通し運賃であることが前提のため、同一事業者内の
  *   隠れた乗換のみを対象とする（他事業者を経由する乗換はfare-calculator.js側の
  *   reachBy='transfer'として別建てで扱う）。
+ * - route-info.json : 各route_idに expected_wait_min（分）を追加して書き戻す。
  */
 
 import fs from 'fs';
@@ -125,6 +139,10 @@ export async function generateRouteDetails(options = {}) {
   const stationDirect = new Map();
   let totalTrips = 0;
 
+  // 路線ごとの期待待ち時間を計算するための、全tripの始発停留所の出発時刻
+  // （駅ペアによらず、その路線全体の運行間隔を見るため）。Map<routeId, number[]>
+  const routeDepartureMinutes = new Map();
+
   // 均一運賃路線（fareLookup.bus_fares）をod_faresへ展開するための、実際の
   // stop_idペア（Map<routeId, Set<"originStopId\tdestStopId">>）。station_id単位
   // ではなく実際に乗車・降車する物理停留所のstop_idペアを使う（fare-calculator.js
@@ -161,6 +179,13 @@ export async function generateRouteDetails(options = {}) {
       const routeId = tripToRoute.get(tripId);
       if (!routeId) continue;
       totalTrips += 1;
+
+      // この路線の期待待ち時間を計算するため、tripの始発停留所の出発時刻を記録する
+      // （駅ペアごとではなく路線全体で1つの値にまとめるため、stops[0]のみでよい）
+      if (stops.length > 0) {
+        if (!routeDepartureMinutes.has(routeId)) routeDepartureMinutes.set(routeId, []);
+        routeDepartureMinutes.get(routeId).push(timeToMinutes(stops[0].departure_time));
+      }
 
       // 同一trip内で「先に通る停留所→後に通る停留所」の全組み合わせが
       // 「この順序で通る＝直通する」ペアの正解データになる
@@ -247,9 +272,24 @@ export async function generateRouteDetails(options = {}) {
   // 選ばれるペア数を最短基準の905件から便数最多基準と同じ496件まで戻せた。
   const MIN_TRIPS_FOR_SPEED_PREFERENCE = 3;
 
-  // 便数1本だけの区間は運行間隔を実測できないため、大きめの固定値で代用し、
+  // 便数1本だけの路線は運行間隔を実測できないため、大きめの固定値で代用し、
   // 「他に選択肢があればまず選ばれない」程度のペナルティを与える
   const FALLBACK_INTERVAL_FOR_SINGLE_TRIP_MIN = 720; // 12時間 → 期待待ち時間360分
+
+  // 路線ごとの期待待ち時間を計算し、route-info.jsonへ追加して書き戻す
+  // （2026-10-06：駅ペアごとの重複した値をやめ、路線単位の1つの値にまとめた）。
+  let routeWaitMinCount = 0;
+  for (const [routeId, departureMins] of routeDepartureMinutes.entries()) {
+    const tripCount = departureMins.length;
+    const span = Math.max(...departureMins) - Math.min(...departureMins);
+    const avgIntervalMin = tripCount >= 2 ? span / tripCount : FALLBACK_INTERVAL_FOR_SINGLE_TRIP_MIN;
+    if (routeInfo[routeId] !== undefined) {
+      routeInfo[routeId].expected_wait_min = Math.round(avgIntervalMin / 2);
+      routeWaitMinCount += 1;
+    }
+  }
+  console.log(`  - 路線ごとの期待待ち時間をroute-info.jsonへ追加: ${routeWaitMinCount}路線`);
+  fs.writeFileSync(path.join(derivedDir, 'route-info.json'), JSON.stringify(routeInfo));
 
   /** 指定した事業者の路線に限定して直行経路を解決する */
   function resolveDirectForOperator(originId, destId, operatorId) {
@@ -260,16 +300,12 @@ export async function generateRouteDetails(options = {}) {
     for (const [routeId, entries] of routeMap.entries()) {
       if (routeIdToOperator.get(routeId) !== operatorId) continue;
       const durations = entries.map((e) => e.duration);
-      const departureMins = entries.map((e) => e.departureMin);
       const tripCount = entries.length;
-      const span = Math.max(...departureMins) - Math.min(...departureMins);
-      const avgIntervalMin = tripCount >= 2 ? span / tripCount : FALLBACK_INTERVAL_FOR_SINGLE_TRIP_MIN;
 
       candidates.push({
         route_id: routeId,
         duration_min: Math.round(median(durations)),
         sample_size: tripCount,
-        expected_wait_min: Math.round(avgIntervalMin / 2),
       });
     }
     if (candidates.length === 0) return null;
@@ -320,7 +356,7 @@ export async function generateRouteDetails(options = {}) {
     if (direct) {
       if (!routeDetails[originId]) routeDetails[originId] = {};
       if (!routeDetails[originId][destId]) routeDetails[originId][destId] = {};
-      routeDetails[originId][destId][operatorId] = [direct.route_id, direct.duration_min, direct.expected_wait_min];
+      routeDetails[originId][destId][operatorId] = [direct.route_id, direct.duration_min];
       directCount += 1;
       continue;
     }
@@ -351,10 +387,8 @@ export async function generateRouteDetails(options = {}) {
         bestTransfer.via,
         bestTransfer.leg1.route_id,
         bestTransfer.leg1.duration_min,
-        bestTransfer.leg1.expected_wait_min,
         bestTransfer.leg2.route_id,
         bestTransfer.leg2.duration_min,
-        bestTransfer.leg2.expected_wait_min,
       ];
       transferCount += 1;
     } else {

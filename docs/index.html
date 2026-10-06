@@ -1996,9 +1996,10 @@ function decodeRouteDetails(indexed) {
     for (const [destId, byOperator] of Object.entries(destMap)) {
       decoded[originId][destId] = {};
       for (const [operatorId, entry] of Object.entries(byOperator)) {
-        decoded[originId][destId][operatorId] = entry.length === 3
-          ? [routeIndex[entry[0]], entry[1], entry[2]]
-          : [entry[0], routeIndex[entry[1]], entry[2], entry[3], routeIndex[entry[4]], entry[5], entry[6]];
+        // 2026-10-06: wait_minを削除した新形式。直行は長さ2、乗換1回は長さ5（旧: 3/7）。
+        decoded[originId][destId][operatorId] = entry.length === 2
+          ? [routeIndex[entry[0]], entry[1]]
+          : [entry[0], routeIndex[entry[1]], entry[2], routeIndex[entry[3]], entry[4]];
       }
     }
   }
@@ -2215,10 +2216,16 @@ class GTFSLoader {
  * 両方から使う。
  *
  * route-details.json の RouteEntry はファイルサイズ抑制のため配列形式：
- *   直行:   [route_id, duration_min, wait_min]                                              （長さ3）
- *   乗換1回: [via, route_id_1, duration_min_1, wait_min_1, route_id_2, duration_min_2, wait_min_2] （長さ7）
- * wait_min は期待待ち時間（平均運行間隔÷2の簡易推定）。表示（route-formatter.js）は
- * duration_minのみを使い、wait_minはアクセス駅選定（fare-calculator.js）でのみ使う。
+ *   直行:   [route_id, duration_min]                               （長さ2）
+ *   乗換1回: [via, route_id_1, duration_min_1, route_id_2, duration_min_2] （長さ5）
+ *
+ * 【2026-10-06追記】期待待ち時間（wait_min）はRouteEntryに含めない。以前は
+ * 「駅ペア×路線」ごとに埋め込んでいたが、富山でroute-details.jsonが肥大化した
+ * （均一運賃展開で経路数が倍増）ことを受け、路線単位の1つの値にまとめて
+ * route-info.json（route_id→expected_wait_min）へ持たせた。そのため
+ * estimateSelectionMinutes()はrouteInfoを追加引数として受け取り、route_idから
+ * 期待待ち時間を引く。表示（route-formatter.js）はduration_minのみを使い、
+ * 期待待ち時間はアクセス駅選定（fare-calculator.js）でのみ使う。
  *
  * 【事業者IDが必須引数になっている理由】運賃を決めた事業者と表示する経路の事業者が
  * 食い違うと、存在しない運賃×経路の組み合わせを表示してしまう（香川の高松築港で
@@ -2226,18 +2233,18 @@ class GTFSLoader {
  * 呼び出し側は必ず「運賃を決めた事業者」のIDを渡すこと。
  */
 
-/** RouteEntry配列 → {type, route_id, duration_min, wait_min} または {type, via, legs} */
+/** RouteEntry配列 → {type, route_id, duration_min} または {type, via, legs} */
 function parseRouteEntry(entry) {
   if (!entry) return null;
-  if (entry.length === 3) {
-    return { type: 'direct', route_id: entry[0], duration_min: entry[1], wait_min: entry[2] };
+  if (entry.length === 2) {
+    return { type: 'direct', route_id: entry[0], duration_min: entry[1] };
   }
   return {
     type: 'transfer',
     via: entry[0],
     legs: [
-      { route_id: entry[1], duration_min: entry[2], wait_min: entry[3] },
-      { route_id: entry[4], duration_min: entry[5], wait_min: entry[6] },
+      { route_id: entry[1], duration_min: entry[2] },
+      { route_id: entry[3], duration_min: entry[4] },
     ],
   };
 }
@@ -2250,15 +2257,21 @@ function routeEntryMinutes(parsed) {
     : parsed.legs[0].duration_min + parsed.legs[1].duration_min;
 }
 
-/** 選定ロジック用：乗車時間＋期待待ち時間の合計 */
-function routeEntryMinutesWithWait(parsed) {
+/** route_idからroute-info.jsonのexpected_wait_minを引く。無ければ0分扱い。 */
+function waitMinForRoute(routeInfo, routeId) {
+  const waitMin = routeInfo?.[routeId]?.expected_wait_min;
+  return waitMin === undefined ? 0 : waitMin;
+}
+
+/** 選定ロジック用：乗車時間＋期待待ち時間の合計（期待待ち時間はroute_id単位でroute-info.jsonから引く） */
+function routeEntryMinutesWithWait(parsed, routeInfo) {
   if (!parsed) return null;
   if (parsed.type === 'direct') {
-    return parsed.duration_min + parsed.wait_min;
+    return parsed.duration_min + waitMinForRoute(routeInfo, parsed.route_id);
   }
   return (
-    parsed.legs[0].duration_min + parsed.legs[0].wait_min +
-    parsed.legs[1].duration_min + parsed.legs[1].wait_min
+    parsed.legs[0].duration_min + waitMinForRoute(routeInfo, parsed.legs[0].route_id) +
+    parsed.legs[1].duration_min + waitMinForRoute(routeInfo, parsed.legs[1].route_id)
   );
 }
 
@@ -2294,17 +2307,18 @@ function estimateRideMinutes(routeDetails, departureStationId, station) {
  * 出発駅ID→到達駅IDの「乗車時間＋期待待ち時間」（分）を算出する（アクセス駅選定用）。
  * 待ち時間は「本数の少ない路線が乗車時間だけで不当に優位になる」のを防ぐための
  * 簡易な補正値であり、経路表示には使わない（estimateRideMinutesと使い分ける）。
+ * @param {object} routeInfo - route_id→{..., expected_wait_min}（route-info.json）
  */
-function estimateSelectionMinutes(routeDetails, departureStationId, station) {
+function estimateSelectionMinutes(routeDetails, departureStationId, station, routeInfo) {
   if (station.reachBy === 'transfer' && station.transferAt) {
     const [op1, op2] = station.legOperators;
-    const leg1 = routeEntryMinutesWithWait(parseRouteEntry(lookupRouteEntry(routeDetails, departureStationId, station.transferAt, op1)));
-    const leg2 = routeEntryMinutesWithWait(parseRouteEntry(lookupRouteEntry(routeDetails, station.transferAt, station.station_id, op2)));
+    const leg1 = routeEntryMinutesWithWait(parseRouteEntry(lookupRouteEntry(routeDetails, departureStationId, station.transferAt, op1)), routeInfo);
+    const leg2 = routeEntryMinutesWithWait(parseRouteEntry(lookupRouteEntry(routeDetails, station.transferAt, station.station_id, op2)), routeInfo);
     if (leg1 === null || leg2 === null) return null;
     return leg1 + leg2;
   }
   const parsed = parseRouteEntry(lookupRouteEntry(routeDetails, departureStationId, station.station_id, station.viaOperator));
-  return routeEntryMinutesWithWait(parsed);
+  return routeEntryMinutesWithWait(parsed, routeInfo);
 }
 
 
@@ -2402,7 +2416,7 @@ class FareCalculator {
             reachBy: 'direct',
             station_id: destStationId,
             viaOperator: originOperator,
-          });
+          }, this.routeInfo);
           if (isBetterCandidate(fare, selectionMinutes, existing)) {
             reachable.set(destStationId, {
               fare,
@@ -2464,7 +2478,7 @@ class FareCalculator {
               station_id: destStationId,
               transferAt: hubStationId,
               legOperators,
-            });
+            }, this.routeInfo);
             if (isBetterCandidate(totalFare, selectionMinutes, existing)) {
               reachable.set(destStationId, {
                 fare: totalFare,
