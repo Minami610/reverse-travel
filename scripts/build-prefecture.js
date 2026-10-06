@@ -172,11 +172,38 @@ async function buildOnePrefecture(code, { force, acceptDiff }) {
   const feedInfos = licenseFiltered.map((op) => readFeedInfo(op.id));
   recordFetchedFeedVersions(code, feedInfos);
 
+  // 運行期間が終了したフィードを除外する（2026-10-06追加）。立山町営バスが
+  // 2026-10-10にfeed_end_dateを迎える件で発覚：gtfs-data.jpに新版が出ていない
+  // 状態でビルドだけが先に進むと、期限切れデータを無言で使い続けてしまう。
+  // ここでは「ビルド時点で既に期限が過ぎているフィード」だけを理由付きで除外し、
+  // 出典画面の「対象外としたデータ」に出す。公開モード側のcheckFeedExpiry()
+  // （期限切れなら公開自体を失敗させるガード）はそのまま残す（作り直しを
+  // 忘れないため。このチェックは除外して正常終了させる側であり役割が異なる）。
+  // feed_end_dateが取得できない（feed_info.txt自体が無い）フィードは判定不能
+  // として除外しない（従来どおり通す）。
+  const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const feedInfoByOperator = new Map(feedInfos.map((f) => [f.operatorId, f]));
+  const expiredExcluded = [];
+  const activeFiltered = licenseFiltered.filter((op) => {
+    const info = feedInfoByOperator.get(op.id);
+    if (info?.feedEndDate && info.feedEndDate < todayStr) {
+      console.warn(`  ⚠️  ${op.name}: 運行期間が終了したデータのため除外（feed_end_date=${info.feedEndDate}）`);
+      expiredExcluded.push({
+        operator: op.id,
+        operator_name: op.name,
+        reason: `運行期間が終了したデータ（feed_end_date=${info.feedEndDate}）`,
+      });
+      return false;
+    }
+    return true;
+  });
+
   // 3. 運賃データの有無で最終的な対象事業者を確定する（除外理由を記録）
-  const { included: operators, excluded: fareExcluded } = filterOperators(licenseFiltered);
-  // カタログ取得段階（廃止フィード・gtfs-data.jp詳細取得失敗）・ライセンス・運賃データの
-  // 3段階すべての除外理由を1つにまとめ、出典画面の「対象外としたデータ」にそのまま出す。
-  const excluded = [...(catalogEntry.excluded_operators || []), ...licenseExcluded, ...fareExcluded];
+  const { included: operators, excluded: fareExcluded } = filterOperators(activeFiltered);
+  // カタログ取得段階（廃止フィード・gtfs-data.jp詳細取得失敗）・ライセンス・期限切れ・
+  // 運賃データの4段階すべての除外理由を1つにまとめ、出典画面の「対象外としたデータ」に
+  // そのまま出す。
+  const excluded = [...(catalogEntry.excluded_operators || []), ...licenseExcluded, ...expiredExcluded, ...fareExcluded];
   if (excluded.length > 0) {
     console.log(`\n⚠️  除外したフィード: ${excluded.length}件`);
     for (const e of excluded) console.log(`   - ${e.operator}: ${e.reason}`);
