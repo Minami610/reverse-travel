@@ -31,7 +31,7 @@
 import fs from 'fs';
 import path from 'path';
 import { JSDOM, VirtualConsole } from 'jsdom';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { assertBundleFresh, assertSiteDataFresh } from './check-bundle-freshness.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -855,6 +855,251 @@ async function checkTransferDisplay(html) {
   return disclaimerFound && errors.length === 0;
 }
 
+function toEngineModuleUrl(relativePath) {
+  return pathToFileURL(path.join(rootDir, relativePath)).href;
+}
+
+let engineModulesCache = null;
+async function loadEngineModules() {
+  if (engineModulesCache) return engineModulesCache;
+  global.window = global.window || {};
+  window.EMBEDDED_SPOT_RANKING_CONFIG = JSON.parse(
+    fs.readFileSync(path.join(rootDir, 'config/spot-ranking-config.json'), 'utf-8')
+  );
+  engineModulesCache = {
+    FareCalculator: (await import(toEngineModuleUrl('assets/js/fare-calculator.js'))).FareCalculator,
+    SpotFinder: (await import(toEngineModuleUrl('assets/js/spot-finder.js'))).SpotFinder,
+    mergeIndexedSpotRegions: (await import(toEngineModuleUrl('assets/js/gtfs-loader.js'))).mergeIndexedSpotRegions,
+  };
+  return engineModulesCache;
+}
+
+/**
+ * jsdomを介さず、docs/data/pref/配下の公開データを直接読んでfare-calculator.js/
+ * spot-finder.jsを呼び出す（jsdom側のstubFetchが読むのと同じ実体）。
+ * 2026-10-07に追加した帯のスポット単位化の検証用
+ * （checkSpotLevelBanding・checkDepartureMismatchGuard参照）。
+ */
+async function loadEngineForPrefecture(prefCode) {
+  const { FareCalculator, SpotFinder, mergeIndexedSpotRegions } = await loadEngineModules();
+  function readPrefJson(name) {
+    return JSON.parse(fs.readFileSync(path.join(docsDir, 'data/pref', prefCode, name), 'utf-8'));
+  }
+  const data = {
+    fareData: readPrefJson('fare-lookup-tables.json'),
+    stopsMetadata: readPrefJson('stops-metadata.json'),
+    routeInfo: readPrefJson('route-info.json'),
+    routeDetails: readPrefJson('route-details.json'),
+    stations: readPrefJson('stations.json'),
+  };
+  const merged = mergeIndexedSpotRegions([readPrefJson('spots-by-station.json')]);
+  data.spots = merged.spots;
+  data.spotsByStation = merged.spotsByStation;
+  return { fareCalc: new FareCalculator(data), spotFinder: new SpotFinder(data), stations: data.stations };
+}
+
+/**
+ * 指定駅・指定予算の「真の最安往復運賃」をQIDごとに求める。budgetには検証したい
+ * 帯より広い予算（¥2000等）を渡し、「その予算以下で本当に最も安く行ける運賃」を
+ * 独立に計算する（jsdomが表示した値と別経路で検証するため）。
+ */
+async function computeGroundTruthFares(prefCode, stationDisplayName, budget) {
+  const { fareCalc, spotFinder, stations } = await loadEngineForPrefecture(prefCode);
+  const entry = Object.entries(stations).find(([, s]) => s.display_name === stationDisplayName);
+  if (!entry) throw new Error(`computeGroundTruthFares: ${stationDisplayName} が見つかりません`);
+  const reachable = await fareCalc.calculateReachable(entry[0], budget);
+  const spots = await spotFinder.findSpots(reachable);
+  return new Map(spots.map((s) => [s.id, s.source_round_trip_fare]));
+}
+
+/** 指定駅・指定予算の帯（予算−¥200より高く、予算以下）のスポットQID集合を独立に求める。 */
+async function computeGroundTruthBandQids(prefCode, stationDisplayName, budget) {
+  const fares = await computeGroundTruthFares(prefCode, stationDisplayName, budget);
+  const bandQids = new Set();
+  for (const [qid, fare] of fares) {
+    if (fare > budget - 200) bandQids.add(qid);
+  }
+  return bandQids;
+}
+
+/**
+ * 【2026-10-07追加】帯の判定を「駅単位」から「スポット単位」に直したことの検証
+ * （Minamiさんが公開ページで発見：TOYAMAキラリ等が往復¥400の帯にも往復¥1000の
+ * 帯にも別々の運賃で出ていた）。
+ * 1. 往復¥1000の帯に出たスポットが、隣の帯（予算−¥200＝往復¥800の帯。¥900の帯
+ *    ではない点に注意：帯の幅=¥200・予算刻み=¥100のため、1段階隣の¥900の帯とは
+ *    ¥100分重なりがあり、そちらは重複して出てよい）には出ていないこと
+ * 2. 往復¥1000の帯に出た各スポットの表示運賃が、docs/data/を直接読んで独立に
+ *    計算した「そのスポットの真の最安往復運賃」と一致すること
+ */
+async function checkSpotLevelBanding(html) {
+  console.log('\n=== 帯のスポット単位判定チェック ===');
+  const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'dangerously', pretendToBeVisual: true });
+  const { window } = dom;
+  stubMatchMedia(window, true);
+  stubFetch(window);
+  const errors = [];
+  window.addEventListener('error', (e) => errors.push(e.error ? (e.error.stack || e.error.message) : e.message));
+
+  await new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 50);
+    if (window.document.readyState === 'complete') done();
+    else window.addEventListener('load', done);
+  });
+  const doc = window.document;
+
+  const item = await waitForSuggestion(doc, window, '高松築港', '高松築港');
+  if (!item) {
+    console.log('❌ 検証用の出発駅「高松築港」の候補が見つかりません');
+    window.close();
+    return false;
+  }
+  item.dispatchEvent(new window.Event('click', { bubbles: true }));
+
+  async function searchAt(budget) {
+    const before = doc.getElementById('results-list').innerHTML;
+    doc.getElementById('budget-input').value = String(budget);
+    doc.getElementById('search-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await waitFor(() => doc.getElementById('results-list').innerHTML !== before && resultsSettled(doc), 8000);
+    const cards = [...doc.querySelectorAll('.spot-card')];
+    const byQid = new Map();
+    for (const card of cards) {
+      const qid = card.getAttribute('data-spot-id');
+      const summaryText = card.querySelector('.spot-summary')?.textContent || '';
+      const fareMatch = summaryText.match(/往復¥(\d+)/);
+      if (fareMatch) byQid.set(qid, parseInt(fareMatch[1], 10));
+    }
+    return byQid;
+  }
+
+  const at1000 = await searchAt(1000);
+  const at800 = await searchAt(800); // 予算−¥200＝隣の帯（¥601〜¥800、重なりなし）
+
+  const overlap = [...at1000.keys()].filter((qid) => at800.has(qid));
+  const noOverlap = overlap.length === 0;
+  console.log(
+    noOverlap
+      ? `✅ 往復¥1000の帯のスポット（${at1000.size}件）は、隣の¥800の帯（${at800.size}件）と重複していません`
+      : `❌ 隣の帯（¥800）と重複しているスポットがあります: ${overlap.join(', ')}`
+  );
+
+  const groundTruth = await computeGroundTruthFares('37', '高松築港', 2000);
+  let fareMismatch = null;
+  for (const [qid, displayedFare] of at1000) {
+    const trueFare = groundTruth.get(qid);
+    if (trueFare === undefined) continue; // 念のため（本来は必ず見つかるはず）
+    if (trueFare !== displayedFare) {
+      fareMismatch = { qid, displayedFare, trueFare };
+      break;
+    }
+  }
+  const fareOk = fareMismatch === null;
+  console.log(
+    fareOk
+      ? `✅ 往復¥1000の帯の全${at1000.size}件で、表示運賃がそのスポットの真の最安往復運賃と一致しています`
+      : `❌ 表示運賃が最安運賃と食い違うスポットがあります: ${JSON.stringify(fareMismatch)}`
+  );
+
+  if (errors.length > 0) {
+    console.log('⚠️  ページ実行中に発生したエラー:');
+    errors.forEach((e) => console.log('  - ' + e));
+  }
+
+  window.close();
+  return noOverlap && fareOk && errors.length === 0;
+}
+
+/**
+ * 【2026-10-07追加】出発駅の取り違えバグの検証（Minamiさんが公開ページで発見：
+ * 「ＪＲ栗林駅」と打ち、候補を選ばずに検索すると、前に選んだ富山駅前のまま
+ * 検索されていた＝入力欄の文字を変えても選択済みの駅がdatasetに残っていた）。
+ * 1. 候補をクリックして「高松築港」を選び検索する（「前に選んでいた駅」を作る）
+ * 2. 候補をクリックせず、入力欄を別の駅名（候補一覧でただ1つに完全一致する
+ *    文字列）に書き換えて検索する→取り違えられず、その新しい駅（栗林駅）で
+ *    正しく検索されること（card集合が、栗林駅を独立に計算した帯の正解集合と
+ *    一致することで確認する。高松築港のまま＝取り違えなら一致しない）
+ * 3. 入力欄をどの駅にも完全一致しない文字列に書き換えて検索する→検索されず、
+ *    「候補から出発駅を選んでください」の案内が出て、前回の結果が据え置かれること
+ */
+async function checkDepartureMismatchGuard(html) {
+  console.log('\n=== 出発駅の取り違えチェック ===');
+  const errors = [];
+  const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'dangerously', pretendToBeVisual: true });
+  const { window } = dom;
+  stubMatchMedia(window, true);
+  stubFetch(window);
+  window.addEventListener('error', (e) => errors.push(e.error ? (e.error.stack || e.error.message) : e.message));
+
+  await new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 50);
+    if (window.document.readyState === 'complete') done();
+    else window.addEventListener('load', done);
+  });
+  const doc = window.document;
+  const departureInput = doc.getElementById('departure-input');
+
+  const first = await waitForSuggestion(doc, window, '高松築港', '高松築港');
+  if (!first) {
+    console.log('❌ 検証用の出発駅「高松築港」の候補が見つかりません');
+    window.close();
+    return false;
+  }
+  first.dispatchEvent(new window.Event('click', { bubbles: true }));
+  doc.getElementById('budget-input').value = '1000';
+  doc.getElementById('search-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await waitFor(() => resultsSettled(doc), 8000);
+
+  // 2. 候補をクリックせず、「ＪＲ栗林駅」（候補一覧で唯一完全一致する文字列）に
+  //    書き換えて検索する。inputイベントを発火させて実際のタイピングを模す。
+  const beforeSwitchHtml = doc.getElementById('results-list').innerHTML;
+  departureInput.value = 'ＪＲ栗林駅';
+  departureInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+  doc.getElementById('search-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  const switched = await waitFor(
+    () => doc.getElementById('results-list').innerHTML !== beforeSwitchHtml && resultsSettled(doc),
+    8000
+  );
+
+  const cardsAfterSwitch = new Set(
+    [...doc.querySelectorAll('.spot-card')].map((c) => c.getAttribute('data-spot-id'))
+  );
+  const expectedKuribayashiQids = await computeGroundTruthBandQids('37', 'ＪＲ栗林駅', 1000);
+  const setsEqual =
+    cardsAfterSwitch.size === expectedKuribayashiQids.size &&
+    [...cardsAfterSwitch].every((qid) => expectedKuribayashiQids.has(qid));
+  const exactMatchOk = switched && setsEqual;
+  console.log(
+    exactMatchOk
+      ? `✅ 候補をクリックせず「ＪＲ栗林駅」に書き換えて検索すると、取り違えられずその駅（独立に計算した帯のスポット${expectedKuribayashiQids.size}件と一致）で検索されました`
+      : `❌ 出発駅が取り違えられている可能性があります（表示${cardsAfterSwitch.size}件 / 栗林駅の正解${expectedKuribayashiQids.size}件、内容変化=${switched}）`
+  );
+
+  // 3. どの駅にも完全一致しない文字列（「ＪＲ」は複数駅に部分一致するが完全一致は
+  //    0件）に書き換えて検索する→検索されず案内が出て、直前の結果が据え置かれること
+  const beforeMismatchHtml = doc.getElementById('results-list').innerHTML;
+  departureInput.value = 'ＪＲ';
+  departureInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+  doc.getElementById('search-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+
+  const guidanceEl = doc.getElementById('departure-guidance');
+  const guidanceShown = guidanceEl && !guidanceEl.hidden && guidanceEl.textContent === '候補から出発駅を選んでください';
+  const resultsUnchanged = doc.getElementById('results-list').innerHTML === beforeMismatchHtml;
+  const mismatchOk = guidanceShown && resultsUnchanged;
+  console.log(
+    mismatchOk
+      ? '✅ どの駅にも完全一致しない文字列で検索すると、検索されず案内「候補から出発駅を選んでください」が表示され、前回の結果が据え置かれました'
+      : `❌ 不一致ケースの挙動が想定と異なります（案内表示=${guidanceShown}, 結果据え置き=${resultsUnchanged}）`
+  );
+
+  if (errors.length > 0) {
+    console.log('⚠️  ページ実行中に発生したエラー:');
+    errors.forEach((e) => console.log('  - ' + e));
+  }
+
+  window.close();
+  return exactMatchOk && mismatchOk && errors.length === 0;
+}
+
 async function main() {
   if (!fs.existsSync(distIndexPath)) {
     console.error('dist/index.html が見つかりません。先に npm run bundle を実行してください');
@@ -870,8 +1115,13 @@ async function main() {
   const cardsOk = await checkResultCards(html);
   const loadingStateOk = await checkLoadingState(html);
   const transferDisplayOk = await checkTransferDisplay(html);
+  const spotLevelBandingOk = await checkSpotLevelBanding(html);
+  const departureMismatchOk = await checkDepartureMismatchGuard(html);
 
-  if (publishedOk && desktopOk && mobileOk && cardsOk && loadingStateOk && transferDisplayOk) {
+  if (
+    publishedOk && desktopOk && mobileOk && cardsOk && loadingStateOk && transferDisplayOk &&
+    spotLevelBandingOk && departureMismatchOk
+  ) {
     console.log('\n✅ 検証成功: 初期表示・検索結果カードともに想定通りです');
   } else {
     console.error('\n❌ 検証失敗: 上記のいずれかで問題が見つかりました');

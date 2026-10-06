@@ -36,7 +36,8 @@ export class SpotFinder {
 
   /**
    * 到達可能な駅周辺のスポットをすべて収集・フィルタリング
-   * @param {Array} reachableStations - [{stop_id, stop_name, fare}, ...]
+   * @param {Array} reachableStations - [{stop_id, stop_name, fare}, ...]（予算以下すべて。
+   *   呼び出し側で帯に絞り込まずに渡すこと。帯判定はスポット単位でmain.js側が行う）
    * @returns {Array} フィルタ済みスポットの配列（知名度順）
    */
   async findSpots(reachableStations) {
@@ -44,10 +45,20 @@ export class SpotFinder {
       // スポットはQID単位で最終的に1件だけ表示する。
       // 同じスポットが複数の到達駅の半径内に入ることがあるため、
       // どの到達駅をアクセス駅として採用するかを決める必要がある。
-      // 運賃は「予算内かどうか」の制約としてすでにfare-calculator側で
-      // フィルタ済みのため、ここでの優劣判定は総所要時間
-      // （乗車時間＋徒歩時間）で行う。乗車時間が長くても徒歩0.1kmの駅が
-      // 乗車7分・徒歩0.5kmの駅に勝ってしまう、という問題を避けるため。
+      //
+      // 【2026-10-07修正】優劣判定を「総所要時間が短い方」から
+      // 「往復運賃が安い方（同額なら総所要時間が短い方）」に変更した。
+      // 背景：帯表示（main.js）が「駅を先に帯で絞ってからスポットを探す」
+      // 実装だったため、同じスポットが複数の駅の圏内にある場合（例：
+      // 富山駅前近くのTOYAMAキラリが、安いが遠回りの駅経由でも、高いが
+      // 近い別駅経由でも到達可能）、検索した予算によって「どちらの駅経由か」
+      // が変わり、同じスポットが往復¥400の帯にも往復¥1000の帯にも
+      // 別々の運賃で出てしまう不具合が実際にあった（Minamiさんが公開ページで
+      // 発見）。原因は「駅を帯で絞ってから探す」設計そのものにあった：
+      // 呼び出し側が予算以下の到達駅をすべて渡し、ここで各スポットの
+      // 「最安の往復運賃」を一意に決めてから、呼び出し側（main.js）が
+      // その最安運賃で帯判定する設計に直した。これにより同じスポットは
+      // どの予算で検索しても常に同じ駅・同じ運賃で1回だけ出る。
       const bestSpotByQid = new Map();
 
       for (const station of reachableStations) {
@@ -91,9 +102,13 @@ export class SpotFinder {
           };
 
           const existing = bestSpotByQid.get(qid);
-          const isFaster = !existing || candidate.source_total_time_min < existing.source_total_time_min;
+          const isBetter =
+            !existing ||
+            candidate.source_round_trip_fare < existing.source_round_trip_fare ||
+            (candidate.source_round_trip_fare === existing.source_round_trip_fare &&
+              candidate.source_total_time_min < existing.source_total_time_min);
 
-          if (isFaster) {
+          if (isBetter) {
             bestSpotByQid.set(qid, candidate);
           }
         });

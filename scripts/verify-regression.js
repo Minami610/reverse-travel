@@ -87,16 +87,21 @@ async function checkPrefecture(codeStr, prefBaseline, modules) {
 
   let failures = 0;
 
-  // 1. 各駅×各帯の到達駅数・スポット件数（帯 = 予算−¥200より高く、予算以下）
+  // 1. 各駅×各帯のスポット件数（帯 = 予算−¥200より高く、予算以下）
+  //    【2026-10-07修正】帯の判定は「駅単位」ではなく「スポット単位」で行う
+  //    （main.jsと同じ規則。詳細はmain.js performSearch()のコメント参照）。
+  //    reachableは引き続き「予算以下すべて」の累積到達駅数（帯では絞らない、
+  //    エンジン自体の健全性を見る安定した指標として維持）。spots/transferは
+  //    「各スポットの最安往復運賃」で帯判定した後の件数。
   for (const departure of prefBaseline.departures) {
     const stationId = findStationId(departure.display_name);
     for (const [budgetStr, expected] of Object.entries(departure.budgets)) {
       const budget = parseInt(budgetStr, 10);
       const cumulative = await fareCalc.calculateReachable(stationId, budget);
-      const reachable = cumulative.filter((r) => r.roundTripFare > budget - BAND_WIDTH);
-      const spots = await spotFinder.findSpots(reachable);
-      const transfer = reachable.filter((r) => r.reachBy === 'transfer').length;
-      const actual = { reachable: reachable.length, spots: spots.length, transfer };
+      const allSpots = await spotFinder.findSpots(cumulative);
+      const bandSpots = allSpots.filter((s) => s.source_round_trip_fare > budget - BAND_WIDTH);
+      const transfer = bandSpots.filter((s) => s.source_reach_by === 'transfer').length;
+      const actual = { reachable: cumulative.length, spots: bandSpots.length, transfer };
 
       let ok = actual.reachable === expected.reachable && actual.spots === expected.spots;
       if (expected.transfer !== undefined) {

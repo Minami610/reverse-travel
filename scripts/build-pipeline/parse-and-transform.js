@@ -204,10 +204,18 @@ function mergeDuplicateStationNames(aggregated) {
       }
       if (component.length < 2) continue; // 統合相手なし
 
+      // 【2026-10-07修正】「末広町3番のりば」のように、基底名(base)と完全一致する
+      // 表記（「末広町」）がクラスタ内に存在しない場合、以前はフォールバックの
+      // 「最短の名前」がそのまま採用され、「N番のりば」付きの名前が表示名として
+      // 残ってしまっていた（Minamiさんが公開ページで発見）。基底名そのものに
+      // 駅・駅前を付けた表記（「末広町駅」「末広町駅前」）があればそれを優先し、
+      // どれも無い場合だけ「最短の名前」から「N番のりば」を取り除いて使う。
       const namesInComponent = component.map((idx) => centroids[idx].name);
       const canonical =
         namesInComponent.find((name) => name === base) ||
-        [...namesInComponent].sort((a, b) => a.length - b.length || a.localeCompare(b))[0];
+        namesInComponent.find((name) => name === `${base}駅`) ||
+        namesInComponent.find((name) => name === `${base}駅前`) ||
+        [...namesInComponent].sort((a, b) => a.length - b.length || a.localeCompare(b))[0].replace(/[0-9０-９]+番のりば$/, '');
       const aliases = namesInComponent.filter((name) => name !== canonical);
 
       for (const stop of group) {

@@ -246,6 +246,13 @@ header p {
   background-color: var(--color-main-light);
 }
 
+/* 出発駅が確定していない状態で検索したときの案内（「候補から出発駅を選んでください」） */
+.departure-guidance {
+  margin: 0.3rem 0 0;
+  font-size: 0.85rem;
+  color: var(--color-error);
+}
+
 /* 検索ボタン */
 #search-btn {
   flex: 0 0 auto;
@@ -842,6 +849,7 @@ header p {
    ======================================== */
 
 .error {
+  grid-column: 1 / -1;
   background-color: rgba(220, 38, 38, 0.1);
   color: var(--color-error);
   padding: 1rem;
@@ -849,21 +857,37 @@ header p {
   border-left: 4px solid var(--color-error);
 }
 
+/* #results-listはカード用にdisplay:gridかつ複数列（grid-template-columns:
+   repeat(auto-fill, ...)）。.no-results/.no-results-actionsをgrid-column指定
+   なしで直接の子として置くと、PC幅の広い画面で「文章」と「ボタン」が
+   別々のグリッドセル（＝横並び）に配置され、ボタンが文章の上や横に
+   食い込んで見える不具合があった（2026-10-07修正）。grid-column: 1 / -1 で
+   両方を常にグリッド全幅の単独行にし、縦積みを保証する。 */
 .no-results {
+  grid-column: 1 / -1;
   text-align: center;
   color: var(--color-text-sub);
   font-size: 1.1rem;
   padding: 2rem;
 }
 
-/* 0件のとき、結果がある近傍の予算を提案するボタン */
+/* 0件のとき、結果がある近傍の予算を提案するボタン。横並び（PC幅）→
+   狭い画面では縦並びに変える（ボタン文言が折り返して読みにくくなるのを防ぐ）。 */
 .no-results-actions {
+  grid-column: 1 / -1;
   display: flex;
   justify-content: center;
   gap: 0.75rem;
   flex-wrap: wrap;
   padding: 0 1rem 2rem;
-  margin-top: -1rem;
+}
+
+@media (max-width: 759px) {
+  .no-results-actions {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 0 2rem 2rem;
+  }
 }
 
 .budget-retry-btn {
@@ -882,6 +906,7 @@ header p {
 }
 
 .loading {
+  grid-column: 1 / -1;
   text-align: center;
   color: var(--color-text-sub);
   font-size: 1.1rem;

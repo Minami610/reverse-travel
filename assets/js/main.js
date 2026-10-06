@@ -62,6 +62,7 @@ class ReverseTravel {
       searchBtn: document.getElementById('search-btn'),
       appLayout: document.getElementById('app-layout'),
       sortSelect: document.getElementById('sort-select'),
+      departureGuidance: document.getElementById('departure-guidance'),
       bandHeading: document.getElementById('results-band-heading'),
       resultsList: document.getElementById('results-list'),
       detailContent: document.getElementById('detail-content'),
@@ -103,6 +104,16 @@ class ReverseTravel {
     });
 
     this.elements.departureInput.addEventListener('input', (e) => {
+      // 【2026-10-07修正】入力欄の文字が変わったら、選んでいた駅をいったん
+      // 解除する。以前はここでdatasetをクリアしていなかったため、候補を
+      // クリックして駅を選んだ後に文字だけ書き換えて検索すると、選択済みの
+      // 古い駅（別の都道府県の駅のことすらある）のまま検索されてしまう
+      // 不具合があった（Minamiさんが公開ページで発見）。候補クリック時は
+      // この直後にdataset.prefCode/localIndexを改めて設定し直すため、
+      // ここで一度クリアしても選択操作自体は壊れない。
+      delete this.elements.departureInput.dataset.prefCode;
+      delete this.elements.departureInput.dataset.localIndex;
+      this.hideDepartureGuidance();
       this.showDepartureSuggestions(e.target.value);
     });
 
@@ -422,8 +433,20 @@ class ReverseTravel {
         this.elements.departureInput.dataset.localIndex = localIndex;
         delete this.elements.departureInput.dataset.stationId;
         this.elements.departureSuggestions.innerHTML = '';
+        this.hideDepartureGuidance();
       });
     });
+  }
+
+  showDepartureGuidance(message) {
+    if (!this.elements.departureGuidance) return;
+    this.elements.departureGuidance.textContent = message;
+    this.elements.departureGuidance.hidden = false;
+  }
+
+  hideDepartureGuidance() {
+    if (!this.elements.departureGuidance) return;
+    this.elements.departureGuidance.hidden = true;
   }
 
   /**
@@ -458,11 +481,35 @@ class ReverseTravel {
       }
     }
 
-    const prefCode = this.elements.departureInput.dataset.prefCode;
-    const localIndex = this.elements.departureInput.dataset.localIndex;
-    const budget = parseInt(this.elements.budgetInput.value, 10);
+    // 候補を選ばずに検索したときの案内・候補一覧は、検索を試みた時点で一度閉じる
+    // （前回の検索結果に対する古い候補・案内が残り続けないようにする）。
+    this.elements.departureSuggestions.innerHTML = '';
+    this.hideDepartureGuidance();
 
-    if (!prefCode || localIndex === undefined || !budget) {
+    let prefCode = this.elements.departureInput.dataset.prefCode;
+    let localIndex = this.elements.departureInput.dataset.localIndex;
+
+    // 【2026-10-07修正】候補をクリックしていない（＝dataset未設定）場合、
+    // 入力欄の文字が駅名と完全に一致する駅がちょうど1つだけあれば、それで
+    // 検索する。候補クリックを経ずに駅名をそのまま打って検索する使い方を
+    // 許容しつつ、一致が0件・複数件（同名駅が複数都道府県にある場合）の
+    // ときは誤った駅で検索しないよう、検索せず案内を出す。
+    if (!prefCode || localIndex === undefined) {
+      const inputValue = this.elements.departureInput.value;
+      const exactMatches = (this.loader.stationIndex || []).filter(([name]) => name === inputValue);
+      if (exactMatches.length === 1) {
+        // dataset経由（候補クリック）のときと型を揃えるため文字列化する
+        // （DOMのdatasetは常に文字列であり、呼び出し先はそれを前提にしている）
+        prefCode = String(exactMatches[0][1]);
+        localIndex = String(exactMatches[0][2]);
+      } else {
+        this.showDepartureGuidance('候補から出発駅を選んでください');
+        return;
+      }
+    }
+
+    const budget = parseInt(this.elements.budgetInput.value, 10);
+    if (!budget) {
       alert('出発駅と予算を選択してください');
       return;
     }
@@ -489,26 +536,29 @@ class ReverseTravel {
     }
 
     try {
-      // 到達可能な駅を計算（calculateReachable自体は従来どおり「予算以下すべて」を返す。
-      // 乗換候補の選定がこの集合全体を見て行われるため、ここでは絞り込まない）
+      // 到達可能な駅を計算（予算以下すべて）。
       const reachableStations = await this.fareCalc.calculateReachable(stationId, budget);
       console.log('到達可能駅:', reachableStations);
 
-      // 【2026-10-06 帯表示】表示・スポット検索の対象は「予算−¥200より高く、
-      // 予算以下」の帯だけに絞る。乗換の到達も、fare-calculator.js側で
-      // roundTripFareに乗換2区間の合計往復運賃が入っているため、この1行の
-      // 比較だけで直行・乗換の両方を正しく帯判定できる。
-      const bandStations = reachableStations.filter((r) => r.roundTripFare > budget - BAND_WIDTH);
-      console.log(`帯（¥${budget - BAND_WIDTH + 1}〜¥${budget}）内の到達駅:`, bandStations);
+      // 【2026-10-07修正】帯の判定は「駅単位」ではなく「スポット単位」で行う。
+      // 以前は駅を先に帯（予算−¥200より高く、予算以下）で絞り込んでから
+      // spotFinder.findSpots()に渡していたが、同じスポットが複数の到達駅の
+      // 圏内にある場合、検索した予算によって「どちらの駅経由と判定されるか」が
+      // 変わり、同じスポットが往復¥400の帯にも往復¥1000の帯にも別々の運賃で
+      // 出てしまう不具合があった（TOYAMAキラリ等でMinamiさんが公開ページで発見）。
+      // 正しい手順は「予算以下で行ける駅をすべてspotFinderに渡し、スポットごとに
+      // 一番安い往復運賃を決めてから、その運賃で帯判定する」こと
+      // （spotFinder.findSpots()側の優劣判定もこれに合わせて運賃優先に変更済み）。
+      const allSpots = await this.spotFinder.findSpots(reachableStations);
+      console.log('発見スポット（予算以下すべて、各スポットの最安運賃を採用）:', allSpots);
 
-      // 周辺スポット検索（帯の中の到達駅だけを起点にする）
-      const spots = await this.spotFinder.findSpots(bandStations);
-      console.log('発見スポット:', spots);
+      const bandSpots = allSpots.filter((s) => s.source_round_trip_fare > budget - BAND_WIDTH);
+      console.log(`帯（¥${budget - BAND_WIDTH + 1}〜¥${budget}）内のスポット:`, bandSpots);
 
-      // キャッシュ保存（0件時の案内文の出し分けに到達駅数も使うため、spotsと一緒に保存する）
-      this.cache.set(cacheKey, { spots, reachableCount: bandStations.length });
+      // キャッシュ保存（デバッグ用に帯の中の到達駅数相当の値も保持する）
+      this.cache.set(cacheKey, { spots: bandSpots, reachableCount: reachableStations.length });
 
-      this.displayResults(spots, stationId, bandStations.length, budget);
+      this.displayResults(bandSpots, stationId, reachableStations.length, budget);
     } catch (error) {
       console.error('検索失敗:', error);
       alert('検索中にエラーが発生しました');
@@ -568,13 +618,14 @@ class ReverseTravel {
   /**
    * 指定した予算の帯（予算−¥200より高く、予算以下）に、スポットが1件以上
    * 見つかるかを判定する。findNearestBudgetsWithResults()の内部ヘルパー。
+   * 帯判定はスポット単位（各スポットの最安往復運賃）で行う（performSearch()と同じ規則）。
    */
   async hasBandResults(budget) {
     const reachable = await this.fareCalc.calculateReachable(this.currentDepartureStationId, budget);
-    const band = reachable.filter((r) => r.roundTripFare > budget - BAND_WIDTH);
-    if (band.length === 0) return false;
-    const spots = await this.spotFinder.findSpots(band);
-    return spots.length > 0;
+    if (reachable.length === 0) return false;
+    const spots = await this.spotFinder.findSpots(reachable);
+    const band = spots.filter((s) => s.source_round_trip_fare > budget - BAND_WIDTH);
+    return band.length > 0;
   }
 
   /**
