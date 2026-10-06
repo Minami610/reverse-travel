@@ -1,37 +1,81 @@
 {
-  "description": "香川県の回帰チェック基準値（scripts/verify-regression.js、npm run verify-regression）。値がずれたら、意図した変更（データ更新・仕様変更等）かどうかをまず確認すること。意図した変更なら、このファイルを更新したうえでコミットメッセージに「なぜ変わったか」を書くこと。",
-  "generated_at": "2026-10-02",
-  "generated_at_note": "2026-10-01のことでんバス運賃改定とspot-config.json変更（前回更新）に加え、2026-10-02にバス→バスの1回乗換を実装（fare-calculator.jsの乗換起点を鉄道限定からバスも可に拡張）したことで、高松築港・ＪＲ栗林駅の往復¥1000が変化。詳細はgit logの同日コミット参照。",
-  "departures": [
-    {
-      "display_name": "高松築港",
-      "note": "香川最大のハブ駅",
-      "budgets": { "400": { "reachable": 10, "spots": 67 }, "1000": { "reachable": 207, "spots": 135, "transfer": 44 } }
+  "description": "公開中の都道府県（config/published-prefectures.json）ごとの回帰チェック基準値（scripts/verify-regression.js、npm run verify-regression）。値がずれたら、意図した変更（データ更新・仕様変更等）かどうかをまず確認すること。意図した変更なら、このファイルを更新したうえでコミットメッセージに「なぜ変わったか」を書くこと。",
+  "prefectures": {
+    "37": {
+      "pref_name": "香川県",
+      "generated_at": "2026-10-02",
+      "generated_at_note": "2026-10-01のことでんバス運賃改定とspot-config.json変更（前回更新）に加え、2026-10-02にバス→バスの1回乗換を実装（fare-calculator.jsの乗換起点を鉄道限定からバスも可に拡張）したことで、高松築港・ＪＲ栗林駅の往復¥1000が変化。詳細はgit logの同日コミット参照。",
+      "departures": [
+        {
+          "display_name": "高松築港",
+          "note": "香川最大のハブ駅",
+          "budgets": { "400": { "reachable": 10, "spots": 67 }, "1000": { "reachable": 207, "spots": 135, "transfer": 44 } }
+        },
+        {
+          "display_name": "琴電琴平",
+          "note": "琴平線の末端駅（鉄道のみ）",
+          "budgets": { "400": { "reachable": 2, "spots": 10 }, "1000": { "reachable": 7, "spots": 18 } }
+        },
+        {
+          "display_name": "長尾",
+          "note": "長尾線の末端駅（鉄道のみ）",
+          "budgets": { "400": { "reachable": 5, "spots": 15 }, "1000": { "reachable": 14, "spots": 77 } }
+        },
+        {
+          "display_name": "琴電志度",
+          "note": "志度線の末端駅（鉄道のみ）",
+          "budgets": { "400": { "reachable": 5, "spots": 21 }, "1000": { "reachable": 23, "spots": 94 } }
+        },
+        {
+          "display_name": "仏生山",
+          "note": "中間規模の駅（鉄道＋バス）",
+          "budgets": { "400": { "reachable": 5, "spots": 22 }, "1000": { "reachable": 113, "spots": 123 } }
+        },
+        {
+          "display_name": "ＪＲ栗林駅",
+          "note": "バスのみの停留所（鉄道の乗換駅なし）。往復¥400のreachable=0は2026-10-01のことでんバス運賃改定で最低片道運賃が¥200→¥210になり、往復¥400を超えたことによる正しい結果（意図的な0件の基準値。バグではない）。往復¥1000は2026-10-02のバス→バス乗換実装で33→122に増加（この駅は鉄道に接続せず、以前は乗換起点になれず乗換到達駅が常に0件だった）",
+          "budgets": { "400": { "reachable": 0, "spots": 0 }, "1000": { "reachable": 122, "spots": 94, "transfer": 89 } }
+        }
+      ]
     },
-    {
-      "display_name": "琴電琴平",
-      "note": "琴平線の末端駅（鉄道のみ）",
-      "budgets": { "400": { "reachable": 2, "spots": 10 }, "1000": { "reachable": 7, "spots": 18 } }
+    "16": {
+      "pref_name": "富山県",
+      "generated_at": "2026-10-06",
+      "generated_at_note": "gtfs-data.jpのフィード一覧を手書き8件からAPI動的取得31件に変更（23件が一覧から漏れていた）、さらに均一運賃路線をod_faresへ展開する修正（それまでfare-calculator.jsがbus_faresを読まず、21事業者中13事業者が検索結果に一切出てこなかった）を行った直後の基準値。富山駅前の往復¥400が0件→35件に変化した等、この2つの修正の効果がそのまま基準値に表れている。",
+      "departures": [
+        {
+          "display_name": "富山駅前",
+          "note": "富山県の中心駅。地鉄バス（OD運賃表型）＋旧均一運賃路線（まいどはやバス等）が乗り入れる",
+          "budgets": { "400": { "reachable": 35, "spots": 71 }, "1000": { "reachable": 229, "spots": 116, "transfer": 5 } }
+        },
+        {
+          "display_name": "高岡駅",
+          "note": "高岡市の中心駅。このクラスタ自体は地鉄バス・加越能バス・万葉線のみで構成され、高岡市公営バス（均一運賃修正の対象）の停留所は別名（「高岡駅前3番のりば」等）のため、均一運賃修正の前後で値は変化しない",
+          "budgets": { "400": { "reachable": 6, "spots": 44 }, "1000": { "reachable": 65, "spots": 93, "transfer": 31 } }
+        },
+        {
+          "display_name": "魚津駅前",
+          "note": "魚津市民バス（均一運賃）のみに接続する停留所。修正前は往復¥400・¥1000とも0件だった",
+          "budgets": { "400": { "reachable": 212, "spots": 44 }, "1000": { "reachable": 236, "spots": 51, "transfer": 24 } }
+        },
+        {
+          "display_name": "黒部駅前",
+          "note": "黒部市のミニバス（OD型・均一型混在フィード）に接続",
+          "budgets": { "400": { "reachable": 104, "spots": 27, "transfer": 10 }, "1000": { "reachable": 118, "spots": 28, "transfer": 20 } }
+        }
+      ]
     },
-    {
-      "display_name": "長尾",
-      "note": "長尾線の末端駅（鉄道のみ）",
-      "budgets": { "400": { "reachable": 5, "spots": 15 }, "1000": { "reachable": 14, "spots": 77 } }
-    },
-    {
-      "display_name": "琴電志度",
-      "note": "志度線の末端駅（鉄道のみ）",
-      "budgets": { "400": { "reachable": 5, "spots": 21 }, "1000": { "reachable": 23, "spots": 94 } }
-    },
-    {
-      "display_name": "仏生山",
-      "note": "中間規模の駅（鉄道＋バス）",
-      "budgets": { "400": { "reachable": 5, "spots": 22 }, "1000": { "reachable": 113, "spots": 123 } }
-    },
-    {
-      "display_name": "ＪＲ栗林駅",
-      "note": "バスのみの停留所（鉄道の乗換駅なし）。往復¥400のreachable=0は2026-10-01のことでんバス運賃改定で最低片道運賃が¥200→¥210になり、往復¥400を超えたことによる正しい結果（意図的な0件の基準値。バグではない）。往復¥1000は2026-10-02のバス→バス乗換実装で33→122に増加（この駅は鉄道に接続せず、以前は乗換起点になれず乗換到達駅が常に0件だった）",
-      "budgets": { "400": { "reachable": 0, "spots": 0 }, "1000": { "reachable": 122, "spots": 94, "transfer": 89 } }
+    "17": {
+      "pref_name": "石川県",
+      "generated_at": "2026-10-06",
+      "generated_at_note": "富山と同時に均一運賃修正を適用した直後の基準値。松任駅自体は白山市めぐーる（OD運賃表型、修正前から機能）のみに接続するが、乗換先に野々市市・内灘町コミュニティバス（均一運賃、修正前は野々市市20/119駅・内灘町0/74駅しか到達できなかった）が増えたため到達駅数が増加している。",
+      "departures": [
+        {
+          "display_name": "松任駅",
+          "note": "白山市コミュニティバス「めぐーる」の主要停留所",
+          "budgets": { "400": { "reachable": 291, "spots": 34, "transfer": 127 }, "1000": { "reachable": 298, "spots": 35, "transfer": 134 } }
+        }
+      ]
     }
-  ]
+  }
 }

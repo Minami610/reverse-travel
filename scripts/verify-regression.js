@@ -1,5 +1,5 @@
 /**
- * verify-regression.js - 香川県の回帰チェック（npm run verify-regression）
+ * verify-regression.js - 公開中の全都道府県の回帰チェック（npm run verify-regression）
  *
  * 【背景】B（駅ID化・route_type判定・運賃と経路の事業者統一）の過程で、
  * 実装ミスにより「乗り継ぎ到達駅: 0駅」「往復予算内: 190駅」（本来199駅）に
@@ -9,11 +9,18 @@
  * テスト自体が破っていたことになる。同じ事故を繰り返さないよう、この
  * チェックを常設のnpmスクリプトにする。
  *
- * 確認内容：
- * 1. 香川6駅×往復¥400/¥1000の12通りについて、到達駅数・スポット件数が
- *    config/regression-baseline.json の基準値と完全一致すること
+ * 【2026-10-06追記】香川のみの単一プレフィックス読み込みから、
+ * config/published-prefectures.json の公開中の都道府県をすべて確認する構成に
+ * 変更した（富山・石川を公開するにあたり、香川だけ確認していては不十分なため）。
+ * 併せて、従来data/derived/直下のフラットな香川データ（data/derived/pref/37/の
+ * 古いミラー、同期の仕組みが無く実体が古くなりうる）を読んでいた箇所を、
+ * 都道府県ごとの正本である data/derived/pref/{コード}/ に統一した。
+ *
+ * 確認内容（都道府県ごと）：
+ * 1. config/regression-baseline.json の prefectures[コード].departures について、
+ *    到達駅数・スポット件数が基準値と完全一致すること
  * 2. 運賃を決めた事業者と表示経路の事業者が食い違う件数が0件であること
- *    （香川の直接到達すべてが対象）
+ *    （その県の直接到達すべてが対象）
  * 1つでもずれれば exit 1 で失敗する。
  *
  * 基準値を意図的に更新する場合は、このスクリプトで新しい値を確認したうえで
@@ -30,68 +37,49 @@ import { assertBundleFresh } from './check-bundle-freshness.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, '..');
-const derivedDir = path.join(rootDir, 'data/derived');
 const baselinePath = path.join(rootDir, 'config/regression-baseline.json');
+const publishedConfigPath = path.join(rootDir, 'config/published-prefectures.json');
 
-function readJson(name) {
-  return JSON.parse(fs.readFileSync(path.join(derivedDir, name), 'utf-8'));
+function prefCodeStr(code) {
+  return String(code).padStart(2, '0');
+}
+
+function readPrefJson(codeStr, name) {
+  return JSON.parse(fs.readFileSync(path.join(rootDir, 'data/derived/pref', codeStr, name), 'utf-8'));
 }
 
 function toUrl(relativePath) {
   return pathToFileURL(path.join(rootDir, relativePath)).href;
 }
 
-async function main() {
-  console.log('🔁 回帰チェック開始（香川6駅×往復¥400/¥1000）\n');
-
-  // このスクリプト自身はソース（assets/js・data/derived）を直接読むため
-  // dist/index.htmlの古さには影響されないが、「これが通ったから実際に
-  // デプロイされるdist/index.htmlも最新」と誤解しないよう、ここでも確認する。
-  assertBundleFresh('verify-regression');
-
-  if (!fs.existsSync(baselinePath)) {
-    throw new Error(`基準値ファイルが見つかりません: ${baselinePath}`);
-  }
-  const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf-8'));
-
-  // spot-finder.jsがwindow.EMBEDDED_SPOT_RANKING_CONFIGを同期的に参照するため用意する
-  global.window = {
-    EMBEDDED_SPOT_RANKING_CONFIG: JSON.parse(
-      fs.readFileSync(path.join(rootDir, 'config/spot-ranking-config.json'), 'utf-8')
-    ),
-  };
-
-  const { FareCalculator } = await import(toUrl('assets/js/fare-calculator.js'));
-  const { SpotFinder } = await import(toUrl('assets/js/spot-finder.js'));
-  const { RouteFormatter } = await import(toUrl('assets/js/route-formatter.js'));
-  const { mergeIndexedSpotRegions } = await import(toUrl('assets/js/gtfs-loader.js'));
-  const { parseRouteEntry, lookupRouteEntry } = await import(toUrl('assets/js/route-duration.js'));
+async function checkPrefecture(codeStr, prefBaseline, modules) {
+  const { FareCalculator, SpotFinder, mergeIndexedSpotRegions, parseRouteEntry, lookupRouteEntry } = modules;
+  console.log(`\n🔁 都道府県コード${codeStr}（${prefBaseline.pref_name}）の回帰チェック（${prefBaseline.departures.length}駅×往復¥400/¥1000）`);
 
   const data = {
-    fareData: readJson('fare-lookup-tables.json'),
-    stopsMetadata: readJson('stops-metadata.json'),
-    routeInfo: readJson('route-info.json'),
-    routeDetails: readJson('route-details.json'),
-    stations: readJson('stations.json'),
+    fareData: readPrefJson(codeStr, 'fare-lookup-tables.json'),
+    stopsMetadata: readPrefJson(codeStr, 'stops-metadata.json'),
+    routeInfo: readPrefJson(codeStr, 'route-info.json'),
+    routeDetails: readPrefJson(codeStr, 'route-details.json'),
+    stations: readPrefJson(codeStr, 'stations.json'),
   };
-  const merged = mergeIndexedSpotRegions([readJson('spots-by-station.json')]);
+  const merged = mergeIndexedSpotRegions([readPrefJson(codeStr, 'spots-by-station.json')]);
   data.spots = merged.spots;
   data.spotsByStation = merged.spotsByStation;
 
   const fareCalc = new FareCalculator(data);
   const spotFinder = new SpotFinder(data);
-  const routeFormatter = new RouteFormatter(data.routeInfo, data.routeDetails, data.stations);
 
   function findStationId(displayName) {
     const entry = Object.entries(data.stations).find(([, s]) => s.display_name === displayName);
-    if (!entry) throw new Error(`基準値の駅がstations.jsonに見つかりません: ${displayName}`);
+    if (!entry) throw new Error(`都道府県コード${codeStr}: 基準値の駅がstations.jsonに見つかりません: ${displayName}`);
     return entry[0];
   }
 
   let failures = 0;
 
-  // 1. 12通りの到達駅数・スポット件数
-  for (const departure of baseline.departures) {
+  // 1. 各駅×往復¥400/¥1000の到達駅数・スポット件数
+  for (const departure of prefBaseline.departures) {
     const stationId = findStationId(departure.display_name);
     for (const [budgetStr, expected] of Object.entries(departure.budgets)) {
       const budget = parseInt(budgetStr, 10);
@@ -119,11 +107,11 @@ async function main() {
     }
   }
 
-  // 2. 運賃事業者と表示経路事業者の食い違い件数（香川全6駅、往復¥1000で確認）
-  console.log('\n🔍 運賃事業者と表示経路事業者の食い違いチェック');
+  // 2. 運賃事業者と表示経路事業者の食い違い件数（この県の全基準駅、往復¥1000で確認）
+  console.log(`🔍 都道府県コード${codeStr}: 運賃事業者と表示経路事業者の食い違いチェック`);
   let totalDirect = 0;
   let totalMismatch = 0;
-  for (const departure of baseline.departures) {
+  for (const departure of prefBaseline.departures) {
     const stationId = findStationId(departure.display_name);
     const reachable = await fareCalc.calculateReachable(stationId, 1000);
     for (const station of reachable) {
@@ -146,12 +134,63 @@ async function main() {
   console.log(`直接到達${totalDirect}件中、食い違い${totalMismatch}件`);
   if (totalMismatch > 0) failures += 1;
 
+  return failures;
+}
+
+async function main() {
+  // このスクリプト自身はソース（assets/js・data/derived/pref/配下）を直接読むため
+  // dist/index.htmlの古さには影響されないが、「これが通ったから実際に
+  // デプロイされるdist/index.htmlも最新」と誤解しないよう、ここでも確認する。
+  assertBundleFresh('verify-regression');
+
+  if (!fs.existsSync(publishedConfigPath)) {
+    throw new Error(`公開都道府県の一覧が見つかりません: ${publishedConfigPath}`);
+  }
+  const published = JSON.parse(fs.readFileSync(publishedConfigPath, 'utf-8')).published || [];
+  if (published.length === 0) {
+    throw new Error('config/published-prefectures.json の published が空です');
+  }
+
+  if (!fs.existsSync(baselinePath)) {
+    throw new Error(`基準値ファイルが見つかりません: ${baselinePath}`);
+  }
+  const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf-8'));
+
+  console.log(`🔁 回帰チェック開始（公開中の${published.length}都道府県: ${published.join(', ')}）`);
+
+  // spot-finder.jsがwindow.EMBEDDED_SPOT_RANKING_CONFIGを同期的に参照するため用意する
+  global.window = {
+    EMBEDDED_SPOT_RANKING_CONFIG: JSON.parse(
+      fs.readFileSync(path.join(rootDir, 'config/spot-ranking-config.json'), 'utf-8')
+    ),
+  };
+
+  const modules = {
+    FareCalculator: (await import(toUrl('assets/js/fare-calculator.js'))).FareCalculator,
+    SpotFinder: (await import(toUrl('assets/js/spot-finder.js'))).SpotFinder,
+    mergeIndexedSpotRegions: (await import(toUrl('assets/js/gtfs-loader.js'))).mergeIndexedSpotRegions,
+    parseRouteEntry: (await import(toUrl('assets/js/route-duration.js'))).parseRouteEntry,
+    lookupRouteEntry: (await import(toUrl('assets/js/route-duration.js'))).lookupRouteEntry,
+  };
+
+  let failures = 0;
+  for (const code of published) {
+    const codeStr = prefCodeStr(code);
+    const prefBaseline = baseline.prefectures?.[codeStr];
+    if (!prefBaseline) {
+      console.error(`❌ 都道府県コード${codeStr}: config/regression-baseline.json に基準値がありません（公開中なのに基準値が無いのは危険なため失敗にします）`);
+      failures += 1;
+      continue;
+    }
+    failures += await checkPrefecture(codeStr, prefBaseline, modules);
+  }
+
   console.log('');
   if (failures > 0) {
     console.error(`❌ 回帰チェック失敗（${failures}件の不一致）`);
     process.exit(1);
   }
-  console.log('✅ 回帰チェック成功: 香川12通り・運賃事業者一致ともに基準どおりです');
+  console.log('✅ 回帰チェック成功: 公開中の全都道府県が基準どおりです');
 }
 
 main().catch((error) => {
