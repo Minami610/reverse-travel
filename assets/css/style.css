@@ -456,6 +456,15 @@ header p {
   }
 }
 
+/* 検索結果の見出し（「往復¥801〜¥1000で行ける場所」）。帯の範囲を常に明示する */
+.results-band-heading {
+  flex: 0 0 auto;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-main-deep);
+  margin: 0 0 0.5rem 0;
+}
+
 /* 並び替えUI（自然な高さ。一覧本体側がflex:1でスクロールする） */
 #sort-controls {
   flex: 0 0 auto;
@@ -845,6 +854,31 @@ header p {
   color: var(--color-text-sub);
   font-size: 1.1rem;
   padding: 2rem;
+}
+
+/* 0件のとき、結果がある近傍の予算を提案するボタン */
+.no-results-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0 1rem 2rem;
+  margin-top: -1rem;
+}
+
+.budget-retry-btn {
+  background-color: white;
+  color: var(--color-main-deep);
+  border: 1px solid var(--color-main);
+  border-radius: 4px;
+  padding: 0.5rem 1.2rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.budget-retry-btn:hover {
+  background-color: var(--color-main-light);
 }
 
 .loading {

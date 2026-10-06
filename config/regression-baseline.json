@@ -1,84 +1,84 @@
 {
-  "description": "公開中の都道府県（config/published-prefectures.json）ごとの回帰チェック基準値（scripts/verify-regression.js、npm run verify-regression）。値がずれたら、意図した変更（データ更新・仕様変更等）かどうかをまず確認すること。意図した変更なら、このファイルを更新したうえでコミットメッセージに「なぜ変わったか」を書くこと。",
+  "description": "公開中の都道府県（config/published-prefectures.json）ごとの回帰チェック基準値（scripts/verify-regression.js、npm run verify-regression）。値がずれたら、意図した変更（データ更新・仕様変更等）かどうかをまず確認すること。意図した変更なら、このファイルを更新したうえでコミットメッセージに「なぜ変わったか」を書くこと。【2026-10-06】各budgetキーの reachable/spots/transfer は、帯表示（予算−¥200より高く、予算以下）への変更に伴い「帯の中だけ」の値に作り直した（旧版は「予算以下すべて」の累積値だった）。上限が往復¥2000になったことに合わせ、各駅に\"2000\"のキーも追加した。",
   "prefectures": {
     "37": {
       "pref_name": "香川県",
-      "generated_at": "2026-10-02",
-      "generated_at_note": "2026-10-01のことでんバス運賃改定とspot-config.json変更（前回更新）に加え、2026-10-02にバス→バスの1回乗換を実装（fare-calculator.jsの乗換起点を鉄道限定からバスも可に拡張）したことで、高松築港・ＪＲ栗林駅の往復¥1000が変化。詳細はgit logの同日コミット参照。",
+      "generated_at": "2026-10-06",
+      "generated_at_note": "2026-10-06、帯表示（往復予算−¥200より高く、予算以下）への変更に伴い全駅の基準値を作り直した。400/1000キーは『帯の中だけ』の値（旧版は予算以下すべての累積値）。上限¥2000への変更に合わせ2000キーを追加。香川は2026-10-06の除外クラス追加（運動施設・公共教育施設・商業施設ビル。劇場・廟は誤除外が判明し保護クラスへ追加）後の値。高松築港・ＪＲ栗林駅は過去にバス→バス乗換実装で変化した経緯があるが、今回はそれに加えて帯表示化・除外クラス追加の両方を反映。",
       "departures": [
         {
           "display_name": "高松築港",
           "note": "香川最大のハブ駅",
-          "budgets": { "400": { "reachable": 10, "spots": 67 }, "1000": { "reachable": 207, "spots": 135, "transfer": 44 } }
+          "budgets": { "400": { "reachable": 10, "spots": 60 }, "1000": { "reachable": 74, "spots": 124, "transfer": 32 }, "2000": { "reachable": 4, "spots": 5, "transfer": 4 } }
         },
         {
           "display_name": "琴電琴平",
           "note": "琴平線の末端駅（鉄道のみ）",
-          "budgets": { "400": { "reachable": 2, "spots": 10 }, "1000": { "reachable": 7, "spots": 18 } }
+          "budgets": { "400": { "reachable": 2, "spots": 10 }, "1000": { "reachable": 3, "spots": 7 }, "2000": { "reachable": 111, "spots": 113, "transfer": 111 } }
         },
         {
           "display_name": "長尾",
           "note": "長尾線の末端駅（鉄道のみ）",
-          "budgets": { "400": { "reachable": 5, "spots": 15 }, "1000": { "reachable": 14, "spots": 77 } }
+          "budgets": { "400": { "reachable": 5, "spots": 13 }, "1000": { "reachable": 4, "spots": 52 }, "2000": { "reachable": 32, "spots": 102, "transfer": 32 } }
         },
         {
           "display_name": "琴電志度",
           "note": "志度線の末端駅（鉄道のみ）",
-          "budgets": { "400": { "reachable": 5, "spots": 21 }, "1000": { "reachable": 23, "spots": 94 } }
+          "budgets": { "400": { "reachable": 5, "spots": 20 }, "1000": { "reachable": 12, "spots": 76, "transfer": 4 }, "2000": { "reachable": 26, "spots": 50, "transfer": 26 } }
         },
         {
           "display_name": "仏生山",
           "note": "中間規模の駅（鉄道＋バス）",
-          "budgets": { "400": { "reachable": 5, "spots": 22 }, "1000": { "reachable": 113, "spots": 123 } }
+          "budgets": { "400": { "reachable": 5, "spots": 19 }, "1000": { "reachable": 75, "spots": 113, "transfer": 46 }, "2000": { "reachable": 20, "spots": 40, "transfer": 17 } }
         },
         {
           "display_name": "ＪＲ栗林駅",
-          "note": "バスのみの停留所（鉄道の乗換駅なし）。往復¥400のreachable=0は2026-10-01のことでんバス運賃改定で最低片道運賃が¥200→¥210になり、往復¥400を超えたことによる正しい結果（意図的な0件の基準値。バグではない）。往復¥1000は2026-10-02のバス→バス乗換実装で33→122に増加（この駅は鉄道に接続せず、以前は乗換起点になれず乗換到達駅が常に0件だった）",
-          "budgets": { "400": { "reachable": 0, "spots": 0 }, "1000": { "reachable": 122, "spots": 94, "transfer": 89 } }
+          "note": "バスのみの停留所（鉄道の乗換駅なし）。往復¥400の帯（¥201〜¥400）のreachable=0は2026-10-01のことでんバス運賃改定で最低片道運賃が¥200→¥210になり、この帯に収まらなくなったことによる正しい結果（意図的な0件の基準値。バグではない）",
+          "budgets": { "400": { "reachable": 0, "spots": 0 }, "1000": { "reachable": 87, "spots": 85, "transfer": 87 }, "2000": { "reachable": 22, "spots": 52, "transfer": 22 } }
         }
       ]
     },
     "16": {
       "pref_name": "富山県",
       "generated_at": "2026-10-06",
-      "generated_at_note": "gtfs-data.jpのフィード一覧を手書き8件からAPI動的取得31件に変更（23件が一覧から漏れていた）、均一運賃路線をod_faresへ展開する修正（それまでfare-calculator.jsがbus_faresを読まず、21事業者中13事業者が検索結果に一切出てこなかった）、さらにstationBaseName()が「N番のりば」を除去せずmergeDuplicateStationNames()の統合対象にならなかった修正（高岡駅前3〜7番のりば等10件の表示名が、fare_rules上は出発専用/行き先専用に分かれており「高岡駅」を選んでも加越能バスで出発できなかった）を行った直後の基準値。高岡駅の往復¥1000が65件→296件に変化した等、この3つの修正の効果がそのまま基準値に表れている。",
+      "generated_at_note": "帯表示への変更（400/1000キーを帯の値に作り直し、2000キーを追加）に加え、2026-10-06の除外クラス追加（犯罪・事故・災害／運動施設・公共教育施設・商業施設ビル）の両方を反映した基準値。富山駅前は犯罪クラス追加（放火殺人事件の記事除外）で、高岡駅・新高岡駅・魚津駅前・黒部駅前は運動施設・公共教育施設・商業施設ビルの追加で、それぞれspots件数が影響を受けている。魚津駅前・黒部駅前は帯の上限が低い駅のため、往復¥1000・¥2000の帯（¥801〜）には元々到達駅が無く0件になる（バグではない。帯の外の予算では従来どおり到達可能）。",
       "departures": [
         {
           "display_name": "富山駅前",
-          "note": "富山県の中心駅。地鉄バス（OD運賃表型）＋旧均一運賃路線（まいどはやバス等）が乗り入れる。2026-10-06、公開ページで「富山市会社役員夫婦放火殺人事件」（Q11456384）が景勝地として表示されていた問題を受け、犯罪(Q83267)・事故(Q171558)・災害(Q3839081)を除外クラスに追加（spot-config.json）。この駅の3km圏内に該当spotがあったため、spots件数のみ両予算とも71→70・116→115に1件減少（到達駅数・乗換到達駅数は変化なし）",
-          "budgets": { "400": { "reachable": 35, "spots": 70 }, "1000": { "reachable": 229, "spots": 115, "transfer": 5 } }
+          "note": "富山県の中心駅。地鉄バス（OD運賃表型）＋旧均一運賃路線（まいどはやバス等）が乗り入れる",
+          "budgets": { "400": { "reachable": 35, "spots": 56 }, "1000": { "reachable": 93, "spots": 96, "transfer": 5 }, "2000": { "reachable": 85, "spots": 61, "transfer": 85 } }
         },
         {
           "display_name": "高岡駅",
-          "note": "高岡市の中心駅。2026-10-06のstationBaseName()修正前は、このクラスタが地鉄バス・加越能バス（世界遺産バスの一部）・万葉線のみで構成され、加越能バス一般路線の主要な乗り場（「高岡駅前3番のりば」等）が「高岡駅」とは別の停留所として扱われていたため、「高岡駅」を選んでも加越能バス一般路線では出発できなかった（修正前の値：往復¥400=6駅・spots44件、往復¥1000=65駅・spots93件・乗換31駅）。往復¥1000のspots件数は171件（当初170件で記録したが、同日の2回の再ビルドの間にWikidata側のスポット件数が変化した＝spot-diffで+3/-1を確認済み。stationBaseName修正やwait_min路線単位化とは無関係）",
-          "budgets": { "400": { "reachable": 24, "spots": 45 }, "1000": { "reachable": 296, "spots": 171, "transfer": 76 } }
+          "note": "高岡市の中心駅",
+          "budgets": { "400": { "reachable": 24, "spots": 36 }, "1000": { "reachable": 99, "spots": 75, "transfer": 74 }, "2000": { "reachable": 43, "spots": 96, "transfer": 42 } }
         },
         {
           "display_name": "新高岡駅",
-          "note": "北陸新幹線の駅。2026-10-06のstationBaseName()修正で「新高岡駅1・2・4番のりば」が統合され、初めて実用的な到達件数になった（修正前は加越能バスの乗り場が別停留所扱いで、ほぼ孤立していた）",
-          "budgets": { "400": { "reachable": 12, "spots": 39 }, "1000": { "reachable": 132, "spots": 107, "transfer": 66 } }
+          "note": "北陸新幹線の駅",
+          "budgets": { "400": { "reachable": 12, "spots": 32 }, "1000": { "reachable": 65, "spots": 94, "transfer": 38 }, "2000": { "reachable": 21, "spots": 85, "transfer": 14 } }
         },
         {
           "display_name": "魚津駅前",
-          "note": "魚津市民バス（均一運賃）のみに接続する停留所。修正前は往復¥400・¥1000とも0件だった",
-          "budgets": { "400": { "reachable": 212, "spots": 44 }, "1000": { "reachable": 236, "spots": 51, "transfer": 24 } }
+          "note": "魚津市民バス（均一運賃）のみに接続する停留所。往復¥1000・¥2000の帯（¥801〜¥1000／¥1801〜¥2000）に到達駅が無いのは、この駅から行ける範囲の運賃がすべて¥800以下に収まっているため（意図的な0件。バグではない）",
+          "budgets": { "400": { "reachable": 212, "spots": 40 }, "1000": { "reachable": 0, "spots": 0 }, "2000": { "reachable": 0, "spots": 0 } }
         },
         {
           "display_name": "黒部駅前",
-          "note": "黒部市のミニバス（OD型・均一型混在フィード）に接続",
-          "budgets": { "400": { "reachable": 104, "spots": 27, "transfer": 10 }, "1000": { "reachable": 118, "spots": 28, "transfer": 20 } }
+          "note": "黒部市のミニバス（OD型・均一型混在フィード）に接続。魚津駅前と同じ理由で往復¥1000・¥2000の帯は0件（意図的）",
+          "budgets": { "400": { "reachable": 92, "spots": 26, "transfer": 10 }, "1000": { "reachable": 0, "spots": 0 }, "2000": { "reachable": 0, "spots": 0 } }
         }
       ]
     },
     "17": {
       "pref_name": "石川県",
       "generated_at": "2026-10-06",
-      "generated_at_note": "富山と同時に均一運賃修正を適用した直後の基準値。松任駅自体は白山市めぐーる（OD運賃表型、修正前から機能）のみに接続するが、乗換先に野々市市・内灘町コミュニティバス（均一運賃、修正前は野々市市20/119駅・内灘町0/74駅しか到達できなかった）が増えたため到達駅数が増加している。",
+      "generated_at_note": "帯表示への変更（400/1000キーを帯の値に作り直し、2000キーを追加）を反映。松任駅は白山市めぐーる（OD運賃表型）のみに接続し、乗換先は野々市市・内灘町コミュニティバス（均一運賃）。この駅から行ける範囲の運賃はすべて¥400以下に収まるため、往復¥1000・¥2000の帯（¥801〜）は0件（意図的。バグではない）。",
       "departures": [
         {
           "display_name": "松任駅",
-          "note": "白山市コミュニティバス「めぐーる」の主要停留所",
-          "budgets": { "400": { "reachable": 291, "spots": 34, "transfer": 127 }, "1000": { "reachable": 298, "spots": 35, "transfer": 134 } }
+          "note": "白山市コミュニティバス「めぐーる」の主要停留所。往復¥1000・¥2000の帯に到達駅が無いのは意図的（上記note参照）",
+          "budgets": { "400": { "reachable": 127, "spots": 30, "transfer": 127 }, "1000": { "reachable": 0, "spots": 0 }, "2000": { "reachable": 0, "spots": 0 } }
         }
       ]
     }

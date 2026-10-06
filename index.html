@@ -45,7 +45,7 @@
                   type="number"
                   id="budget-input"
                   min="200"
-                  max="1000"
+                  max="2000"
                   step="100"
                   value="500"
                   readonly
@@ -71,6 +71,7 @@
 
         <div class="tab-panel active" data-tab-panel="list">
           <div id="results-container">
+            <h2 id="results-band-heading" class="results-band-heading" hidden></h2>
             <div id="sort-controls">
               <label for="sort-select">並び替え：</label>
               <select id="sort-select">
@@ -132,8 +133,8 @@
       <h3>使い方の手順</h3>
       <ol>
         <li>「出発駅を選択」欄に駅名を入力し、候補から選びます。</li>
-        <li>予算を <strong>－／＋</strong> ボタンで設定します（¥200〜¥1000、100円刻み）。</li>
-        <li>「検索」を押すと、その予算内で行ける景勝地の一覧と地図が表示されます。</li>
+        <li>予算を <strong>－／＋</strong> ボタンで設定します（¥200〜¥2000、100円刻み）。</li>
+        <li>「検索」を押すと、<strong>その予算に近い金額（予算−¥200を超え、予算以下）</strong>で行ける景勝地の一覧と地図が表示されます。もっと安い・高い予算の結果を見たいときは、予算を変えて再検索してください。</li>
       </ol>
 
       <h3>地図と一覧の連動</h3>

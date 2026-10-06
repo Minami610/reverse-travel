@@ -189,6 +189,13 @@ async function waitForSuggestion(doc, window, inputText, exactName, timeoutMs = 
   return null;
 }
 
+// main.jsのBAND_WIDTHと同じ値を保つこと（2026-10-06、帯表示導入時に追加）
+const BAND_WIDTH = 200;
+/** main.jsのformatBandLabel()と同じ規則（例: budget=1000 → "¥801〜¥1000"） */
+function formatBandLabel(budget) {
+  return `¥${budget - BAND_WIDTH + 1}〜¥${budget}`;
+}
+
 function stubMatchMedia(window, matches) {
   window.matchMedia = (query) => ({
     matches,
@@ -549,6 +556,36 @@ async function checkResultCards(html) {
       : '❌ 構造またはスタイルが想定と異なるカードがあります'
   );
 
+  // 【2026-10-06 帯表示】結果の見出し（#results-band-heading）が
+  // 「往復¥801〜¥1000で行ける場所」の形式で表示されているかを確認する。
+  const searchedBudget = 1000; // この検索で使った予算（budget-input.valueと一致させること）
+  const bandHeadingEl = doc.getElementById('results-band-heading');
+  const bandHeadingText = bandHeadingEl?.textContent || '';
+  const expectedBandHeading = `往復${formatBandLabel(searchedBudget)}で行ける場所`;
+  const bandHeadingOk = !bandHeadingEl?.hidden && bandHeadingText === expectedBandHeading;
+  console.log(
+    bandHeadingOk
+      ? `✅ 帯の見出しが表示されています: 「${bandHeadingText}」`
+      : `❌ 帯の見出しが想定と異なります（実際: "${bandHeadingText}" hidden=${bandHeadingEl?.hidden} / 期待: "${expectedBandHeading}"）`
+  );
+
+  // 帯の外（予算−¥200以下、または予算超）の運賃のカードが混ざっていないかを
+  // 全カードで確認する（カードの往復¥表記から運賃を読み取る）。
+  const bandMin = searchedBudget - BAND_WIDTH;
+  const outOfBandCards = cards
+    .map((card) => {
+      const summaryText = card.querySelector('.spot-summary')?.textContent || '';
+      const fareMatch = summaryText.match(/往復¥(\d+)/);
+      return fareMatch ? { name: card.querySelector('h3')?.textContent, fare: parseInt(fareMatch[1], 10) } : null;
+    })
+    .filter((c) => c && (c.fare <= bandMin || c.fare > searchedBudget));
+  const bandRangeOk = outOfBandCards.length === 0;
+  console.log(
+    bandRangeOk
+      ? `✅ 全${cards.length}件のカードが帯（${formatBandLabel(searchedBudget)}）の範囲内です`
+      : `❌ 帯の範囲外のカードが混ざっています（${outOfBandCards.length}件）: ${JSON.stringify(outOfBandCards.slice(0, 5))}`
+  );
+
   // 到達駅0件（=検索結果0件）のときの案内文を検証する。
   // 【背景】2026-10-01のことでんバス運賃改定で、ＪＲ栗林駅から往復¥400の検索が
   // 実際に0件になった（最低片道運賃が¥200→¥210になり往復¥400を超えたため）。
@@ -559,12 +596,17 @@ async function checkResultCards(html) {
   const noResultsOk = await checkNoResultsMessage(doc, window);
 
   window.close();
-  return ok && noResultsOk;
+  return ok && bandHeadingOk && bandRangeOk && noResultsOk;
 }
 
 /**
- * ＪＲ栗林駅×往復¥400（2026-10-01のことでんバス運賃改定後は実際に到達駅0件になる
- * 組み合わせ）で検索し、「ここからは往復¥Xから行けます」の案内文が出ることを確認する。
+ * ＪＲ栗林駅×往復¥400（2026-10-01のことでんバス運賃改定後は、帯表示でも実際に
+ * 帯0件になる組み合わせ）で検索し、以下を確認する（2026-10-06、帯表示への変更に
+ * 伴い全面的に書き換え）：
+ * 1. 帯の見出し・0件の案内文が、どちらも想定どおりの帯（¥201〜¥400）を表すこと
+ * 2. 「往復¥Xで探す」ボタンが1件以上出ること
+ * 3. そのボタンを実際にクリックして検索すると、スポットが1件以上出ること
+ *    （findNearestBudgetsWithResults()が「言うだけ」の案内をしていないことの確認）
  * 対象駅が見つからない、または（データ側の変化で）たまたま0件でなくなっていた場合は
  * このチェック自体をスキップする（0件になる特定の組み合わせに依存しすぎないため）。
  */
@@ -583,9 +625,10 @@ async function checkNoResultsMessage(doc, window) {
   // 導入に伴う修正。古いカードのままの誤判定・プレースホルダーでの早期判定の
   // 両方を防ぐ）。
   const beforeHtml = doc.getElementById('results-list').innerHTML;
+  const noResultsBudget = 400;
 
   kuribayashiItem.dispatchEvent(new window.Event('click', { bubbles: true }));
-  doc.getElementById('budget-input').value = '400';
+  doc.getElementById('budget-input').value = String(noResultsBudget);
   doc.getElementById('search-form').dispatchEvent(
     new window.Event('submit', { bubbles: true, cancelable: true })
   );
@@ -602,42 +645,56 @@ async function checkNoResultsMessage(doc, window) {
   const resultsList = doc.getElementById('results-list');
   const hasCards = resultsList.querySelectorAll('.spot-card').length > 0;
   if (hasCards) {
-    console.log('ℹ️  0件案内文チェック: ＪＲ栗林駅×往復¥400が0件でなくなっている（データの変化）ためスキップします');
+    console.log('ℹ️  0件案内文チェック: ＪＲ栗林駅×往復¥400（帯）が0件でなくなっている（データの変化）ためスキップします');
     return true;
   }
 
+  // 帯の見出しは0件でも表示されたままのはず
+  const bandHeadingText = doc.getElementById('results-band-heading')?.textContent || '';
+  const expectedBandHeading = `往復${formatBandLabel(noResultsBudget)}で行ける場所`;
+  const bandHeadingOk = bandHeadingText === expectedBandHeading;
+
   const noResultsText = resultsList.querySelector('.no-results')?.textContent || '';
-  const suggestionMatch = noResultsText.match(/往復¥(\d+)から行けます/);
-  if (!suggestionMatch) {
-    console.log(`❌ 0件案内文チェック: 「往復¥Xから行けます」の案内文が出ていません（実際の表示: "${noResultsText}"）`);
+  const expectedMessage = `往復${formatBandLabel(noResultsBudget)}で行ける場所は見つかりませんでした。`;
+  const messageOk = noResultsText === expectedMessage;
+
+  console.log(
+    bandHeadingOk && messageOk
+      ? `✅ 0件案内文チェック: 見出し「${bandHeadingText}」・本文「${noResultsText}」とも想定どおりです`
+      : `❌ 0件案内文チェック: 見出し=${bandHeadingOk}["${bandHeadingText}"／期待"${expectedBandHeading}"] 本文=${messageOk}["${noResultsText}"／期待"${expectedMessage}"]`
+  );
+  if (!bandHeadingOk || !messageOk) return false;
+
+  // 上下いずれか近い「結果がある帯」のボタン（往復¥Xで探す）が出ているか
+  const retryButtons = [...resultsList.querySelectorAll('.budget-retry-btn')];
+  if (retryButtons.length === 0) {
+    console.log('❌ 0件案内文チェック: 「往復¥Xで探す」ボタンが1つも出ていません');
     return false;
   }
-  console.log(`✅ 0件案内文チェック: ${noResultsText}`);
-
-  // 案内した金額が「言うだけ」になっていないか、実際にその金額で検索してスポットが
-  // 1件以上出ることを確認する（最安運賃×2をそのまま提示すると、その行き先の周りに
-  // スポットが1件もないケースで案内が嘘になりうるため、findSmallestBudgetWithSpots()
-  // が実際に検索して確認済みの金額だけを案内するようにした。その検証）。
-  const suggestedBudget = suggestionMatch[1];
-  const beforeHtml2 = resultsList.innerHTML;
-  doc.getElementById('budget-input').value = suggestedBudget;
-  doc.getElementById('search-form').dispatchEvent(
-    new window.Event('submit', { bubbles: true, cancelable: true })
+  console.log(
+    `✅ 0件案内文チェック: 「往復¥Xで探す」ボタンが${retryButtons.length}件出ています` +
+    `（${retryButtons.map((b) => b.textContent).join('、')}）`
   );
+
+  // ボタンが案内した予算が「言うだけ」になっていないか、実際にそのボタンを
+  // クリックして検索し、スポットが1件以上出ることを確認する（最初のボタンを使う）。
+  const retryBudget = retryButtons[0].getAttribute('data-budget');
+  const beforeHtml2 = resultsList.innerHTML;
+  retryButtons[0].dispatchEvent(new window.Event('click', { bubbles: true }));
   const rendered2 = await waitFor(
     () => doc.getElementById('results-list').innerHTML !== beforeHtml2 && resultsSettled(doc),
     8000
   );
   if (!rendered2) {
-    console.log('❌ 0件案内文チェック: 案内額での再検索後も #results-list の内容が更新されませんでした（タイムアウト）');
+    console.log('❌ 0件案内文チェック: ボタン押下後も #results-list の内容が更新されませんでした（タイムアウト）');
     return false;
   }
-  const cardsAtSuggestedBudget = resultsList.querySelectorAll('.spot-card').length;
-  if (cardsAtSuggestedBudget === 0) {
-    console.log(`❌ 0件案内文チェック: 案内した往復¥${suggestedBudget}で実際に検索してもスポットが0件でした（案内が実態と合っていません）`);
+  const cardsAfterRetry = resultsList.querySelectorAll('.spot-card').length;
+  if (cardsAfterRetry === 0) {
+    console.log(`❌ 0件案内文チェック: ボタンが案内した往復¥${retryBudget}で実際に検索してもスポットが0件でした（案内が実態と合っていません）`);
     return false;
   }
-  console.log(`✅ 0件案内文チェック: 案内した往復¥${suggestedBudget}で実際に検索すると${cardsAtSuggestedBudget}件のスポットが出ました`);
+  console.log(`✅ 0件案内文チェック: ボタンが案内した往復¥${retryBudget}で実際に検索すると${cardsAfterRetry}件のスポットが出ました`);
   return true;
 }
 

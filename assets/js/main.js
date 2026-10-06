@@ -10,6 +10,18 @@ import { RouteFormatter } from './route-formatter.js';
 import { MapView } from './map-view.js';
 import { LayoutController } from './layout-controller.js';
 
+// 予算の帯の幅（¥）。表示するのは「予算−BAND_WIDTHより高く、予算以下」の場所だけ
+// （2026-10-06、Minamiさんの判断により「予算以下すべて」から変更）。
+const BAND_WIDTH = 200;
+const MIN_BUDGET = 200;
+const MAX_BUDGET = 2000; // 2026-10-06、Minamiさんの判断により¥1000から変更
+const BUDGET_STEP = 100;
+
+/** 予算→帯の表示ラベル（例: budget=1000 → "¥801〜¥1000"） */
+function formatBandLabel(budget) {
+  return `¥${budget - BAND_WIDTH + 1}〜¥${budget}`;
+}
+
 class ReverseTravel {
   constructor() {
     this.loader = new GTFSLoader();
@@ -25,7 +37,8 @@ class ReverseTravel {
     this.currentDepartureStationId = null;
     this.currentDepartureStationName = null;
     this.currentSpots = []; // 検索結果（おすすめ順、地図のピンもこの集合のまま）
-    this.currentReachableCount = 0; // 0件時の案内文の出し分けに使う（到達駅0件/スポット0件を区別）
+    this.currentReachableCount = 0; // 帯内の到達駅数（デバッグ・将来利用のため保持。表示の分岐には使わない）
+    this.currentBudget = null; // 帯の見出し・0件時のボタン計算に使う直近の検索予算
     this.currentSortOrder = 'recommended';
 
     this.initUI();
@@ -49,6 +62,7 @@ class ReverseTravel {
       searchBtn: document.getElementById('search-btn'),
       appLayout: document.getElementById('app-layout'),
       sortSelect: document.getElementById('sort-select'),
+      bandHeading: document.getElementById('results-band-heading'),
       resultsList: document.getElementById('results-list'),
       detailContent: document.getElementById('detail-content'),
       backBtn: document.getElementById('back-btn'),
@@ -120,6 +134,16 @@ class ReverseTravel {
     // 視覚的な手がかりとして残しつつ、クリック判定はカード全体に拡大）。
     // 一覧からの「選択」操作は行わない（選択状態は地図のピンクリック起点のみ）
     this.elements.resultsList.addEventListener('click', (e) => {
+      // 0件のときに出す「往復¥Xで探す」ボタン（findNearestBudgetsWithResults参照）。
+      // 押された予算で予算欄を更新し、そのまま再検索する。
+      const retryBtn = e.target.closest('.budget-retry-btn');
+      if (retryBtn) {
+        const budget = parseInt(retryBtn.getAttribute('data-budget'), 10);
+        this.elements.budgetInput.value = budget;
+        this.updateBudgetUI();
+        this.performSearch();
+        return;
+      }
       const card = e.target.closest('.spot-card');
       if (card) {
         this.openSpotDetailById(card.getAttribute('data-spot-id'));
@@ -460,34 +484,43 @@ class ReverseTravel {
     const cacheKey = `route_${stationId}_${budget}`;
     if (this.cache.has(cacheKey)) {
       const cached = this.cache.get(cacheKey);
-      this.displayResults(cached.spots, stationId, cached.reachableCount);
+      this.displayResults(cached.spots, stationId, cached.reachableCount, budget);
       return;
     }
 
     try {
-      // 到達可能な駅を計算
+      // 到達可能な駅を計算（calculateReachable自体は従来どおり「予算以下すべて」を返す。
+      // 乗換候補の選定がこの集合全体を見て行われるため、ここでは絞り込まない）
       const reachableStations = await this.fareCalc.calculateReachable(stationId, budget);
       console.log('到達可能駅:', reachableStations);
 
-      // 周辺スポット検索
-      const spots = await this.spotFinder.findSpots(reachableStations);
+      // 【2026-10-06 帯表示】表示・スポット検索の対象は「予算−¥200より高く、
+      // 予算以下」の帯だけに絞る。乗換の到達も、fare-calculator.js側で
+      // roundTripFareに乗換2区間の合計往復運賃が入っているため、この1行の
+      // 比較だけで直行・乗換の両方を正しく帯判定できる。
+      const bandStations = reachableStations.filter((r) => r.roundTripFare > budget - BAND_WIDTH);
+      console.log(`帯（¥${budget - BAND_WIDTH + 1}〜¥${budget}）内の到達駅:`, bandStations);
+
+      // 周辺スポット検索（帯の中の到達駅だけを起点にする）
+      const spots = await this.spotFinder.findSpots(bandStations);
       console.log('発見スポット:', spots);
 
       // キャッシュ保存（0件時の案内文の出し分けに到達駅数も使うため、spotsと一緒に保存する）
-      this.cache.set(cacheKey, { spots, reachableCount: reachableStations.length });
+      this.cache.set(cacheKey, { spots, reachableCount: bandStations.length });
 
-      this.displayResults(spots, stationId, reachableStations.length);
+      this.displayResults(spots, stationId, bandStations.length, budget);
     } catch (error) {
       console.error('検索失敗:', error);
       alert('検索中にエラーが発生しました');
     }
   }
 
-  displayResults(spots, departureStationId, reachableCount) {
+  displayResults(spots, departureStationId, reachableCount, budget) {
     this.currentDepartureStationId = departureStationId;
     this.currentDepartureStationName = this.data.stations?.[departureStationId]?.display_name || departureStationId;
     this.currentSpots = spots;
     this.currentReachableCount = reachableCount;
+    this.currentBudget = budget;
     this.currentSortOrder = 'recommended';
     this.elements.sortSelect.value = 'recommended';
 
@@ -496,6 +529,13 @@ class ReverseTravel {
     // ここではinline styleを直接いじらない（flex/blockの食い違いを防ぐため）
     this.elements.appLayout.setAttribute('data-view', 'results');
     this.elements.appLayout.classList.add('has-results');
+
+    // 帯の見出し（「往復¥801〜¥1000で行ける場所」）。0件のときも、何の帯を
+    // 検索した結果が0件なのかが分かるよう常に表示する。
+    if (this.elements.bandHeading) {
+      this.elements.bandHeading.textContent = `往復${formatBandLabel(budget)}で行ける場所`;
+      this.elements.bandHeading.hidden = false;
+    }
 
     const departureStation = this.data.stations?.[departureStationId];
     this.mapView.render(departureStation, spots);
@@ -526,29 +566,43 @@ class ReverseTravel {
   }
 
   /**
-   * 到達駅はあるがスポットが0件のとき、予算を¥100刻みで上げていき、実際に
-   * スポットが1件以上見つかる最小の予算を探す（上限¥1000まで）。
-   *
-   * 【背景】最安運賃×2をそのまま提示すると、その最安の行き先の周りに
-   * スポットが1件もない場合、案内した金額で検索してもやはり0件になり、
-   * 案内が嘘になる。「実際に検索して1件以上出ることを確認した金額」だけを
-   * 案内する。計算はすべてローカルデータ参照のため、ブラウザ内で軽い。
-   * @returns {Promise<number|null>} 案内すべき往復予算。¥1000まで探しても
-   *   見つからなければnull
+   * 指定した予算の帯（予算−¥200より高く、予算以下）に、スポットが1件以上
+   * 見つかるかを判定する。findNearestBudgetsWithResults()の内部ヘルパー。
    */
-  async findSmallestBudgetWithSpots() {
-    const MAX_BUDGET = 1000;
-    const STEP = 100;
-    const currentBudget = parseInt(this.elements.budgetInput.value, 10) || 0;
-    const start = Math.max(200, (Math.floor(currentBudget / STEP) + 1) * STEP);
+  async hasBandResults(budget) {
+    const reachable = await this.fareCalc.calculateReachable(this.currentDepartureStationId, budget);
+    const band = reachable.filter((r) => r.roundTripFare > budget - BAND_WIDTH);
+    if (band.length === 0) return false;
+    const spots = await this.spotFinder.findSpots(band);
+    return spots.length > 0;
+  }
 
-    for (let budget = start; budget <= MAX_BUDGET; budget += STEP) {
-      const reachable = await this.fareCalc.calculateReachable(this.currentDepartureStationId, budget);
-      if (reachable.length === 0) continue;
-      const spots = await this.spotFinder.findSpots(reachable);
-      if (spots.length > 0) return budget;
+  /**
+   * 指定した予算の帯が0件だったとき、上下それぞれ一番近い「結果がある予算」を探す
+   * （2026-10-06、帯表示への変更に伴い旧findSmallestBudgetWithSpots()を置き換え）。
+   *
+   * 【背景】帯表示では「予算以下すべて」ではなく「予算−¥200より高く、予算以下」
+   * だけを見せるため、ある予算の帯がたまたま0件でも、隣の帯には結果があることが
+   * ある。上下どちらも¥100刻みで独立に探索し、見つかった方（片方だけのこともある）
+   * をボタンとして提示する。計算はすべてローカルデータ参照のため、ブラウザ内で軽い。
+   * @returns {Promise<{lower: number|null, higher: number|null}>}
+   */
+  async findNearestBudgetsWithResults(currentBudget) {
+    let lower = null;
+    for (let budget = currentBudget - BUDGET_STEP; budget >= MIN_BUDGET; budget -= BUDGET_STEP) {
+      if (await this.hasBandResults(budget)) {
+        lower = budget;
+        break;
+      }
     }
-    return null;
+    let higher = null;
+    for (let budget = currentBudget + BUDGET_STEP; budget <= MAX_BUDGET; budget += BUDGET_STEP) {
+      if (await this.hasBandResults(budget)) {
+        higher = budget;
+        break;
+      }
+    }
+    return { lower, higher };
   }
 
   /**
@@ -557,20 +611,29 @@ class ReverseTravel {
    * 【背景】2026-10-01のことでんバス運賃改定で、ＪＲ栗林駅から往復¥400で検索すると
    * 実際に0件になるケースが発生した（最低運賃が¥200→¥210になり、往復¥400を
    * 超えたため）。これは値上げの正しい結果であり、予算の上限・刻み幅（CLAUDE.md
-   * 「予算の上限が低いことは仕様」参照）を変える理由にはならない。一方で
-   * 「該当するスポットが見つかりません」とだけ出て終わる画面は不親切なため、
-   * 原因を「予算内に到達できる駅がない」場合と「到達できる駅はあるが近くに
-   * スポットがない」場合とで出し分ける。
+   * 「予算の上限が低いことは仕様」参照）を変える理由にはならない。
+   *
+   * 【2026-10-06 帯表示への変更】帯表示では「到達駅はあるが帯の中にはない」と
+   * 「到達駅自体がない」を利用者が区別する意味がなくなった（どちらも「この帯では
+   * 行ける場所がない」という同じ結論になるため）ため、メッセージを一本化し、
+   * 上下の次の帯をボタンで提示する形に変えた。
    */
   async buildNoResultsMessage() {
-    if (this.currentReachableCount === 0) {
-      const suggestedBudget = await this.findSmallestBudgetWithSpots();
-      if (suggestedBudget !== null) {
-        return `<p class="no-results">この予算では行ける場所がありません。${this.currentDepartureStationName}からは往復¥${suggestedBudget}から行けます。</p>`;
+    const budget = this.currentBudget;
+    const { lower, higher } = await this.findNearestBudgetsWithResults(budget);
+
+    let html = `<p class="no-results">往復${formatBandLabel(budget)}で行ける場所は見つかりませんでした。</p>`;
+    if (lower !== null || higher !== null) {
+      html += '<div class="no-results-actions">';
+      if (lower !== null) {
+        html += `<button type="button" class="budget-retry-btn" data-budget="${lower}">往復¥${lower}で探す</button>`;
       }
-      return `<p class="no-results">${this.currentDepartureStationName}からは往復¥1000以内で行ける場所が見つかりませんでした</p>`;
+      if (higher !== null) {
+        html += `<button type="button" class="budget-retry-btn" data-budget="${higher}">往復¥${higher}で探す</button>`;
+      }
+      html += '</div>';
     }
-    return '<p class="no-results">到達できる駅は見つかりましたが、近くに観光スポットが見つかりませんでした</p>';
+    return html;
   }
 
   /**

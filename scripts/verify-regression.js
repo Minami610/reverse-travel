@@ -26,7 +26,16 @@
  * 基準値を意図的に更新する場合は、このスクリプトで新しい値を確認したうえで
  * config/regression-baseline.json を書き換え、コミットメッセージに
  * 「なぜ変わったか」を書くこと（データ更新／仕様変更等）。
+ *
+ * 【2026-10-06 帯表示への変更】各budgetキーの reachable/spots/transfer は、
+ * 「予算以下すべて」ではなく「予算−¥200より高く、予算以下」の帯だけを対象にした
+ * 値に変更した（main.jsのperformSearch()と同じ絞り込みをこのテストでも行う）。
+ * BAND_WIDTHはmain.jsのBAND_WIDTHと必ず一致させること（値をずらすとテストが
+ * 検証する対象と実際の画面表示がずれてしまう）。上限も¥1000→¥2000に変更した
+ * ことに合わせ、基準駅には¥2000の帯も追加した。
  */
+const BAND_WIDTH = 200; // main.jsのBAND_WIDTHと同じ値を保つこと
+const MAX_BUDGET = 2000; // main.jsのMAX_BUDGETと同じ値を保つこと
 
 import fs from 'fs';
 import path from 'path';
@@ -54,7 +63,7 @@ function toUrl(relativePath) {
 
 async function checkPrefecture(codeStr, prefBaseline, modules) {
   const { FareCalculator, SpotFinder, mergeIndexedSpotRegions, parseRouteEntry, lookupRouteEntry } = modules;
-  console.log(`\n🔁 都道府県コード${codeStr}（${prefBaseline.pref_name}）の回帰チェック（${prefBaseline.departures.length}駅×往復¥400/¥1000）`);
+  console.log(`\n🔁 都道府県コード${codeStr}（${prefBaseline.pref_name}）の回帰チェック（${prefBaseline.departures.length}駅×帯ごと）`);
 
   const data = {
     fareData: readPrefJson(codeStr, 'fare-lookup-tables.json'),
@@ -78,12 +87,13 @@ async function checkPrefecture(codeStr, prefBaseline, modules) {
 
   let failures = 0;
 
-  // 1. 各駅×往復¥400/¥1000の到達駅数・スポット件数
+  // 1. 各駅×各帯の到達駅数・スポット件数（帯 = 予算−¥200より高く、予算以下）
   for (const departure of prefBaseline.departures) {
     const stationId = findStationId(departure.display_name);
     for (const [budgetStr, expected] of Object.entries(departure.budgets)) {
       const budget = parseInt(budgetStr, 10);
-      const reachable = await fareCalc.calculateReachable(stationId, budget);
+      const cumulative = await fareCalc.calculateReachable(stationId, budget);
+      const reachable = cumulative.filter((r) => r.roundTripFare > budget - BAND_WIDTH);
       const spots = await spotFinder.findSpots(reachable);
       const transfer = reachable.filter((r) => r.reachBy === 'transfer').length;
       const actual = { reachable: reachable.length, spots: spots.length, transfer };
@@ -107,13 +117,15 @@ async function checkPrefecture(codeStr, prefBaseline, modules) {
     }
   }
 
-  // 2. 運賃事業者と表示経路事業者の食い違い件数（この県の全基準駅、往復¥1000で確認）
+  // 2. 運賃事業者と表示経路事業者の食い違い件数（この県の全基準駅、上限¥2000の
+  //    累積集合で確認。帯で絞ると上限予算の駅でしか全区間をカバーできないため、
+  //    このチェックだけは従来どおり累積のcalculateReachable()をそのまま使う）
   console.log(`🔍 都道府県コード${codeStr}: 運賃事業者と表示経路事業者の食い違いチェック`);
   let totalDirect = 0;
   let totalMismatch = 0;
   for (const departure of prefBaseline.departures) {
     const stationId = findStationId(departure.display_name);
-    const reachable = await fareCalc.calculateReachable(stationId, 1000);
+    const reachable = await fareCalc.calculateReachable(stationId, MAX_BUDGET);
     for (const station of reachable) {
       if (station.reachBy !== 'direct') continue;
       totalDirect += 1;
