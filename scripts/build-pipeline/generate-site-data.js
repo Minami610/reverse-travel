@@ -365,6 +365,78 @@ export function prunePrefDirs(prefCodes, outRoot = DOCS_DATA_ROOT) {
   }
 }
 
+// 運行期間がこの日数以内に切れるフィードは、公開モードで警告する
+const FEED_EXPIRY_WARNING_DAYS = 60;
+
+/** GTFSのfeed_end_date（YYYYMMDD文字列）をUTCのDateに変換する */
+function parseGtfsDate(yyyymmdd) {
+  return new Date(Date.UTC(
+    Number(yyyymmdd.slice(0, 4)),
+    Number(yyyymmdd.slice(4, 6)) - 1,
+    Number(yyyymmdd.slice(6, 8))
+  ));
+}
+
+/**
+ * 公開する都道府県のフィードについて、運行期間（feed_end_date）が
+ * 切れていないか・もうすぐ切れないかを確認する（公開モード専用）。
+ *
+ * 【背景】期限が切れたGTFSデータを気づかず公開し続けると、実際には存在しない
+ * ダイヤ・運賃を正しいものとして案内してしまう。実際に石川県内灘町コミュニティ
+ * バスのフィードが2026-12-31までしかなく、気づかれないまま期限切れになる
+ * 懸念があった（2026-10-06指摘）。確認の結果、残り日数が最も少なかったのは
+ * 富山県立山町営バス（2026-10-10まで、指摘時点で残り4日）で、こちらの方が
+ * 内灘町（残り86日）より切迫していた。
+ */
+export function checkFeedExpiry(prefCodes, outRoot = DOCS_DATA_ROOT) {
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+
+  const warnings = [];
+  const expired = [];
+  for (const prefCode of prefCodes) {
+    const codeStr = prefCodeStr(prefCode);
+    const srcPath = path.join(outRoot, 'pref', codeStr, 'data-sources.json');
+    if (!fs.existsSync(srcPath)) continue;
+    const manifest = JSON.parse(fs.readFileSync(srcPath, 'utf-8'));
+    for (const feed of manifest.feeds || []) {
+      if (!feed.feed_end_date) continue;
+      const end = parseGtfsDate(feed.feed_end_date);
+      const daysLeft = Math.round((end - today) / 86400000);
+      const info = {
+        prefCode: codeStr,
+        operator: feed.operator_id,
+        name: feed.feed_publisher_name || feed.operator_id,
+        endDate: feed.feed_end_date,
+        daysLeft,
+      };
+      if (daysLeft < 0) expired.push(info);
+      else if (daysLeft <= FEED_EXPIRY_WARNING_DAYS) warnings.push(info);
+    }
+  }
+
+  warnings.sort((a, b) => a.daysLeft - b.daysLeft);
+  if (warnings.length > 0) {
+    console.warn(`\n⚠️  運行期間が${FEED_EXPIRY_WARNING_DAYS}日以内に切れるフィードが${warnings.length}件あります:`);
+    for (const w of warnings) {
+      console.warn(`   - [${w.prefCode}] ${w.operator}（${w.name}）: ${w.endDate}まで（残り${w.daysLeft}日）`);
+    }
+  }
+
+  if (expired.length > 0) {
+    console.error(`\n❌ 運行期間が切れたフィードがあります:`);
+    for (const e of expired) {
+      console.error(`   - [${e.prefCode}] ${e.operator}（${e.name}）: ${e.endDate}で終了済み（${-e.daysLeft}日経過）`);
+    }
+    throw new Error(
+      `運行期間が切れたフィードが${expired.length}件あります。新しい版を取得して再ビルドするか、` +
+      `除外設定を追加してから再実行してください。`
+    );
+  }
+
+  return { warnings, expired };
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
   let prefCodes;
@@ -407,4 +479,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   copySpotRankingConfig(outRoot);
   generateNationalDataSources(prefCodes, outRoot);
   writePublishedPrefecturesList(prefCodes, outRoot);
+
+  // 運行期間切れ・切れそうなフィードの確認は、実際に公開する場合だけ行う
+  // （--local-verifyでの事前検証では、まだ公開していない県を見ているだけなので対象外）。
+  if (outRoot === DOCS_DATA_ROOT) {
+    checkFeedExpiry(prefCodes, outRoot);
+  }
 }
