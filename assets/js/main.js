@@ -255,7 +255,7 @@ class ReverseTravel {
     const feeds = manifest?.feeds;
     if (!Array.isArray(feeds) || feeds.length === 0) {
       if (summaryEl) summaryEl.textContent = '';
-      if (listEl) listEl.innerHTML = '<li>データ出典情報を生成できませんでした。ビルドをご確認ください。</li>';
+      if (listEl) listEl.innerHTML = '<li>出典情報を読み込めませんでした。時間をおいて、もう一度お試しください。</li>';
       if (footerEl) footerEl.textContent = '出典情報を取得できませんでした';
       return;
     }
