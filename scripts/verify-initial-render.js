@@ -876,6 +876,139 @@ async function loadEngineModules() {
 }
 
 /**
+ * 【2026-10-08追加】favorites.js単体のテスト（jsdomを使わず、1つのJSDOMウィンドウの
+ * localStorageをglobalThis.localStorageに割り当てて直接importする）。
+ * 保存・解除・再読み込み後も残ること、localStorageが例外を出しても
+ * 落ちないことを確認する。
+ */
+async function checkFavoritesStorage() {
+  console.log('\n=== お気に入り（favorites.js）の保存・例外耐性チェック ===');
+  const dom = new JSDOM('', { url: 'http://localhost/' });
+  globalThis.localStorage = dom.window.localStorage;
+
+  const favoritesModule = await import(toEngineModuleUrl('assets/js/favorites.js') + `?t=${Date.now()}`);
+  const { loadFavorites, saveFavorites, toggleFavorite, removeFavorite, upsertFavorite, isFavorite } = favoritesModule;
+
+  let ok = true;
+
+  // 1. 保存→解除→再読み込み後も残ること（「再読み込み」はこのテストでは
+  //    同じlocalStorageに対してloadFavorites()をもう一度呼ぶことで模す。
+  //    実際のページ再読み込みに相当する検証は、検索結果のお気に入りボタンが
+  //    クリックのたびにlocalStorageの現在値を見て押下状態を決め直す
+  //    checkFavoriteCardToggle()側で行う）。
+  const entry = {
+    qid: 'Q_TEST_1', name: 'テストスポット', prefCode: '37',
+    departureStationId: 'kotoden-bus:019501', departureName: '高松築港',
+    roundTripFare: 500, durationMin: 20, savedAt: new Date().toISOString(),
+  };
+  const savedAfterToggle = toggleFavorite(entry);
+  const persistedOnce = loadFavorites().some((f) => f.qid === 'Q_TEST_1');
+  ok = ok && savedAfterToggle === true && persistedOnce;
+  console.log(
+    savedAfterToggle === true && persistedOnce
+      ? '✅ 保存→loadFavorites()で読み直しても残っている'
+      : `❌ 保存直後の読み直しに失敗（toggle結果=${savedAfterToggle}, 永続化=${persistedOnce}）`
+  );
+
+  const removedAfterToggle = toggleFavorite(entry);
+  const goneAfterToggle = !loadFavorites().some((f) => f.qid === 'Q_TEST_1');
+  ok = ok && removedAfterToggle === false && goneAfterToggle;
+  console.log(
+    removedAfterToggle === false && goneAfterToggle
+      ? '✅ 同じQIDを再度toggleFavorite()すると解除され、読み直しても消えている'
+      : '❌ 解除が正しく反映されていない'
+  );
+
+  // 2. removeFavorite / upsertFavorite
+  toggleFavorite(entry);
+  removeFavorite('Q_TEST_1');
+  const removedDirect = !loadFavorites().some((f) => f.qid === 'Q_TEST_1');
+  upsertFavorite({ ...entry, roundTripFare: 999 });
+  upsertFavorite({ ...entry, roundTripFare: 999 }); // 2回呼んでも1件のまま（上書き）
+  const afterUpsert = loadFavorites().filter((f) => f.qid === 'Q_TEST_1');
+  const upsertOk = afterUpsert.length === 1 && afterUpsert[0].roundTripFare === 999;
+  ok = ok && removedDirect && upsertOk;
+  console.log(
+    removedDirect && upsertOk
+      ? '✅ removeFavorite()で削除でき、upsertFavorite()は重複させず内容を更新する'
+      : `❌ removeFavorite/upsertFavoriteの挙動が想定と異なる（removeDirect=${removedDirect}, upsert件数=${afterUpsert.length}）`
+  );
+  removeFavorite('Q_TEST_1');
+
+  // 3. 壊れたJSON・配列でない値・個々の要素が不正な場合に、画面を落とさず空扱いにする
+  dom.window.localStorage.setItem('ikeru.favorites.v1', '{this is not json');
+  const brokenJsonResult = loadFavorites();
+  ok = ok && Array.isArray(brokenJsonResult) && brokenJsonResult.length === 0;
+  console.log(
+    Array.isArray(brokenJsonResult) && brokenJsonResult.length === 0
+      ? '✅ 壊れたJSON（構文エラー）は例外を投げず空配列を返す'
+      : '❌ 壊れたJSONの処理に失敗'
+  );
+
+  dom.window.localStorage.setItem('ikeru.favorites.v1', '{"not":"an array"}');
+  const nonArrayResult = loadFavorites();
+  ok = ok && Array.isArray(nonArrayResult) && nonArrayResult.length === 0;
+  console.log(
+    Array.isArray(nonArrayResult) && nonArrayResult.length === 0
+      ? '✅ 配列でない値が保存されていても空配列を返す'
+      : '❌ 配列でない値の処理に失敗'
+  );
+
+  dom.window.localStorage.setItem(
+    'ikeru.favorites.v1',
+    JSON.stringify([entry, { qid: 'Q_BROKEN' /* 他の必須項目が欠落 */ }, { ...entry, qid: 'Q_TEST_2' }])
+  );
+  const partiallyBroken = loadFavorites();
+  const skipsInvalidOnly = partiallyBroken.length === 2 && partiallyBroken.every((f) => f.qid !== 'Q_BROKEN');
+  ok = ok && skipsInvalidOnly;
+  console.log(
+    skipsInvalidOnly
+      ? '✅ 配列中の壊れた1件だけを読み飛ばし、他の正常な要素は残す'
+      : `❌ 壊れた要素の読み飛ばしに失敗（件数=${partiallyBroken.length}）`
+  );
+  dom.window.localStorage.clear();
+
+  // 4. localStorage自体が例外を投げる環境（プライベートブラウジング等）でも落ちない。
+  // 【注意】jsdomのStorage実装は、インスタンスに直接`ls.getItem = fn`で代入しても
+  // 実際の呼び出しには反映されない（Storageの仕様上の特殊な内部動作のため、
+  // 実測で確認済み）。globalThis.localStorage自体を、例外を投げる素朴な
+  // オブジェクトに一時的に差し替えることで確実にシミュレートする。
+  const realLocalStorage = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem() { throw new Error('storage disabled'); },
+    setItem() { throw new Error('storage disabled'); },
+    removeItem() { throw new Error('storage disabled'); },
+  };
+
+  let threwOnLoad = false;
+  let threwOnSave = false;
+  try {
+    const result = loadFavorites();
+    threwOnLoad = !Array.isArray(result);
+  } catch {
+    threwOnLoad = true;
+  }
+  try {
+    const saveResult = saveFavorites([entry]);
+    threwOnSave = saveResult !== false;
+  } catch {
+    threwOnSave = true;
+  }
+  ok = ok && !threwOnLoad && !threwOnSave;
+  console.log(
+    !threwOnLoad && !threwOnSave
+      ? '✅ localStorage.getItem/setItemが例外を投げても、loadFavorites/saveFavoritesは例外を外に投げず安全な値を返す'
+      : `❌ localStorageの例外がそのまま外に漏れている（load=${threwOnLoad}, save=${threwOnSave}）`
+  );
+  globalThis.localStorage = realLocalStorage;
+  dom.window.localStorage.clear();
+  delete globalThis.localStorage;
+  dom.window.close();
+
+  return ok;
+}
+
+/**
  * jsdomを介さず、docs/data/pref/配下の公開データを直接読んでfare-calculator.js/
  * spot-finder.jsを呼び出す（jsdom側のstubFetchが読むのと同じ実体）。
  * 2026-10-07に追加した帯のスポット単位化の検証用
@@ -1296,6 +1429,319 @@ async function checkSearchButtonState(html) {
   return initialOk && pendingAfterBudgetChange && revertedAfterSearch && revertedAfterUndo && errors.length === 0;
 }
 
+/**
+ * 【2026-10-08追加】カードの☆（マイリスト保存）ボタンの保存・解除と、
+ * ヘッダーの件数バッジ・詳細画面側の☆ボタンへの反映を確認する。
+ */
+async function checkFavoriteCardToggle(html) {
+  console.log('\n=== カードの☆（マイリスト保存）トグルチェック ===');
+  const errors = [];
+  const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'dangerously', pretendToBeVisual: true });
+  const { window } = dom;
+  stubMatchMedia(window, true);
+  stubFetch(window);
+  window.addEventListener('error', (e) => errors.push(e.error ? (e.error.stack || e.error.message) : e.message));
+
+  await new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 50);
+    if (window.document.readyState === 'complete') done();
+    else window.addEventListener('load', done);
+  });
+  const doc = window.document;
+
+  const item = await waitForSuggestion(doc, window, '高松築港', '高松築港');
+  if (!item) {
+    console.log('❌ 検証用の出発駅「高松築港」の候補が見つかりません');
+    window.close();
+    return false;
+  }
+  item.dispatchEvent(new window.Event('click', { bubbles: true }));
+  doc.getElementById('budget-input').value = '1000';
+  doc.getElementById('search-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await waitFor(() => resultsSettled(doc), 8000);
+
+  const firstCard = doc.querySelector('.spot-card');
+  if (!firstCard) {
+    console.log('❌ カードが1件も生成されていません');
+    window.close();
+    return false;
+  }
+  const favBtn = firstCard.querySelector('.favorite-btn');
+  const spotId = firstCard.getAttribute('data-spot-id');
+
+  favBtn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  const activeAfterFirstClick = favBtn.classList.contains('favorite-btn-active');
+  const countAfterFirstClick = doc.getElementById('mylist-count')?.textContent;
+  console.log(
+    activeAfterFirstClick && countAfterFirstClick === '1'
+      ? '✅ ☆を押すとカードが押下状態になり、ヘッダーの件数が1になりました'
+      : `❌ ☆を押しても反映されません（active=${activeAfterFirstClick}, count=${countAfterFirstClick}）`
+  );
+
+  // 詳細画面を開き、同じスポットの☆が保存済み状態で表示されるか
+  firstCard.dispatchEvent(new window.Event('click', { bubbles: true }));
+  const detailFavBtn = doc.querySelector('.detail-favorite-btn');
+  const detailShowsActive = !!detailFavBtn?.classList.contains('favorite-btn-active') &&
+    detailFavBtn?.textContent === '★ マイリストから削除';
+  console.log(
+    detailShowsActive
+      ? '✅ 詳細画面でも同じスポットが「マイリストから削除」（保存済み）として表示されます'
+      : `❌ 詳細画面の☆ボタンに保存状態が反映されていません（文言="${detailFavBtn?.textContent}"）`
+  );
+
+  // 詳細画面の☆を押して解除
+  detailFavBtn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  const countAfterRemove = doc.getElementById('mylist-count')?.textContent;
+  const detailShowsInactive = detailFavBtn.textContent === '★ マイリストに保存';
+  console.log(
+    countAfterRemove === '0' && detailShowsInactive
+      ? '✅ 詳細画面から解除すると、件数が0に戻り文言も「マイリストに保存」に戻ります'
+      : `❌ 詳細画面からの解除が反映されません（count=${countAfterRemove}, 文言="${detailFavBtn.textContent}"）`
+  );
+
+  const allOk = activeAfterFirstClick && countAfterFirstClick === '1' && detailShowsActive &&
+    countAfterRemove === '0' && detailShowsInactive;
+
+  if (errors.length > 0) {
+    console.log('⚠️  ページ実行中に発生したエラー:');
+    errors.forEach((e) => console.log('  - ' + e));
+  }
+
+  window.close();
+  return allOk && errors.length === 0;
+}
+
+/**
+ * 【2026-10-08追加】共有リンク（?spot=...）で、現在の予算の帯の外にある
+ * スポットを開けることを確認する（Minamiさんの判断：共有リンクは帯で絞らず、
+ * 出発駅から上限¥2000で届くスポットの中からQIDで探す）。
+ * 高松築港×ドングリランド（Q11323429、往復¥1740）を使う。初期予算（¥500）の
+ * 帯には入らないが、開けること・予算欄が¥1800（¥100刻みの帯の上端）に
+ * 揃うこと・一覧にもこのスポットが含まれることを確認する。
+ */
+async function checkSharedSpotBandBypass(html) {
+  console.log('\n=== 共有リンク：帯の外のスポットを開けるかのチェック ===');
+  const errors = [];
+  const qid = 'Q11323429';
+  const sid = 'kotoden-bus:019501';
+  const url = `http://localhost/?spot=${qid}&pref=37&sid=${encodeURIComponent(sid)}&dep=${encodeURIComponent('高松築港')}`;
+  const dom = new JSDOM(html, { url, runScripts: 'dangerously', pretendToBeVisual: true });
+  const { window } = dom;
+  stubMatchMedia(window, true);
+  stubFetch(window);
+  window.addEventListener('error', (e) => errors.push(e.error ? (e.error.stack || e.error.message) : e.message));
+
+  await new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 50);
+    if (window.document.readyState === 'complete') done();
+    else window.addEventListener('load', done);
+  });
+  const doc = window.document;
+
+  const opened = await waitFor(
+    () => doc.getElementById('app-layout')?.getAttribute('data-view') === 'detail',
+    10000
+  );
+  if (!opened) {
+    console.log('❌ 共有リンクを開いても詳細画面になりませんでした（タイムアウト）');
+    window.close();
+    return false;
+  }
+
+  const detailHeading = doc.querySelector('#detail-content h2')?.textContent;
+  const budgetValue = doc.getElementById('budget-input')?.value;
+  const showsCorrectSpot = detailHeading === 'ドングリランド';
+  const budgetAligned = budgetValue === '1800'; // ceil(1740/100)*100
+  console.log(
+    showsCorrectSpot
+      ? '✅ 初期予算（¥500）の帯の外にあるスポットでも、共有リンクから直接詳細が開きました'
+      : `❌ 想定したスポットの詳細が開いていません（実際の見出し="${detailHeading}"）`
+  );
+  console.log(
+    budgetAligned
+      ? `✅ 予算欄がそのスポットの帯の上端（¥${budgetValue}）に揃いました`
+      : `❌ 予算欄が想定と異なります（実際: ¥${budgetValue} / 期待: ¥1800）`
+  );
+
+  // 「← 一覧に戻る」で、このスポットを含む一覧に戻れること
+  doc.getElementById('back-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+  const backToList = doc.getElementById('app-layout')?.getAttribute('data-view') === 'results';
+  const cardIncluded = !!doc.querySelector(`.spot-card[data-spot-id="${qid}"]`);
+  console.log(
+    backToList && cardIncluded
+      ? '✅ 「← 一覧に戻る」で、このスポットを含む一覧に戻れました'
+      : `❌ 一覧に戻ってもこのスポットが含まれていません（戻った=${backToList}, 含まれる=${cardIncluded}）`
+  );
+
+  if (errors.length > 0) {
+    console.log('⚠️  ページ実行中に発生したエラー:');
+    errors.forEach((e) => console.log('  - ' + e));
+  }
+
+  window.close();
+  return showsCorrectSpot && budgetAligned && backToList && cardIncluded && errors.length === 0;
+}
+
+/**
+ * 【2026-10-08追加】共有リンクのsid（station_id）が実際と食い違っていても、
+ * depの駅名が県内で一意に一致すれば解決できることを確認する
+ * （駅の再ビルドでstation_idが変わりうる場合のフォールバック経路）。
+ */
+async function checkSharedSpotSidMismatch(html) {
+  console.log('\n=== 共有リンク：sidが食い違っていても駅名で解決できるかのチェック ===');
+  const errors = [];
+  const qid = 'Q11323429';
+  const wrongSid = 'kotoden-bus:999999'; // 実在しないstation_id
+  const url = `http://localhost/?spot=${qid}&pref=37&sid=${encodeURIComponent(wrongSid)}&dep=${encodeURIComponent('高松築港')}`;
+  const dom = new JSDOM(html, { url, runScripts: 'dangerously', pretendToBeVisual: true });
+  const { window } = dom;
+  stubMatchMedia(window, true);
+  stubFetch(window);
+  window.addEventListener('error', (e) => errors.push(e.error ? (e.error.stack || e.error.message) : e.message));
+
+  await new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 50);
+    if (window.document.readyState === 'complete') done();
+    else window.addEventListener('load', done);
+  });
+  const doc = window.document;
+
+  const opened = await waitFor(
+    () => doc.getElementById('app-layout')?.getAttribute('data-view') === 'detail',
+    10000
+  );
+  const detailHeading = doc.querySelector('#detail-content h2')?.textContent;
+  const ok = opened && detailHeading === 'ドングリランド';
+  console.log(
+    ok
+      ? '✅ sidが実在しなくても、駅名（高松築港）の完全一致で解決して詳細が開きました'
+      : `❌ sid不一致時のフォールバックに失敗しました（開いた=${opened}, 見出し="${detailHeading}"）`
+  );
+
+  if (errors.length > 0) {
+    console.log('⚠️  ページ実行中に発生したエラー:');
+    errors.forEach((e) => console.log('  - ' + e));
+  }
+
+  window.close();
+  return ok && errors.length === 0;
+}
+
+/**
+ * 【2026-10-08追加】共有リンクの駅名が県内で複数の駅に一致する（曖昧な）場合、
+ * エラー文言を出さず通常のトップ画面のままになることを確認する。
+ * 公開中3県には実際に同名駅の重複が無いため（本文中で件数を報告済み）、
+ * station-index.jsonのfetch結果に合成の重複エントリを注入して再現する。
+ */
+async function checkSharedSpotAmbiguousName(html) {
+  console.log('\n=== 共有リンク：同じ名前の駅が複数あるときトップ画面になるかのチェック ===');
+  const errors = [];
+  const DUPLICATE_NAME = 'テスト重複駅';
+  const url = `http://localhost/?spot=Q11323429&pref=37&dep=${encodeURIComponent(DUPLICATE_NAME)}`;
+  const dom = new JSDOM(html, { url, runScripts: 'dangerously', pretendToBeVisual: true });
+  const { window } = dom;
+  stubMatchMedia(window, true);
+  // 通常のstubFetchに加えて、station-index.jsonだけ合成の重複エントリを2件追加する
+  window.fetch = async (reqUrl) => {
+    const relPath = String(reqUrl).replace(/^\//, '');
+    if (relPath === 'data/national/station-index.json') {
+      const original = JSON.parse(fs.readFileSync(path.join(docsDir, relPath), 'utf-8'));
+      const withDuplicates = [...original, [DUPLICATE_NAME, 37, 0], [DUPLICATE_NAME, 37, 1]];
+      return { ok: true, status: 200, json: async () => withDuplicates };
+    }
+    const filePath = path.join(docsDir, relPath);
+    if (!fs.existsSync(filePath)) {
+      return { ok: false, status: 404, json: async () => { throw new Error(`not found: ${relPath}`); } };
+    }
+    return { ok: true, status: 200, json: async () => JSON.parse(fs.readFileSync(filePath, 'utf-8')) };
+  };
+  window.addEventListener('error', (e) => errors.push(e.error ? (e.error.stack || e.error.message) : e.message));
+
+  await new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 50);
+    if (window.document.readyState === 'complete') done();
+    else window.addEventListener('load', done);
+  });
+  const doc = window.document;
+
+  // 「詳細画面にならず、通常のトップ画面のまま」であることの確認。
+  // エラー文言（alert等）を出さないことも確認したいが、jsdomのwindow.alertは
+  // 既定で例外を投げるため、呼ばれていたらここで検出できる。
+  let alertCalled = false;
+  window.alert = () => { alertCalled = true; };
+  await new Promise((r) => setTimeout(r, 500)); // handleInitialUrl()の完了を待つ
+
+  const view = doc.getElementById('app-layout')?.getAttribute('data-view');
+  const hasResultsClass = doc.getElementById('app-layout')?.classList.contains('has-results');
+  const isTopScreen = view !== 'detail' && !hasResultsClass;
+  console.log(
+    isTopScreen && !alertCalled
+      ? '✅ 同名駅が複数あるときは詳細画面を開かず、エラー文言も出さず通常のトップ画面のままです'
+      : `❌ 想定と異なります（data-view=${view}, has-results=${hasResultsClass}, alert呼び出し=${alertCalled}）`
+  );
+
+  if (errors.length > 0) {
+    console.log('⚠️  ページ実行中に発生したエラー:');
+    errors.forEach((e) => console.log('  - ' + e));
+  }
+
+  window.close();
+  return isTopScreen && !alertCalled && errors.length === 0;
+}
+
+/**
+ * 【2026-10-08追加】出発地の異なる項目が混ざった共有リスト（?list=...）を
+ * 開けることを確認する（高松築港発のドングリランド＋富山駅前発のTOYAMAキラリ）。
+ */
+async function checkSharedListMixedDeparture(html) {
+  console.log('\n=== 共有リスト：出発地の違う項目が混ざっていても開けるかのチェック ===');
+  const errors = [];
+  const items = [
+    { qid: 'Q11323429', prefCode: '37', stationId: 'kotoden-bus:019501' },
+    { qid: 'Q21060996', prefCode: '16', stationId: 'chitetsu.chitetsubus:101_01' },
+  ];
+  // 実際のbuildListShareUrl()と同じ関数を使ってURLを組み立てる（手で組み立てると、
+  // URLSearchParams.set()が行う二重エンコードを再現できず、station_idに含まれる
+  // コロンが区切り文字と区別できなくなる食い違いが実際に起きた）。
+  const { buildListShareUrl } = await import(toEngineModuleUrl('assets/js/favorites.js'));
+  const url = buildListShareUrl('http://localhost/', items);
+  const dom = new JSDOM(html, { url, runScripts: 'dangerously', pretendToBeVisual: true });
+  const { window } = dom;
+  stubMatchMedia(window, true);
+  stubFetch(window);
+  window.addEventListener('error', (e) => errors.push(e.error ? (e.error.stack || e.error.message) : e.message));
+
+  await new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 50);
+    if (window.document.readyState === 'complete') done();
+    else window.addEventListener('load', done);
+  });
+  const doc = window.document;
+
+  const modalOpened = await waitFor(() => doc.getElementById('shared-list-modal')?.hidden === false, 10000);
+  if (!modalOpened) {
+    console.log('❌ 共有されたリストのモーダルが開きませんでした');
+    window.close();
+    return false;
+  }
+  const rendered = await waitFor(() => (doc.getElementById('shared-list-body')?.textContent || '').includes('ドングリランド'), 10000);
+  const bodyText = doc.getElementById('shared-list-body')?.textContent || '';
+  const bothShown = bodyText.includes('ドングリランド') && bodyText.includes('TOYAMAキラリ');
+  console.log(
+    rendered && bothShown
+      ? '✅ 出発地の異なる2件（高松築港発・富山駅前発）とも、共有されたリストに表示されました'
+      : `❌ 混在リストの表示に失敗しました（本文: "${bodyText.replace(/\s+/g, ' ').trim().slice(0, 200)}"）`
+  );
+
+  if (errors.length > 0) {
+    console.log('⚠️  ページ実行中に発生したエラー:');
+    errors.forEach((e) => console.log('  - ' + e));
+  }
+
+  window.close();
+  return bothShown && errors.length === 0;
+}
+
 async function main() {
   if (!fs.existsSync(distIndexPath)) {
     console.error('dist/index.html が見つかりません。先に npm run bundle を実行してください');
@@ -1316,11 +1762,18 @@ async function main() {
   const partialBandMessageOk = await checkPartialBandMessage(html, '魚津駅前');
   const partialBandMessageUozuEkiOk = await checkPartialBandMessage(html, '電鉄魚津駅前');
   const searchButtonStateOk = await checkSearchButtonState(html);
+  const favoritesStorageOk = await checkFavoritesStorage();
+  const favoriteCardToggleOk = await checkFavoriteCardToggle(html);
+  const sharedSpotBandBypassOk = await checkSharedSpotBandBypass(html);
+  const sharedSpotSidMismatchOk = await checkSharedSpotSidMismatch(html);
+  const sharedSpotAmbiguousNameOk = await checkSharedSpotAmbiguousName(html);
+  const sharedListMixedDepartureOk = await checkSharedListMixedDeparture(html);
 
   if (
     publishedOk && desktopOk && mobileOk && cardsOk && loadingStateOk && transferDisplayOk &&
     spotLevelBandingOk && departureMismatchOk && partialBandMessageOk && partialBandMessageUozuEkiOk &&
-    searchButtonStateOk
+    searchButtonStateOk && favoritesStorageOk && favoriteCardToggleOk && sharedSpotBandBypassOk &&
+    sharedSpotSidMismatchOk && sharedSpotAmbiguousNameOk && sharedListMixedDepartureOk
   ) {
     console.log('\n✅ 検証成功: 初期表示・検索結果カードともに想定通りです');
   } else {
