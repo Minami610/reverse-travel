@@ -13,6 +13,7 @@
   <header>
     <h1>🚌 いけるとこまで旅行</h1>
     <p>予算を入れたら、行ける場所が出てくる。地方の知られていない景勝地を発見しよう！</p>
+    <button type="button" id="mylist-btn" aria-label="マイリストを開く">★ マイリスト <span id="mylist-count">0</span></button>
   </header>
 
   <div class="container">
@@ -205,6 +206,40 @@
       </p>
     </div>
   </div>
+
+  <!-- マイリスト（☆で保存した景勝地）。localStorageに保存し、開くたびに運賃を
+       再計算する（assets/js/main.jsのrenderMylist()参照）。 -->
+  <div id="mylist-modal" class="modal-overlay" hidden>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="mylist-modal-title">
+      <button type="button" id="mylist-modal-close" aria-label="閉じる">×</button>
+      <h2 id="mylist-modal-title">マイリスト</h2>
+      <div class="mylist-toolbar">
+        <label for="mylist-sort-select">並び替え：</label>
+        <select id="mylist-sort-select">
+          <option value="saved">保存した順</option>
+          <option value="price">安い順</option>
+          <option value="departure">出発地ごと</option>
+        </select>
+        <button type="button" id="mylist-share-all-btn">このリストを共有</button>
+      </div>
+      <div id="mylist-body"></div>
+    </div>
+  </div>
+
+  <!-- 共有リンク（?list=...）を開いたときに表示する、読み取り専用のリスト。
+       「マイリストに追加」で初めて自分のマイリスト（localStorage）に入る。 -->
+  <div id="shared-list-modal" class="modal-overlay" hidden>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="shared-list-modal-title">
+      <button type="button" id="shared-list-modal-close" aria-label="閉じる">×</button>
+      <h2 id="shared-list-modal-title">共有されたリスト</h2>
+      <button type="button" id="shared-list-add-btn">マイリストに追加</button>
+      <div id="shared-list-body"></div>
+    </div>
+  </div>
+
+  <!-- 共有結果（コピーしました等）の軽量な通知。showToast()がテキストを入れて
+       数秒後に自動で隠す。 -->
+  <div id="share-toast" class="share-toast" hidden role="status"></div>
 
   <!-- ES6モジュール：開発環境用 -->
   <script type="module" src="assets/js/main.js"></script>

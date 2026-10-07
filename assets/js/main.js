@@ -9,6 +9,11 @@ import { SpotFinder } from './spot-finder.js';
 import { RouteFormatter } from './route-formatter.js';
 import { MapView } from './map-view.js';
 import { LayoutController } from './layout-controller.js';
+import {
+  loadFavorites, isFavorite, toggleFavorite, removeFavorite, upsertFavorite,
+  buildSpotShareUrl, parseSpotShareParams, buildListShareUrl, parseListParam,
+  buildSpotShareText, shareOrCopy,
+} from './favorites.js';
 
 // 予算の帯の幅（¥）。表示するのは「予算−BAND_WIDTHより高く、予算以下」の場所だけ
 // （2026-10-06、Minamiさんの判断により「予算以下すべて」から変更）。
@@ -36,6 +41,7 @@ class ReverseTravel {
     this.cache = new Map(); // 検索結果のメモリキャッシュ（駅ID×予算）
     this.currentDepartureStationId = null;
     this.currentDepartureStationName = null;
+    this.currentDeparturePrefCode = null; // お気に入り保存・共有URL組み立てに使う（prefCodeそのものは検索結果に含まれないため別途保持）
     this.currentSpots = []; // 検索結果（おすすめ順、地図のピンもこの集合のまま）
     this.currentReachableCount = 0; // 帯内の到達駅数（デバッグ・将来利用のため保持。表示の分岐には使わない）
     this.currentBudget = null; // 帯の見出し・0件時のボタン計算に使う直近の検索予算
@@ -52,6 +58,8 @@ class ReverseTravel {
     // 区別するため。以前はthis.loader.stationIndexがまだnullというだけで
     // 「読み込みに失敗しました」を出してしまっていた）。
     this.stationIndexPromise = this.initStationIndex();
+    // 駅一覧のロード完了を待ってから、共有リンク（?spot=.../?list=...）を処理する。
+    this.stationIndexPromise.then(() => this.handleInitialUrl());
   }
 
   initUI() {
@@ -78,11 +86,36 @@ class ReverseTravel {
       howtoBtn: document.getElementById('howto-btn'),
       howtoModal: document.getElementById('howto-modal'),
       howtoModalClose: document.getElementById('howto-modal-close'),
+      mylistBtn: document.getElementById('mylist-btn'),
+      mylistCount: document.getElementById('mylist-count'),
+      mylistModal: document.getElementById('mylist-modal'),
+      mylistModalClose: document.getElementById('mylist-modal-close'),
+      mylistBody: document.getElementById('mylist-body'),
+      mylistSortSelect: document.getElementById('mylist-sort-select'),
+      mylistShareAllBtn: document.getElementById('mylist-share-all-btn'),
+      sharedListModal: document.getElementById('shared-list-modal'),
+      sharedListModalClose: document.getElementById('shared-list-modal-close'),
+      sharedListBody: document.getElementById('shared-list-body'),
+      sharedListAddBtn: document.getElementById('shared-list-add-btn'),
+      shareToast: document.getElementById('share-toast'),
     };
 
     this.initModal(this.elements.aboutBtn, this.elements.aboutModal, this.elements.aboutModalClose);
     this.initModal(this.elements.howtoBtn, this.elements.howtoModal, this.elements.howtoModalClose);
+    this.initModal(this.elements.mylistBtn, this.elements.mylistModal, this.elements.mylistModalClose, {
+      onOpen: () => this.renderMylist(),
+    });
+    this.initModal(null, this.elements.sharedListModal, this.elements.sharedListModalClose);
     this.renderDataSources();
+    this.updateMylistCount();
+
+    this.elements.mylistSortSelect?.addEventListener('change', () => this.renderMylist());
+
+    // マイリスト本体のクリック委譲（開く／削除／共有）
+    this.elements.mylistBody?.addEventListener('click', (e) => this.handleMylistClick(e));
+    this.elements.sharedListBody?.addEventListener('click', (e) => this.handleMylistClick(e));
+    this.elements.sharedListAddBtn?.addEventListener('click', () => this.addSharedListToMylist());
+    this.elements.mylistShareAllBtn?.addEventListener('click', () => this.shareAllFavorites());
 
     // 全国の軽量駅一覧（起動時に一度だけfetch）の読み込みが終わるまで、
     // 入力欄のプレースホルダーで読み込み中であることを伝える（入力自体は
@@ -169,6 +202,23 @@ class ReverseTravel {
         this.performSearch();
         return;
       }
+      // カード右上の☆（お気に入り）・共有ボタンは、カード全体のクリック
+      // （詳細画面へ遷移）より先に判定して処理を止める（巻き込み防止）。
+      const favBtn = e.target.closest('.favorite-btn');
+      if (favBtn) {
+        const spot = this.currentSpots.find((s) => s.id === favBtn.getAttribute('data-spot-id'));
+        if (spot) {
+          const saved = this.toggleFavoriteForSpot(spot);
+          this.showToast(saved ? 'マイリストに保存しました' : 'マイリストから削除しました');
+        }
+        return;
+      }
+      const shareBtn = e.target.closest('.share-btn');
+      if (shareBtn) {
+        const spot = this.currentSpots.find((s) => s.id === shareBtn.getAttribute('data-spot-id'));
+        if (spot) this.shareSpot(spot);
+        return;
+      }
       const card = e.target.closest('.spot-card');
       if (card) {
         this.openSpotDetailById(card.getAttribute('data-spot-id'));
@@ -189,21 +239,26 @@ class ReverseTravel {
   }
 
   /**
-   * フッターのボタンから開く軽量モーダル（出典・免責・問い合わせ／使い方）
-   * 共通の開閉ロジック。hidden属性で表示/非表示を切り替える
-   * （[hidden]{display:none!important}）。
+   * フッター・ヘッダーのボタンから開く軽量モーダル（出典・免責・問い合わせ／使い方／
+   * マイリスト／共有されたリスト）共通の開閉ロジック。hidden属性で表示/非表示を
+   * 切り替える（[hidden]{display:none!important}）。
+   * triggerBtnがnullの場合（共有されたリストのように、URLパラメータ経由でのみ
+   * 開くモーダル）は、openModal()を別途呼び出すためのclose/Escape処理だけ登録する。
+   * onOpenを渡すと、開くたびに呼ばれる（マイリストの内容を毎回最新化するため）。
    */
-  initModal(triggerBtn, modal, closeBtn) {
-    if (!triggerBtn || !modal) return;
+  initModal(triggerBtn, modal, closeBtn, { onOpen } = {}) {
+    if (!modal) return;
 
     const open = () => {
       modal.hidden = false;
+      onOpen?.();
     };
     const close = () => {
       modal.hidden = true;
     };
+    modal._open = open; // 他のメソッドからプログラム的に開くため
 
-    triggerBtn.addEventListener('click', open);
+    triggerBtn?.addEventListener('click', open);
     closeBtn?.addEventListener('click', close);
     // オーバーレイ背景クリックで閉じる（パネル内クリックは伝播で除外）
     modal.addEventListener('click', (e) => {
@@ -502,6 +557,102 @@ class ReverseTravel {
     this.elements.departureGuidance.hidden = true;
   }
 
+  // ========================================
+  // お気に入り（マイリスト）・共有
+  // ========================================
+
+  /** ヘッダーの「☆ マイリスト」件数バッジを更新する。0件でも表示する。 */
+  updateMylistCount() {
+    if (!this.elements.mylistCount) return;
+    this.elements.mylistCount.textContent = String(loadFavorites().length);
+  }
+
+  /**
+   * カード・詳細画面共通の☆トグル処理。スポットオブジェクト（source_*を持つ、
+   * 検索結果またはopenSharedSpotForStation()で解決した1件）から保存項目を組み立てる。
+   */
+  toggleFavoriteForSpot(spot) {
+    const entry = {
+      qid: spot.id,
+      name: spot.name,
+      prefCode: String(this.currentDeparturePrefCode || ''),
+      departureStationId: this.currentDepartureStationId || '',
+      departureName: this.currentDepartureStationName || '',
+      roundTripFare: spot.source_round_trip_fare,
+      durationMin: typeof spot.source_ride_duration_min === 'number' ? spot.source_ride_duration_min : null,
+      savedAt: new Date().toISOString(),
+    };
+    const saved = toggleFavorite(entry);
+    this.updateMylistCount();
+    this.refreshFavoriteButtons();
+    return saved;
+  }
+
+  /**
+   * 画面上の☆ボタンの見た目（押下状態）を、localStorageの現在値に合わせて一括更新する。
+   * 詳細画面のボタン（.detail-favorite-btn）はアイコン＋文言（「★ マイリストに保存/
+   * から削除」）を表示するため、ここでテキストも更新する。カード側はaria-labelのみ
+   * （見た目は★アイコンの色だけで表す）。
+   */
+  refreshFavoriteButtons() {
+    document.querySelectorAll('.favorite-btn').forEach((btn) => {
+      const qid = btn.getAttribute('data-spot-id');
+      const active = isFavorite(qid);
+      btn.classList.toggle('favorite-btn-active', active);
+      btn.setAttribute('aria-pressed', String(active));
+      const label = active ? 'マイリストから削除' : 'マイリストに保存';
+      if (btn.classList.contains('detail-favorite-btn')) {
+        btn.textContent = `★ ${label}`;
+      } else {
+        btn.setAttribute('aria-label', label);
+      }
+    });
+  }
+
+  /** 景勝地1件を共有する（navigator.shareかクリップボードコピー、結果をトーストで知らせる） */
+  async shareSpot(spot) {
+    if (!this.currentDeparturePrefCode || !this.currentDepartureStationId) return;
+    const url = buildSpotShareUrl(location.href, {
+      qid: spot.id,
+      prefCode: this.currentDeparturePrefCode,
+      stationId: this.currentDepartureStationId,
+      departureName: this.currentDepartureStationName,
+    });
+    const text = buildSpotShareText(
+      spot.name,
+      this.currentDepartureStationName,
+      spot.source_round_trip_fare,
+      typeof spot.source_ride_duration_min === 'number' ? spot.source_ride_duration_min : null,
+      url
+    );
+    const result = await shareOrCopy(text, url);
+    if (result === 'copied') this.showToast('コピーしました');
+    else if (result === 'failed') this.showToast('共有できませんでした');
+  }
+
+  /** マイリストの内容を1本のURLで共有する（先頭20件まで。超過分は含めない）。 */
+  async shareAllFavorites() {
+    const favorites = loadFavorites();
+    if (favorites.length === 0) return;
+    const items = favorites.map((f) => ({ qid: f.qid, prefCode: f.prefCode, stationId: f.departureStationId }));
+    const url = buildListShareUrl(location.href, items);
+    const text = `マイリスト（${Math.min(favorites.length, 20)}件）／${url}`;
+    const result = await shareOrCopy(text, url);
+    if (result === 'copied') this.showToast('コピーしました');
+    else if (result === 'failed') this.showToast('共有できませんでした');
+  }
+
+  showToast(message) {
+    const toast = this.elements.shareToast;
+    if (!toast) return;
+    toast.textContent = message;
+    toast.hidden = false;
+    clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(() => {
+      toast.hidden = true;
+    }, 2500);
+  }
+
   /**
    * 検索実行中（県データのfetch待ち）に結果欄へ出す一時メッセージ。
    * displayResults()と同じ表示切り替え（data-view/has-results）を使い、
@@ -587,51 +738,62 @@ class ReverseTravel {
       return;
     }
 
-    // キャッシュチェック（メモリ上のMapのみ。ページを離れると消える軽量キャッシュで足りる）
-    const cacheKey = `route_${stationId}_${budget}`;
-    if (this.cache.has(cacheKey)) {
-      const cached = this.cache.get(cacheKey);
-      this.displayResults(cached.spots, stationId, cached.reachableCount, budget, cached.hasCheaperSpots);
-      return;
-    }
-
     try {
-      // 到達可能な駅を計算（予算以下すべて）。
-      const reachableStations = await this.fareCalc.calculateReachable(stationId, budget);
-      console.log('到達可能駅:', reachableStations);
-
-      // 【2026-10-07修正】帯の判定は「駅単位」ではなく「スポット単位」で行う。
-      // 以前は駅を先に帯（予算−¥200より高く、予算以下）で絞り込んでから
-      // spotFinder.findSpots()に渡していたが、同じスポットが複数の到達駅の
-      // 圏内にある場合、検索した予算によって「どちらの駅経由と判定されるか」が
-      // 変わり、同じスポットが往復¥400の帯にも往復¥1000の帯にも別々の運賃で
-      // 出てしまう不具合があった（TOYAMAキラリ等でMinamiさんが公開ページで発見）。
-      // 正しい手順は「予算以下で行ける駅をすべてspotFinderに渡し、スポットごとに
-      // 一番安い往復運賃を決めてから、その運賃で帯判定する」こと
-      // （spotFinder.findSpots()側の優劣判定もこれに合わせて運賃優先に変更済み）。
-      const allSpots = await this.spotFinder.findSpots(reachableStations);
-      console.log('発見スポット（予算以下すべて、各スポットの最安運賃を採用）:', allSpots);
-
-      const bandSpots = allSpots.filter((s) => s.source_round_trip_fare > budget - BAND_WIDTH);
-      console.log(`帯（¥${budget - BAND_WIDTH + 1}〜¥${budget}）内のスポット:`, bandSpots);
-
-      // 【2026-10-07追加】帯が0件のときの案内文を出し分けるため、「予算以下には
-      // 何かあるが、この帯には無い」のか「予算以下に何も無い」のかを覚えておく
-      // （buildNoResultsMessage()参照）。
-      const hasCheaperSpots = allSpots.length > bandSpots.length;
-
-      // キャッシュ保存（デバッグ用に帯の中の到達駅数相当の値も保持する）
-      this.cache.set(cacheKey, { spots: bandSpots, reachableCount: reachableStations.length, hasCheaperSpots });
-
-      this.displayResults(bandSpots, stationId, reachableStations.length, budget, hasCheaperSpots);
+      const result = await this.computeSearchResult(stationId, budget);
+      this.displayResults(result.bandSpots, stationId, prefCode, result.reachableCount, budget, result.hasCheaperSpots);
     } catch (error) {
       console.error('検索失敗:', error);
       alert('検索中にエラーが発生しました');
     }
   }
 
-  displayResults(spots, departureStationId, reachableCount, budget, hasCheaperSpots) {
+  /**
+   * 指定した出発駅・予算で、到達可能駅・全スポット（帯フィルタ前）・帯内スポットを
+   * 計算する。performSearch()と、共有リンク・マイリストから詳細を開く処理
+   * （openSharedSpotForStation）の両方から呼ぶ共通ロジック（2026-10-08、1本目の
+   * お気に入り機能で抽出）。
+   * メモリキャッシュ（this.cache）も扱う。以前はperformSearch()内で帯内スポットだけ
+   * キャッシュしていたが、共有リンクを開く処理は「帯で絞る前の全スポット」
+   * （allSpots）も必要なため、両方キャッシュする形に変えた。
+   */
+  async computeSearchResult(stationId, budget) {
+    const cacheKey = `route_${stationId}_${budget}`;
+    if (this.cache.has(cacheKey)) {
+      return this.cache.get(cacheKey);
+    }
+
+    // 到達可能な駅を計算（予算以下すべて）。
+    const reachableStations = await this.fareCalc.calculateReachable(stationId, budget);
+    console.log('到達可能駅:', reachableStations);
+
+    // 【2026-10-07修正】帯の判定は「駅単位」ではなく「スポット単位」で行う。
+    // 以前は駅を先に帯（予算−¥200より高く、予算以下）で絞り込んでから
+    // spotFinder.findSpots()に渡していたが、同じスポットが複数の到達駅の
+    // 圏内にある場合、検索した予算によって「どちらの駅経由と判定されるか」が
+    // 変わり、同じスポットが往復¥400の帯にも往復¥1000の帯にも別々の運賃で
+    // 出てしまう不具合があった（TOYAMAキラリ等でMinamiさんが公開ページで発見）。
+    // 正しい手順は「予算以下で行ける駅をすべてspotFinderに渡し、スポットごとに
+    // 一番安い往復運賃を決めてから、その運賃で帯判定する」こと
+    // （spotFinder.findSpots()側の優劣判定もこれに合わせて運賃優先に変更済み）。
+    const allSpots = await this.spotFinder.findSpots(reachableStations);
+    console.log('発見スポット（予算以下すべて、各スポットの最安運賃を採用）:', allSpots);
+
+    const bandSpots = allSpots.filter((s) => s.source_round_trip_fare > budget - BAND_WIDTH);
+    console.log(`帯（¥${budget - BAND_WIDTH + 1}〜¥${budget}）内のスポット:`, bandSpots);
+
+    // 【2026-10-07追加】帯が0件のときの案内文を出し分けるため、「予算以下には
+    // 何かあるが、この帯には無い」のか「予算以下に何も無い」のかを覚えておく
+    // （buildNoResultsMessage()参照）。
+    const hasCheaperSpots = allSpots.length > bandSpots.length;
+
+    const result = { allSpots, bandSpots, reachableCount: reachableStations.length, hasCheaperSpots };
+    this.cache.set(cacheKey, result);
+    return result;
+  }
+
+  displayResults(spots, departureStationId, prefCode, reachableCount, budget, hasCheaperSpots) {
     this.currentDepartureStationId = departureStationId;
+    this.currentDeparturePrefCode = prefCode ? String(prefCode).padStart(2, '0') : null;
     this.currentDepartureStationName = this.data.stations?.[departureStationId]?.display_name || departureStationId;
     this.currentSpots = spots;
     this.currentReachableCount = reachableCount;
@@ -657,6 +819,360 @@ class ReverseTravel {
     this.mapView.render(departureStation, spots);
 
     this.renderResultsList();
+  }
+
+  // ========================================
+  // 共有リンク（?spot=.../?list=...）
+  // ========================================
+
+  /**
+   * ページ読み込み時にURLパラメータを読み、共有リンクであれば該当画面を開く。
+   * 駅一覧（stationIndexPromise）の解決後に呼ばれる。不正なパラメータ・
+   * 届かない・駅が解決できない場合は、エラー文言を出さず何もしない
+   * （＝通常のトップ画面のまま）。
+   */
+  async handleInitialUrl() {
+    if (this.dataLoadFailed) return;
+    const params = new URLSearchParams(location.search);
+
+    const listParam = params.get('list');
+    if (listParam) {
+      await this.openSharedList(parseListParam(listParam));
+      return;
+    }
+
+    const spotParams = parseSpotShareParams(params);
+    if (spotParams) {
+      await this.openSharedSpotLink(spotParams);
+    }
+  }
+
+  /**
+   * 共有URLの県コード・station_id・駅名から、実際のstation_idを解決する。
+   * 1. sidがその県のstations.jsonに実在し、表示名がdepと一致 → 採用
+   * 2. ダメならdepの完全一致を、その県内のstation-index.jsonエントリだけで探し、
+   *    1件だけならそれを採用（station_idが再ビルドで変わっていても駅名が同じなら
+   *    復元できるようにするため。stations.jsonは出発県＋隣接県が合併済みのため、
+   *    単純な名前検索だと隣接県の同名駅と衝突しうる。station-index.jsonは
+   *    県コードを持つため、ここで絞り込める）
+   * どちらも失敗したらnullを返す。
+   */
+  resolveStationFromShareParams(prefCode, sid, depName) {
+    const codeStr = String(prefCode).padStart(2, '0');
+    if (sid && this.data.stations?.[sid]?.display_name === depName) {
+      return sid;
+    }
+    if (depName && this.loader.stationIndex) {
+      const matches = this.loader.stationIndex.filter(
+        ([name, pc]) => name === depName && String(pc).padStart(2, '0') === codeStr
+      );
+      if (matches.length === 1) {
+        return this.loader.resolveStationId(codeStr, matches[0][2]);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 共有リンク・マイリストから景勝地の詳細を直接開く（Minamiさんの判断：帯では
+   * 絞らず、出発駅から上限¥2000で届くスポットの中からQIDで探す。帯で切ると、
+   * 共有されたスポットがちょうどその帯の外のとき開けなくなるため）。
+   * 見つかったら、予算欄をそのスポットの往復運賃が収まる帯の上端
+   * （¥100刻みで切り上げ）に合わせ、その条件で一覧も作っておく
+   * （「← 一覧に戻る」で、このスポットを含む一覧に戻れるようにするため）。
+   * @returns {boolean} 開けたか
+   */
+  async openSharedSpotForStation(qid, stationId, prefCode) {
+    try {
+      const { allSpots } = await this.computeSearchResult(stationId, MAX_BUDGET);
+      const spot = allSpots.find((s) => s.id === qid);
+      if (!spot) return false;
+
+      const alignedBudget = Math.min(
+        MAX_BUDGET,
+        Math.max(MIN_BUDGET, Math.ceil(spot.source_round_trip_fare / BUDGET_STEP) * BUDGET_STEP)
+      );
+      const { bandSpots, reachableCount, hasCheaperSpots } = await this.computeSearchResult(stationId, alignedBudget);
+      // bandSpots側の同一QIDのオブジェクトを使う（this.currentSpots＝displayResults()が
+      // 設定する集合と、詳細画面に渡すオブジェクトの参照を一致させるため）。
+      // 内容自体はallSpots側と同じになるはずだが、念のためbandSpotsに無ければ
+      // allSpots側のspotにフォールバックする。
+      const spotForDetail = bandSpots.find((s) => s.id === qid) || spot;
+
+      this.elements.budgetInput.value = alignedBudget;
+      this.updateBudgetUI();
+      this.lastSearchedDepartureText = this.data.stations?.[stationId]?.display_name || '';
+      this.elements.departureInput.value = this.lastSearchedDepartureText;
+      this.lastSearchedBudget = alignedBudget;
+      this.updateSearchButtonState();
+
+      this.displayResults(bandSpots, stationId, prefCode, reachableCount, alignedBudget, hasCheaperSpots);
+      this.showSpotDetail(spotForDetail);
+      return true;
+    } catch (error) {
+      console.error('共有リンクの表示に失敗:', error);
+      return false;
+    }
+  }
+
+  /** 景勝地1件の共有リンク（?spot=...）を開く */
+  async openSharedSpotLink({ qid, prefCode, stationId, departureName }) {
+    try {
+      await this.loadPrefecturesForDeparture(prefCode);
+    } catch (error) {
+      console.error('共有リンクの県データ読み込みに失敗:', error);
+      return;
+    }
+    const resolvedStationId = this.resolveStationFromShareParams(prefCode, stationId, departureName);
+    if (!resolvedStationId) return;
+    await this.openSharedSpotForStation(qid, resolvedStationId, prefCode);
+  }
+
+  /**
+   * リストの共有（?list=...）を開く。各項目は出発地が別々のことがあるため、
+   * 読み取り専用の「共有されたリスト」モーダルに表示する（ローカル保存＝マイリストへの
+   * 追加はボタンで明示的に行う）。
+   * 【実装メモ】resolveListItemDisplay()がloadPrefecturesForDeparture()経由で
+   * this.data/this.fareCalc等を書き換える（GTFSLoaderの累積ロードの仕組み上、
+   * 複数県を跨いでも既存データは消えず合算されるため、表示用の情報解決自体は
+   * 正しく動く）。ページ読み込み時（まだ検索していない状態）にしか呼ばれない
+   * 前提のため実害はないが、将来「検索結果を見ながら共有リストを開く」導線を
+   * 足す場合は、この副作用に注意すること。
+   */
+  async openSharedList(items) {
+    if (items.length === 0) return;
+    this._sharedListItems = items;
+    this.elements.sharedListModal?._open?.();
+    await this.renderSharedList(items);
+  }
+
+  /**
+   * リスト項目それぞれについて、その県＋隣接県のデータをロードし（累積ロードのため
+   * 他項目の県を読み込んでも既存データは消えない）、現在の検索状態
+   * （this.data/this.fareCalc等）を使って表示用の情報（名前・運賃・所要時間・
+   * 出発駅名）を解決する。station_idが解決できない場合は、スポット辞書
+   * （this.data.spots）からスポット名だけ拾って表示する。
+   */
+  async resolveListItemDisplay(item) {
+    try {
+      await this.loadPrefecturesForDeparture(item.prefCode);
+    } catch {
+      return { ...item, resolved: false, name: null };
+    }
+    const spotDict = this.data.spots?.[item.qid];
+    const station = this.data.stations?.[item.stationId];
+    if (!station) {
+      return { ...item, resolved: false, name: spotDict?.name || null };
+    }
+    try {
+      const { allSpots } = await this.computeSearchResult(item.stationId, MAX_BUDGET);
+      const spot = allSpots.find((s) => s.id === item.qid);
+      if (!spot) return { ...item, resolved: false, name: spotDict?.name || null };
+      return {
+        ...item,
+        resolved: true,
+        name: spot.name,
+        departureName: station.display_name,
+        roundTripFare: spot.source_round_trip_fare,
+        durationMin: typeof spot.source_ride_duration_min === 'number' ? spot.source_ride_duration_min : null,
+      };
+    } catch {
+      return { ...item, resolved: false, name: spotDict?.name || null };
+    }
+  }
+
+  /** 「共有されたリスト」モーダルの中身を描画する（読み取り専用）。 */
+  async renderSharedList(items) {
+    const body = this.elements.sharedListBody;
+    if (!body) return;
+    body.innerHTML = '<p class="loading">読み込んでいます…</p>';
+    const resolved = await Promise.all(items.map((it) => this.resolveListItemDisplay(it)));
+    this._sharedListResolved = resolved;
+    body.innerHTML = resolved.map((item, i) => this.renderMylistRowHtml(item, i, { shared: true })).join('')
+      || '<p class="no-results">表示できる項目がありませんでした。</p>';
+  }
+
+  /** 「共有されたリスト」の解決できた項目を、すべてマイリストに追加する（既存なら内容を更新） */
+  addSharedListToMylist() {
+    const resolved = this._sharedListResolved || [];
+    let addedCount = 0;
+    for (const item of resolved) {
+      if (!item.resolved) continue;
+      upsertFavorite({
+        qid: item.qid,
+        name: item.name,
+        prefCode: String(item.prefCode).padStart(2, '0'),
+        departureStationId: item.stationId,
+        departureName: item.departureName,
+        roundTripFare: item.roundTripFare,
+        durationMin: item.durationMin,
+        savedAt: new Date().toISOString(),
+      });
+      addedCount++;
+    }
+    this.updateMylistCount();
+    this.refreshFavoriteButtons();
+    this.showToast(`マイリストに${addedCount}件追加しました`);
+  }
+
+  /**
+   * マイリスト（保存済みのお気に入り）モーダルの中身を描画する。開くたびに
+   * 呼ばれ、保存済みの各項目について運賃を再計算し、保存時と違えば
+   * 「運賃が変わりました」を出す。今は検索結果に出ない（到達不可・スポットが
+   * 見つからない）場所は「この場所は現在検索結果に出ません。」を出し、削除できるようにする。
+   */
+  async renderMylist() {
+    const body = this.elements.mylistBody;
+    if (!body) return;
+    const favorites = loadFavorites();
+    if (favorites.length === 0) {
+      body.innerHTML = '<p class="no-results">まだ何も保存されていません。</p>';
+      return;
+    }
+    body.innerHTML = '<p class="loading">読み込んでいます…</p>';
+
+    const recomputed = await Promise.all(
+      favorites.map(async (fav) => {
+        try {
+          await this.loadPrefecturesForDeparture(fav.prefCode);
+        } catch {
+          return { ...fav, resolved: false, fareChanged: false };
+        }
+        const station = this.data.stations?.[fav.departureStationId];
+        if (!station) {
+          return { ...fav, resolved: false, fareChanged: false };
+        }
+        try {
+          const { allSpots } = await this.computeSearchResult(fav.departureStationId, MAX_BUDGET);
+          const spot = allSpots.find((s) => s.id === fav.qid);
+          if (!spot) return { ...fav, resolved: false, fareChanged: false };
+          const fareChanged = spot.source_round_trip_fare !== fav.roundTripFare;
+          return {
+            ...fav,
+            resolved: true,
+            currentFare: spot.source_round_trip_fare,
+            fareChanged,
+          };
+        } catch {
+          return { ...fav, resolved: false, fareChanged: false };
+        }
+      })
+    );
+
+    const sortOrder = this.elements.mylistSortSelect?.value || 'saved';
+    const sorted = this.sortMylistItems(recomputed, sortOrder);
+    // handleMylistClick()が同じ配列をインデックスで引けるよう保持しておく
+    // （クリックのたびに再計算すると、表示とクリック時で運賃が食い違いうる上に無駄が多い）。
+    this._mylistResolved = sorted;
+
+    body.innerHTML = sorted.map((item, i) => this.renderMylistRowHtml(item, i, { shared: false })).join('');
+  }
+
+  sortMylistItems(items, sortOrder) {
+    const list = [...items];
+    switch (sortOrder) {
+      case 'price':
+        return list.sort((a, b) => (a.currentFare ?? a.roundTripFare) - (b.currentFare ?? b.roundTripFare));
+      case 'departure':
+        return list.sort((a, b) => (a.departureName || '').localeCompare(b.departureName || '', 'ja'));
+      case 'saved':
+      default:
+        return list.sort((a, b) => new Date(b.savedAt) - new Date(a.savedAt));
+    }
+  }
+
+  /** マイリスト／共有されたリストの1行分のHTMLを組み立てる */
+  renderMylistRowHtml(item, index, { shared }) {
+    const savedDate = item.savedAt ? new Date(item.savedAt) : null;
+    const savedLabel = savedDate && !Number.isNaN(savedDate.getTime())
+      ? `${savedDate.getMonth() + 1}/${savedDate.getDate()}に保存`
+      : '';
+
+    if (shared && !item.resolved && !item.name) {
+      return `
+        <div class="mylist-row mylist-row-unresolved" data-index="${index}">
+          <p class="mylist-row-name">この場所は表示できませんでした</p>
+        </div>
+      `;
+    }
+
+    const name = item.name || '（名称不明）';
+    const fareToShow = item.currentFare ?? item.roundTripFare;
+    const fareChangedHtml = item.fareChanged
+      ? `<p class="mylist-fare-changed">運賃が変わりました（¥${item.roundTripFare}→¥${item.currentFare}）</p>`
+      : '';
+    const unresolvedHtml = !shared && !item.resolved
+      ? '<p class="mylist-unresolved">この場所は現在検索結果に出ません。</p>'
+      : '';
+    const departureLine = item.departureName
+      ? `<p class="mylist-row-summary">${item.departureName}から 往復¥${fareToShow}${typeof item.durationMin === 'number' ? `・約${item.durationMin}分` : ''}</p>`
+      : '';
+
+    const actionsHtml = shared
+      ? ''
+      : `
+        <button type="button" class="mylist-share-btn" data-action="mylist-share" data-index="${index}" aria-label="共有">⇧</button>
+        <button type="button" class="mylist-remove-btn" data-action="mylist-remove" data-index="${index}" aria-label="マイリストから削除">×</button>
+      `;
+
+    return `
+      <div class="mylist-row" data-index="${index}" data-qid="${item.qid}">
+        <button type="button" class="mylist-row-open" data-action="mylist-open" data-index="${index}">
+          <p class="mylist-row-name">${name}</p>
+          ${departureLine}
+          ${fareChangedHtml}
+          ${unresolvedHtml}
+          ${savedLabel ? `<p class="mylist-saved-at">${savedLabel}</p>` : ''}
+        </button>
+        <div class="mylist-row-actions">${actionsHtml}</div>
+      </div>
+    `;
+  }
+
+  /**
+   * マイリスト／共有されたリストの行クリックを委譲処理する（開く／削除／共有）。
+   * renderMylist()・renderSharedList()がそれぞれ描画時に保持した解決済み配列
+   * （this._mylistResolved / this._sharedListResolved）をインデックスで引く
+   * （クリックのたびに運賃を再計算し直すと、表示とクリック時で値が食い違いうる上に
+   * 二重に通信が走るため、描画結果をそのまま使う）。
+   */
+  async handleMylistClick(e) {
+    const removeBtn = e.target.closest('[data-action="mylist-remove"]');
+    const shareBtn = e.target.closest('[data-action="mylist-share"]');
+    const openBtn = e.target.closest('[data-action="mylist-open"]');
+    if (!removeBtn && !shareBtn && !openBtn) return;
+
+    const row = e.target.closest('.mylist-row');
+    const index = parseInt(row?.getAttribute('data-index'), 10);
+    const isShared = row?.closest('#shared-list-body') != null;
+    const items = isShared ? this._sharedListResolved : this._mylistResolved;
+    const item = items?.[index];
+    if (!item) return;
+
+    if (removeBtn) {
+      removeFavorite(item.qid);
+      this.updateMylistCount();
+      this.refreshFavoriteButtons();
+      this.renderMylist();
+      return;
+    }
+    if (shareBtn) {
+      const url = buildSpotShareUrl(location.href, {
+        qid: item.qid, prefCode: item.prefCode, stationId: item.departureStationId, departureName: item.departureName,
+      });
+      const text = buildSpotShareText(item.name, item.departureName, item.currentFare ?? item.roundTripFare, item.durationMin, url);
+      const result = await shareOrCopy(text, url);
+      if (result === 'copied') this.showToast('コピーしました');
+      else if (result === 'failed') this.showToast('共有できませんでした');
+      return;
+    }
+    if (openBtn) {
+      if (!item.resolved) return;
+      const stationId = isShared ? item.stationId : item.departureStationId;
+      this.elements.mylistModal.hidden = true;
+      this.elements.sharedListModal.hidden = true;
+      await this.openSharedSpotForStation(item.qid, stationId, item.prefCode);
+    }
   }
 
   /**
@@ -687,11 +1203,8 @@ class ReverseTravel {
    * 帯判定はスポット単位（各スポットの最安往復運賃）で行う（performSearch()と同じ規則）。
    */
   async hasBandResults(budget) {
-    const reachable = await this.fareCalc.calculateReachable(this.currentDepartureStationId, budget);
-    if (reachable.length === 0) return false;
-    const spots = await this.spotFinder.findSpots(reachable);
-    const band = spots.filter((s) => s.source_round_trip_fare > budget - BAND_WIDTH);
-    return band.length > 0;
+    const { bandSpots } = await this.computeSearchResult(this.currentDepartureStationId, budget);
+    return bandSpots.length > 0;
   }
 
   /**
@@ -779,8 +1292,14 @@ class ReverseTravel {
     const spots = this.getSortedSpots();
 
     const html = spots
-      .map(spot => `
+      .map(spot => {
+        const fav = isFavorite(spot.id);
+        return `
         <div class="spot-card" data-spot-id="${spot.id}">
+          <div class="spot-card-actions">
+            <button type="button" class="favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}" aria-label="${fav ? 'マイリストから削除' : 'マイリストに保存'}">★</button>
+            <button type="button" class="share-btn" data-spot-id="${spot.id}" aria-label="共有">⇧</button>
+          </div>
           ${spot.image
             ? `<img src="${spot.image}" alt="${spot.name}" class="spot-image">`
             : `<div class="spot-image spot-image-placeholder" aria-hidden="true">🏞️</div>`}
@@ -789,7 +1308,8 @@ class ReverseTravel {
           <p class="spot-summary">${this.formatSpotSummary(spot)}</p>
           <button class="detail-btn" data-spot-id="${spot.id}">詳細を見る</button>
         </div>
-      `)
+      `;
+      })
       .join('');
 
     this.elements.resultsList.innerHTML = html;
@@ -881,12 +1401,18 @@ class ReverseTravel {
   }
 
   showSpotDetail(spot) {
+    this._currentDetailSpot = spot; // 詳細画面の☆・共有ボタンから参照する
     const routeInfoHtml = this.routeFormatter && this.currentDepartureStationId
       ? this.routeFormatter.format(this.currentDepartureStationId, spot)
       : '';
+    const fav = isFavorite(spot.id);
 
     const html = `
       <h2>${spot.name}</h2>
+      <div class="detail-actions">
+        <button type="button" class="favorite-btn detail-favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}">★ ${fav ? 'マイリストから削除' : 'マイリストに保存'}</button>
+        <button type="button" class="share-btn detail-share-btn" data-spot-id="${spot.id}">⇧ 共有</button>
+      </div>
       ${spot.image
         ? `<img src="${spot.image}" alt="${spot.name}" class="detail-image">`
         : `<div class="detail-image spot-image-placeholder" aria-hidden="true">🏞️</div>`}
@@ -900,6 +1426,16 @@ class ReverseTravel {
 
     this.elements.detailContent.innerHTML = html;
     this.elements.appLayout.setAttribute('data-view', 'detail');
+
+    this.elements.detailContent.querySelector('.detail-favorite-btn')?.addEventListener('click', () => {
+      // toggleFavoriteForSpot()内でrefreshFavoriteButtons()が呼ばれ、
+      // このボタン自体の見た目（押下状態・文言）も更新される。
+      const saved = this.toggleFavoriteForSpot(spot);
+      this.showToast(saved ? 'マイリストに保存しました' : 'マイリストから削除しました');
+    });
+    this.elements.detailContent.querySelector('.detail-share-btn')?.addEventListener('click', () => {
+      this.shareSpot(spot);
+    });
   }
 }
 
