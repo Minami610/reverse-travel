@@ -2023,12 +2023,21 @@ function mergeIndexedSpotRegions(regions) {
   for (const region of regions) {
     const { spotsIndex, spots: spotDetails, stations } = region;
     for (const stopId of Object.keys(stations)) {
-      spotsByStation[stopId] = stations[stopId].map(([index, distance]) => {
+      // 【2026-10-07】座標を複数持つ項目（川等）では、停留所ごとに「一番近い座標」が
+      // spots[]の代表点と異なることがあり、その場合だけ配列が
+      // [index, distance, latitude, longitude] の4要素になっている
+      // （generate-spots-by-region.jsのbuildIndexedSpotsOutput参照）。
+      spotsByStation[stopId] = stations[stopId].map(([index, distance, latitude, longitude]) => {
         const qid = spotsIndex[index];
         if (spots[qid] === undefined) {
           spots[qid] = spotDetails[index];
         }
-        return { qid, distance };
+        const ref = { qid, distance };
+        if (latitude !== undefined) {
+          ref.latitude = latitude;
+          ref.longitude = longitude;
+        }
+        return ref;
       });
     }
   }
@@ -2704,6 +2713,12 @@ class SpotFinder {
           const candidate = {
             ...detail,
             id: qid,
+            // 【2026-10-07】座標を複数持つ項目（川等）では、この停留所にとっての
+            // 「一番近い座標」がref側に入っている場合はそれを使う（カードの距離・
+            // 地図のピンを、実際にこの停留所から見て近い位置にするため）。
+            // 無ければdetail（spots[]の代表点）のまま。
+            latitude: ref.latitude ?? detail.latitude,
+            longitude: ref.longitude ?? detail.longitude,
             distance: ref.distance,
             source_station: station.display_name,
             source_station_id: station.station_id,

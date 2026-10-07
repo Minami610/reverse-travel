@@ -84,6 +84,12 @@ export class SpotFinder {
           const candidate = {
             ...detail,
             id: qid,
+            // 【2026-10-07】座標を複数持つ項目（川等）では、この停留所にとっての
+            // 「一番近い座標」がref側に入っている場合はそれを使う（カードの距離・
+            // 地図のピンを、実際にこの停留所から見て近い位置にするため）。
+            // 無ければdetail（spots[]の代表点）のまま。
+            latitude: ref.latitude ?? detail.latitude,
+            longitude: ref.longitude ?? detail.longitude,
             distance: ref.distance,
             source_station: station.display_name,
             source_station_id: station.station_id,

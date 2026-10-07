@@ -429,20 +429,46 @@ function qidFromUri(uri) {
 }
 
 /**
- * GROUP_CONCATで集約された座標候補（複数ありうる）から、決定的に1件を選ぶ。
- * 緯度→経度の昇順でソートし先頭を採用する。順序規則そのものに意味はないが、
- * 同じ入力に対して常に同じ座標を選ぶことが目的（実測: 富山県で医王山が
- * 約1km離れた2座標を持ち、非決定的な選択だとビルドのたびに採用座標が変わっていた）。
+ * GROUP_CONCATで集約された座標候補（複数ありうる）を、重複を除いたうえで
+ * 緯度→経度の昇順に決定的な順序で並べて返す（順序規則そのものに意味はないが、
+ * 同じ入力に対して常に同じ順序を得ることが目的）。
+ *
+ * 【2026-10-07修正】以前は「1件だけ選ぶ」pickCoordinateDeterministic()だったが、
+ * これが実害のある誤りだった。常願寺川・小矢部川・黒部川（いずれも川。源流側と
+ * 河口側で2つのP625座標を持つ）が、ビルドによって検索結果から消えたり戻ったり
+ * する不具合をMinamiさんが公開ページで発見。原因を確認したところ：
+ * - WDQSのwikibase:box serviceは「bboxに入っている座標」だけを返すSERVICEのため、
+ *   bbox全体を1回のクエリで問い合わせたときは両座標が返るが、応答が遅く
+ *   4分割（以降再帰的に分割）されたときは、2つの座標が別々の分割領域に
+ *   振り分けられ、各分割クエリはそれぞれ自分の持つ1座標だけを返す
+ * - 分割結果をマージする際（splitAndMerge、Mapへの上書き）、同じQIDの項目は
+ *   「最後に処理された分割領域の1座標だけ」を持つ状態で上書きされる
+ * - どちらの座標が最終的に残るかは、分割が発生するかどうか（WDQSの応答時間、
+ *   実行ごとに揺れる）と、発生した場合の分割の深さに依存する＝実行ごとに違う
+ *   座標が選ばれうる
+ * - 選ばれた座標が「停留所から3km以内に何もない側」（例：川の源流側）だと、
+ *   buildStopSpotsFromRegionItems()がどの停留所にも紐づけられず、
+ *   その項目はspots-by-station.jsonから完全に消える
+ * 「1件だけ選ぶ」設計自体が誤りだったため、全座標を保持する方式に変更した
+ * （呼び出し側のbuildStopSpotsFromRegionItems()が、停留所ごとに全座標を見て
+ * 一番近いものを使う。CLAUDE.md「座標が複数ある項目は、すべての座標で駅との
+ * 距離を見る」参照）。
  */
-function pickCoordinateDeterministic(coordinateStrings) {
+function parseAllCoordinatesDeterministic(coordinateStrings) {
   const parsed = [];
+  const seen = new Set();
   for (const value of coordinateStrings) {
     const match = value.match(/Point\(([^ ]+) ([^ ]+)\)/);
-    if (match) parsed.push({ longitude: parseFloat(match[1]), latitude: parseFloat(match[2]) });
+    if (!match) continue;
+    const longitude = parseFloat(match[1]);
+    const latitude = parseFloat(match[2]);
+    const key = `${latitude},${longitude}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    parsed.push({ latitude, longitude });
   }
-  if (parsed.length === 0) return { latitude: null, longitude: null };
   parsed.sort((a, b) => a.latitude - b.latitude || a.longitude - b.longitude);
-  return parsed[0];
+  return parsed;
 }
 
 /**
@@ -462,7 +488,7 @@ function parseBoxResultItems(bindings) {
   const items = [];
   for (const binding of bindings) {
     const qid = qidFromUri(binding.item.value);
-    const { latitude, longitude } = pickCoordinateDeterministic(splitConcat(binding.coordinates?.value));
+    const coordinates = parseAllCoordinatesDeterministic(splitConcat(binding.coordinates?.value));
     const image = pickImageDeterministic(splitConcat(binding.images?.value));
     const articles = splitConcat(binding.articles?.value).sort();
     const instanceOfQids = splitConcat(binding.instanceOfs?.value).map(qidFromUri);
@@ -478,8 +504,12 @@ function parseBoxResultItems(bindings) {
       instanceOfQids,
       loc1Labels,
       loc2Labels: [], // resolveUnresolvedPrefecturesViaFollowUp() が後追いで埋める
-      latitude,
-      longitude,
+      // 【2026-10-07】複数の座標をすべて保持する（上のparseAllCoordinatesDeterministic参照）。
+      // latitude/longitudeは「代表点」（先頭=緯度最小）として一部の処理（bboxの範囲内判定の
+      // フォールバック等）のために残すが、駅との距離計算にはcoordinates全体を使うこと。
+      coordinates,
+      latitude: coordinates.length > 0 ? coordinates[0].latitude : null,
+      longitude: coordinates.length > 0 ? coordinates[0].longitude : null,
     });
   }
   return items;
@@ -811,16 +841,21 @@ export async function checkSuspiciousExclusions(bbox, label, keptCount) {
 /**
  * 上位階層で取得済みの（低速でも成功した）結果から、指定bboxに収まる項目だけを抜き出す。
  * 子範囲が最終的に失敗した際のフォールバックに使う（再クエリ不要でデータ欠損を防ぐ）。
+ * 【2026-10-07修正】座標を複数持つ項目（coordinates配列）は、どれか1つでもこのbboxに
+ * 入っていれば対象に含める（単一のlatitude/longitude代表点だけで判定すると、
+ * 代表点がこのbbox外にある場合に項目ごと取り落としてしまうため）。
  */
 function itemsWithinBbox(items, bbox) {
-  return items.filter(
-    (it) =>
-      it.latitude !== null &&
-      it.longitude !== null &&
-      it.longitude >= bbox.west &&
-      it.longitude <= bbox.east &&
-      it.latitude >= bbox.south &&
-      it.latitude <= bbox.north
+  return items.filter((it) =>
+    (it.coordinates && it.coordinates.length > 0 ? it.coordinates : [{ latitude: it.latitude, longitude: it.longitude }]).some(
+      (c) =>
+        c.latitude !== null &&
+        c.longitude !== null &&
+        c.longitude >= bbox.west &&
+        c.longitude <= bbox.east &&
+        c.latitude >= bbox.south &&
+        c.latitude <= bbox.north
+    )
   );
 }
 
@@ -880,6 +915,37 @@ export async function fetchRegionItemsAdaptive(bbox, options = {}) {
   return splitAndMerge(bbox, depth, label, failLog, fallbackItems);
 }
 
+/**
+ * 分割統合の際、同じQIDが複数の分割領域に跨って出現した場合に座標を正しく
+ * 合算する（重複排除・緯度→経度昇順で決定的に整列）。
+ *
+ * 【2026-10-07追加】座標を複数持つ項目（川等）は、分割された各領域の
+ * wikibase:box serviceが「その領域内にある座標だけ」を返すため、項目の
+ * 2座標が別々の領域に振り分けられると、各領域はそれぞれ自分の持つ1座標だけを
+ * 持った状態でこの項目を返す。従来はmerged.set()で単純に上書きしていたため、
+ * 最後に処理された領域の1座標だけが残り、もう一方の座標（＝停留所の近くに
+ * あったかもしれない方）を静かに失っていた（常願寺川等が消えた直接の原因）。
+ * ここで座標を合算することで、どの分割領域から来た結果でも全座標が残る。
+ */
+function mergeItemCoordinates(existing, incoming) {
+  const combined = [...(existing.coordinates || []), ...(incoming.coordinates || [])];
+  const seen = new Set();
+  const deduped = [];
+  for (const c of combined) {
+    const key = `${c.latitude},${c.longitude}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(c);
+  }
+  deduped.sort((a, b) => a.latitude - b.latitude || a.longitude - b.longitude);
+  return {
+    ...incoming,
+    coordinates: deduped,
+    latitude: deduped.length > 0 ? deduped[0].latitude : null,
+    longitude: deduped.length > 0 ? deduped[0].longitude : null,
+  };
+}
+
 async function splitAndMerge(bbox, depth, label, failLog, fallbackItems) {
   const quads = splitBboxInto4(bbox);
   const merged = new Map();
@@ -890,7 +956,10 @@ async function splitAndMerge(bbox, depth, label, failLog, fallbackItems) {
       fallbackItems,
       label: `${label}-${depth}-${i}`,
     });
-    for (const item of items) merged.set(item.id, item);
+    for (const item of items) {
+      const existing = merged.get(item.id);
+      merged.set(item.id, existing ? mergeItemCoordinates(existing, item) : item);
+    }
     if (i < quads.length - 1) await sleep(SIBLING_QUERY_INTERVAL_MS);
   }
   return { items: Array.from(merged.values()), failLog };
@@ -899,21 +968,36 @@ async function splitAndMerge(bbox, depth, label, failLog, fallbackItems) {
 /**
  * 地域一括取得した結果から、停留所ごとの近傍スポット一覧をローカルで組み立てる。
  * old方式（wikibase:around）の searchSpotsAroundStation と同じ出力形状を再現する。
+ *
+ * 【2026-10-07修正】座標を複数持つ項目（川の源流/河口等）は、停留所ごとに
+ * 全座標との距離を見て一番近いものを採用する（単一の代表点だけで判定すると、
+ * 代表点が停留所から遠い側に当たった場合、実際には別の座標の近くに停留所が
+ * あっても項目ごと紐づけを失ってしまうため）。採用した「一番近い座標」は
+ * この停留所からの参照にそのまま持たせる（カードの距離表示・地図のピンが、
+ * この停留所経由で見るときに正しい位置を指すようにするため）。
  */
 export function buildStopSpotsFromRegionItems(stops, regionItems, radiusKm) {
   const spotsByStation = {};
   for (const stop of stops) {
     const nearby = [];
     for (const item of regionItems) {
-      if (item.latitude === null || item.longitude === null) continue;
-      const distance = calculateDistance(
-        stop.stop_lat,
-        stop.stop_lon,
-        item.latitude,
-        item.longitude
-      );
-      if (distance <= radiusKm) {
-        nearby.push({ ...item, distance });
+      const coordinates = item.coordinates && item.coordinates.length > 0
+        ? item.coordinates
+        : (item.latitude !== null && item.longitude !== null ? [{ latitude: item.latitude, longitude: item.longitude }] : []);
+      if (coordinates.length === 0) continue;
+
+      let nearestDistance = Infinity;
+      let nearestCoord = null;
+      for (const coord of coordinates) {
+        const distance = calculateDistance(stop.stop_lat, stop.stop_lon, coord.latitude, coord.longitude);
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestCoord = coord;
+        }
+      }
+
+      if (nearestDistance <= radiusKm) {
+        nearby.push({ ...item, distance: nearestDistance, latitude: nearestCoord.latitude, longitude: nearestCoord.longitude });
       }
     }
     nearby.sort((a, b) => a.distance - b.distance);
@@ -958,6 +1042,12 @@ export async function generateSpotsForRegion(stops, options = {}) {
     console.log(`   → 個別除外リストにより${individualExclusionCount}件を除外`);
   }
   console.log(`   → 地域全体のユニークWikidata項目数: ${regionItems.length}件`);
+  // 【2026-10-07追加】座標を複数持つ項目（川の源流/河口等）の件数をログに出す。
+  // 以前は代表点1つだけを残していたため、分割クエリの境界で項目ごと消える事故が
+  // あった（CLAUDE.md参照）。今は全座標を保持して停留所ごとに一番近い座標を
+  // 選ぶため実害はないが、件数の推移を監視できるようにしておく。
+  const multiCoordCount = regionItems.filter((item) => (item.coordinates?.length || 0) >= 2).length;
+  console.log(`   → 座標が2つ以上ある項目: ${multiCoordCount}件`);
   if (failLog.length > 0) {
     console.warn(`   ⚠️  取得を諦めた範囲: ${failLog.length}件（要確認）`);
   }
@@ -1017,6 +1107,13 @@ export async function generateSpotsForRegion(stops, options = {}) {
  * （実測: 4,822.6KB → 1,551.4KB に圧縮、67.8%減）。
  * spotsIndex（QID配列）を県ごとに1つ持ち、spots/stationsはすべてその添字（整数）で参照する。
  * distanceは3桁（メートル精度）に丸める。
+ *
+ * 【2026-10-07追記】stationsの各エントリは、座標を複数持つ項目（川等）では
+ * 停留所ごとに「一番近い座標」が異なりうる（buildStopSpotsFromRegionItems参照）。
+ * 大多数（単一座標の項目）ではspots[]の代表点と一致するため、一致する場合は
+ * 従来どおり[index, distance]の2要素のまま、一致しない場合だけ
+ * [index, distance, latitude, longitude]の4要素にして個別の座標を持たせる
+ * （全件に座標を複製するとファイルサイズが増えるため、必要な場合だけ追加する）。
  */
 export function buildIndexedSpotsOutput(spotsByStation) {
   const spotsIndex = [];
@@ -1045,10 +1142,14 @@ export function buildIndexedSpotsOutput(spotsByStation) {
   const spots = spotsIndex.map((qid) => spotDetails.get(qid));
   const stations = {};
   for (const stopId of Object.keys(spotsByStation)) {
-    stations[stopId] = spotsByStation[stopId].map((spot) => [
-      qidToInt.get(spot.id),
-      Math.round(spot.distance * 1000) / 1000,
-    ]);
+    stations[stopId] = spotsByStation[stopId].map((spot) => {
+      const entry = [qidToInt.get(spot.id), Math.round(spot.distance * 1000) / 1000];
+      const globalCoord = spotDetails.get(spot.id);
+      if (spot.latitude !== globalCoord.latitude || spot.longitude !== globalCoord.longitude) {
+        entry.push(Math.round(spot.latitude * 1e6) / 1e6, Math.round(spot.longitude * 1e6) / 1e6);
+      }
+      return entry;
+    });
   }
 
   return { spotsIndex, spots, stations };

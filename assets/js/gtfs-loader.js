@@ -38,12 +38,21 @@ export function mergeIndexedSpotRegions(regions) {
   for (const region of regions) {
     const { spotsIndex, spots: spotDetails, stations } = region;
     for (const stopId of Object.keys(stations)) {
-      spotsByStation[stopId] = stations[stopId].map(([index, distance]) => {
+      // 【2026-10-07】座標を複数持つ項目（川等）では、停留所ごとに「一番近い座標」が
+      // spots[]の代表点と異なることがあり、その場合だけ配列が
+      // [index, distance, latitude, longitude] の4要素になっている
+      // （generate-spots-by-region.jsのbuildIndexedSpotsOutput参照）。
+      spotsByStation[stopId] = stations[stopId].map(([index, distance, latitude, longitude]) => {
         const qid = spotsIndex[index];
         if (spots[qid] === undefined) {
           spots[qid] = spotDetails[index];
         }
-        return { qid, distance };
+        const ref = { qid, distance };
+        if (latitude !== undefined) {
+          ref.latitude = latitude;
+          ref.longitude = longitude;
+        }
+        return ref;
       });
     }
   }
