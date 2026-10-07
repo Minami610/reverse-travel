@@ -138,6 +138,7 @@ async function generateInlineJSScript(jsDir) {
     'route-formatter.js',
     'map-view.js',
     'layout-controller.js',
+    'favorites.js',
     'main.js',
   ];
 
@@ -153,8 +154,13 @@ async function generateInlineJSScript(jsDir) {
 
     let content = fs.readFileSync(filePath, 'utf-8');
 
-    // import/export を削除（非モジュール化）
-    content = content.replace(/^import\s+.*?from\s+['"].*?['"];$/gm, '');
+    // import/export を削除（非モジュール化）。
+    // 【2026-10-08修正】旧正規表現は`.`がデフォルトで改行をまたがないため、
+    // import { a, b, c } from '...'; のように{}の中を複数行に分けて書いた
+    // import文（favorites.jsをmain.jsにimportした際に追加）が1文字も
+    // マッチせず、importキーワードがそのままバンドルに残ってSyntaxErrorに
+    // なった（jsdomでの検証時に発見）。[\s\S]*?で改行もまたいでマッチさせる。
+    content = content.replace(/^import\s[\s\S]*?from\s+['"][^'"]*['"];\s*$/gm, '');
     content = content.replace(/^export\s+/gm, '');
     content = content.replace(
       /window\.addEventListener\('DOMContentLoaded'/,

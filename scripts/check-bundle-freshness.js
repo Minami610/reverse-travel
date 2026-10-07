@@ -38,6 +38,7 @@ const JS_FILES = [
   'route-formatter.js',
   'map-view.js',
   'layout-controller.js',
+  'favorites.js',
   'main.js',
 ].map((f) => path.join(rootDir, 'assets/js', f));
 
