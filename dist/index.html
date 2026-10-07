@@ -898,17 +898,23 @@ header p {
   margin: 0;
 }
 
-/* 出発駅サジェスション */
+/* 出発駅サジェスション
+   position:fixedにして.layout-left（overflow-y:auto）の外に逃がす。
+   .layout-leftの内側のまま絶対配置（position:absolute）にすると、
+   祖先のoverflow:autoがはみ出した分を切り詰めてしまい、候補一覧が
+   地図の裏に潜って1件ほどしか見えなくなる不具合があった
+   （2026-10-07、Minamiさんが公開ページPC幅1920で発見）。
+   position:fixedはoverflow:autoな祖先の影響を受けないため、
+   表示位置はJS側（main.jsのpositionDepartureSuggestions）で
+   入力欄のgetBoundingClientRect()から都度計算する。 */
 #departure-suggestions {
-  position: absolute;
-  width: calc(100% - 2rem);
+  position: fixed;
   max-height: 300px;
   overflow-y: auto;
   background: white;
   border: 1px solid var(--color-border);
-  border-top: none;
   border-radius: 0 0 4px 4px;
-  z-index: 10;
+  z-index: 1000;
 }
 
 .form-group {
@@ -955,6 +961,19 @@ header p {
 
 #search-btn:active {
   transform: translateY(0);
+}
+
+/* 予算・出発駅が直近の検索条件と違うときの強調表示（「この条件で検索」）。
+   2026-10-07、Minamiさんが公開ページで発見：予算を変えても検索ボタンを
+   押すまで前回の結果が残り続け、画面の予算欄と結果の見出しがずれて誤解された。
+   自動再検索にはしない（＋／−連打のたびに検索が重なるのを避けるMinamiさんの判断）ため、
+   ボタンの色と文言だけで「まだこの条件で検索していない」と伝える。 */
+#search-btn.search-btn-pending {
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-deep) 100%);
+}
+
+#search-btn.search-btn-pending:hover {
+  box-shadow: 0 4px 12px rgba(255, 107, 43, 0.4);
 }
 
 /* ========================================
@@ -3397,6 +3416,10 @@ class ReverseTravel {
     this.currentBudget = null; // 帯の見出し・0件時のボタン計算に使う直近の検索予算
     this.currentHasCheaperSpots = false; // 帯は0件だが、予算以下にはスポットがあるか（0件案内文の出し分けに使う）
     this.currentSortOrder = 'recommended';
+    // 直近に検索した条件（出発駅欄の文字列＋予算）。nullは「まだ一度も検索していない」。
+    // 検索ボタンの見た目（updateSearchButtonState）は、現在の入力がこれと一致するかで決める。
+    this.lastSearchedDepartureText = null;
+    this.lastSearchedBudget = null;
 
     this.initUI();
     // initStationIndex()のPromiseを保持し、読み込み中にperformSearch()が
@@ -3472,6 +3495,15 @@ class ReverseTravel {
       delete this.elements.departureInput.dataset.localIndex;
       this.hideDepartureGuidance();
       this.showDepartureSuggestions(e.target.value);
+      this.updateSearchButtonState();
+    });
+
+    // position:fixedの候補一覧は画面リサイズ（スマホの回転等）に追従しないため、
+    // 表示中であれば位置を再計算する
+    window.addEventListener('resize', () => {
+      if (this.elements.departureSuggestions.innerHTML !== '') {
+        this.positionDepartureSuggestions();
+      }
     });
 
     this.elements.budgetDecrement.addEventListener('click', () => {
@@ -3709,6 +3741,30 @@ class ReverseTravel {
     this.elements.budgetDisplay.textContent = `¥${value}`;
     this.elements.budgetDecrement.disabled = value <= min;
     this.elements.budgetIncrement.disabled = value >= max;
+    this.updateSearchButtonState();
+  }
+
+  /**
+   * 検索ボタンの見た目を「現在の入力が直近の検索条件と同じか」で切り替える。
+   * 予算を変えても検索ボタンを押すまでは前回の結果・見出しが残り続け、
+   * 画面の予算欄と結果の帯がずれて見える不具合があったため
+   * （2026-10-07、Minamiさんが公開ページで発見）。自動再検索にはせず
+   * （＋／−連打のたびに検索が重なって遅くなるのを避けるMinamiさんの判断）、
+   * ボタンの色と文言だけで「まだこの条件で検索していない」ことを知らせる。
+   */
+  updateSearchButtonState() {
+    const btn = this.elements.searchBtn;
+    if (this.lastSearchedBudget === null) {
+      // まだ一度も検索していない＝比較対象がないため、常に既定の表示にする
+      btn.classList.remove('search-btn-pending');
+      btn.textContent = '検索';
+      return;
+    }
+    const currentText = this.elements.departureInput.value;
+    const currentBudget = parseInt(this.elements.budgetInput.value, 10);
+    const changed = currentText !== this.lastSearchedDepartureText || currentBudget !== this.lastSearchedBudget;
+    btn.classList.toggle('search-btn-pending', changed);
+    btn.textContent = changed ? 'この条件で検索' : '検索';
   }
 
   /**
@@ -3778,6 +3834,7 @@ class ReverseTravel {
       .join('');
 
     this.elements.departureSuggestions.innerHTML = html;
+    this.positionDepartureSuggestions();
 
     // クリックリスナー
     this.elements.departureSuggestions.querySelectorAll('.suggestion-item').forEach(item => {
@@ -3791,8 +3848,22 @@ class ReverseTravel {
         delete this.elements.departureInput.dataset.stationId;
         this.elements.departureSuggestions.innerHTML = '';
         this.hideDepartureGuidance();
+        this.updateSearchButtonState();
       });
     });
+  }
+
+  /**
+   * #departure-suggestions（position:fixed）を入力欄の直下・同じ幅に配置する。
+   * .layout-left（overflow-y:auto）の内側にposition:absoluteで置くと祖先の
+   * overflowに切り詰められるため、fixedにした上でJSで毎回位置を計算し直す
+   * 必要がある（CSS側のコメント参照）。
+   */
+  positionDepartureSuggestions() {
+    const rect = this.elements.departureInput.getBoundingClientRect();
+    this.elements.departureSuggestions.style.left = `${rect.left}px`;
+    this.elements.departureSuggestions.style.top = `${rect.bottom}px`;
+    this.elements.departureSuggestions.style.width = `${rect.width}px`;
   }
 
   showDepartureGuidance(message) {
@@ -3870,6 +3941,13 @@ class ReverseTravel {
       alert('出発駅と予算を選択してください');
       return;
     }
+
+    // この時点の入力内容を「直近に検索した条件」として記録し、ボタンを
+    // 既定の見た目（「検索」）に戻す。guidance等で早期returnした場合は
+    // ここまで来ないため、ボタンは「この条件で検索」のままになる。
+    this.lastSearchedDepartureText = this.elements.departureInput.value;
+    this.lastSearchedBudget = budget;
+    this.updateSearchButtonState();
 
     // 出発駅の県＋隣接県のフルデータをロード（既にロード済みなら実質待ち時間なし）してから、
     // 県内通し番号から実際のstation_idを解決する。ロード中は結果欄に専用メッセージを出す。

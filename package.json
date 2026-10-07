@@ -12,6 +12,7 @@
     "refresh-spots": "node scripts/build-pipeline/refresh-and-normalize-spots.js",
     "generate-route-details": "node scripts/build-pipeline/generate-route-details.js",
     "verify-render": "node scripts/verify-initial-render.js",
+    "verify-layout": "node scripts/verify-layout.js",
     "verify-regression": "node scripts/verify-regression.js",
     "verify-local": "node scripts/verify-local-prefectures.js",
     "test:wikidata": "node scripts/test-wikidata.js",
@@ -36,6 +37,7 @@
   "devDependencies": {
     "@turf/boolean-point-in-polygon": "^7.4.0",
     "jsdom": "^30.0.1",
+    "playwright": "^1.63.0",
     "shapefile": "^0.6.6"
   }
 }

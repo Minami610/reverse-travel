@@ -189,8 +189,9 @@ async function waitForSuggestion(doc, window, inputText, exactName, timeoutMs = 
   return null;
 }
 
-// main.jsのBAND_WIDTHと同じ値を保つこと（2026-10-06、帯表示導入時に追加）
+// main.jsのBAND_WIDTH/MAX_BUDGETと同じ値を保つこと（2026-10-06、帯表示導入時に追加）
 const BAND_WIDTH = 200;
+const MAX_BUDGET_FOR_CHECK = 2000;
 /** main.jsのformatBandLabel()と同じ規則（例: budget=1000 → "¥801〜¥1000"） */
 function formatBandLabel(budget) {
   return `¥${budget - BAND_WIDTH + 1}〜¥${budget}`;
@@ -923,17 +924,41 @@ async function computeGroundTruthBandQids(prefCode, stationDisplayName, budget) 
 }
 
 /**
+ * regression-baseline.jsonから「県コード＋表示名」の基準駅一覧を平らにして取り出す。
+ */
+function loadBaselineStations() {
+  const baseline = JSON.parse(
+    fs.readFileSync(path.join(rootDir, 'config/regression-baseline.json'), 'utf-8')
+  );
+  const stations = [];
+  for (const [prefCode, pref] of Object.entries(baseline.prefectures)) {
+    for (const dep of pref.departures) {
+      stations.push({ prefCode, displayName: dep.display_name });
+    }
+  }
+  return stations;
+}
+
+/**
  * 【2026-10-07追加】帯の判定を「駅単位」から「スポット単位」に直したことの検証
  * （Minamiさんが公開ページで発見：TOYAMAキラリ等が往復¥400の帯にも往復¥1000の
  * 帯にも別々の運賃で出ていた）。
- * 1. 往復¥1000の帯に出たスポットが、隣の帯（予算−¥200＝往復¥800の帯。¥900の帯
- *    ではない点に注意：帯の幅=¥200・予算刻み=¥100のため、1段階隣の¥900の帯とは
- *    ¥100分重なりがあり、そちらは重複して出てよい）には出ていないこと
- * 2. 往復¥1000の帯に出た各スポットの表示運賃が、docs/data/を直接読んで独立に
- *    計算した「そのスポットの真の最安往復運賃」と一致すること
+ *
+ * 【2026-10-07拡張】前回は高松築港・¥1000のみの検証だったが、「富山から出発すると
+ * 隣の石川も読み込むため、処理の流れが違う可能性がある」というCoworkの指摘を受け、
+ * 回帰テストの基準駅すべて（香川・富山・石川の12駅）×すべての予算（¥200〜¥2000、
+ * 19通り）で検証するようにした。
+ *
+ * 各駅について、computeGroundTruthFares()で「その駅から予算¥2000以下で行ける
+ * 全スポットの真の最安往復運賃」を1回だけ計算し、そこから各予算の帯
+ * （予算−¥200より高く、予算以下）に属すべきQID集合を機械的に切り出す。
+ * この切り出しは定義上、隣の帯と重複しようがない（1つのQIDは必ずちょうど1つの
+ * 帯にしか属さない）ため、実際のUI検索結果がこの切り出しと完全一致することを
+ * 確認すれば、「隣の帯と重複していない」「表示運賃が最安と一致」の両方を
+ * 一度に検証できる。
  */
 async function checkSpotLevelBanding(html) {
-  console.log('\n=== 帯のスポット単位判定チェック ===');
+  console.log('\n=== 帯のスポット単位判定チェック（基準駅12駅 × 予算¥200〜¥2000） ===');
   const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'dangerously', pretendToBeVisual: true });
   const { window } = dom;
   stubMatchMedia(window, true);
@@ -947,14 +972,6 @@ async function checkSpotLevelBanding(html) {
     else window.addEventListener('load', done);
   });
   const doc = window.document;
-
-  const item = await waitForSuggestion(doc, window, '高松築港', '高松築港');
-  if (!item) {
-    console.log('❌ 検証用の出発駅「高松築港」の候補が見つかりません');
-    window.close();
-    return false;
-  }
-  item.dispatchEvent(new window.Event('click', { bubbles: true }));
 
   async function searchAt(budget) {
     const before = doc.getElementById('results-list').innerHTML;
@@ -972,33 +989,53 @@ async function checkSpotLevelBanding(html) {
     return byQid;
   }
 
-  const at1000 = await searchAt(1000);
-  const at800 = await searchAt(800); // 予算−¥200＝隣の帯（¥601〜¥800、重なりなし）
+  const stations = loadBaselineStations();
+  let overallOk = true;
 
-  const overlap = [...at1000.keys()].filter((qid) => at800.has(qid));
-  const noOverlap = overlap.length === 0;
-  console.log(
-    noOverlap
-      ? `✅ 往復¥1000の帯のスポット（${at1000.size}件）は、隣の¥800の帯（${at800.size}件）と重複していません`
-      : `❌ 隣の帯（¥800）と重複しているスポットがあります: ${overlap.join(', ')}`
-  );
+  for (const { prefCode, displayName } of stations) {
+    const item = await waitForSuggestion(doc, window, displayName, displayName);
+    if (!item) {
+      console.log(`❌ 検証用の出発駅「${displayName}」の候補が見つかりません`);
+      overallOk = false;
+      continue;
+    }
+    item.dispatchEvent(new window.Event('click', { bubbles: true }));
 
-  const groundTruth = await computeGroundTruthFares('37', '高松築港', 2000);
-  let fareMismatch = null;
-  for (const [qid, displayedFare] of at1000) {
-    const trueFare = groundTruth.get(qid);
-    if (trueFare === undefined) continue; // 念のため（本来は必ず見つかるはず）
-    if (trueFare !== displayedFare) {
-      fareMismatch = { qid, displayedFare, trueFare };
-      break;
+    const groundTruth = await computeGroundTruthFares(prefCode, displayName, MAX_BUDGET_FOR_CHECK);
+    const issues = [];
+
+    for (let budget = 200; budget <= MAX_BUDGET_FOR_CHECK; budget += 100) {
+      const expected = new Map(
+        [...groundTruth].filter(([, fare]) => fare > budget - BAND_WIDTH && fare <= budget)
+      );
+      const actual = await searchAt(budget);
+
+      const missing = [...expected.keys()].filter((qid) => !actual.has(qid));
+      const extra = [...actual.keys()].filter((qid) => !expected.has(qid));
+      const fareMismatches = [...actual.entries()]
+        .filter(([qid, fare]) => expected.has(qid) && expected.get(qid) !== fare)
+        .map(([qid, fare]) => ({ qid, displayedFare: fare, trueFare: expected.get(qid) }));
+
+      if (missing.length > 0 || extra.length > 0 || fareMismatches.length > 0) {
+        issues.push({ budget, missing, extra, fareMismatches, expectedSize: expected.size, actualSize: actual.size });
+      }
+    }
+
+    if (issues.length === 0) {
+      console.log(`✅ ${displayName}（${prefCode}）: 全19予算（¥200〜¥2000）で帯の範囲・表示運賃とも真の最安運賃と一致しています`);
+    } else {
+      overallOk = false;
+      console.log(`❌ ${displayName}（${prefCode}）: ${issues.length}件の予算で食い違いがあります`);
+      for (const issue of issues) {
+        console.log(
+          `  - ¥${issue.budget}: 期待${issue.expectedSize}件/実際${issue.actualSize}件` +
+          (issue.missing.length ? ` / 欠落:${issue.missing.join(',')}` : '') +
+          (issue.extra.length ? ` / 余分（隣の帯との重複の疑い）:${issue.extra.join(',')}` : '') +
+          (issue.fareMismatches.length ? ` / 運賃不一致:${JSON.stringify(issue.fareMismatches)}` : '')
+        );
+      }
     }
   }
-  const fareOk = fareMismatch === null;
-  console.log(
-    fareOk
-      ? `✅ 往復¥1000の帯の全${at1000.size}件で、表示運賃がそのスポットの真の最安往復運賃と一致しています`
-      : `❌ 表示運賃が最安運賃と食い違うスポットがあります: ${JSON.stringify(fareMismatch)}`
-  );
 
   if (errors.length > 0) {
     console.log('⚠️  ページ実行中に発生したエラー:');
@@ -1006,7 +1043,7 @@ async function checkSpotLevelBanding(html) {
   }
 
   window.close();
-  return noOverlap && fareOk && errors.length === 0;
+  return overallOk && errors.length === 0;
 }
 
 /**
@@ -1108,8 +1145,14 @@ async function checkDepartureMismatchGuard(html) {
  * （config/regression-baseline.json参照）のため、往復¥1000で検索すると
  * 「この駅からは、往復¥800以下で行ける場所しかありません。」が出るはず。
  */
-async function checkPartialBandMessage(html) {
-  console.log('\n=== 帯が0件（予算以下には行ける場所がある場合）の案内文チェック ===');
+/**
+ * 【2026-10-07拡張】Cowork（Minamiさん）が公開ページで確認した事例は「電鉄魚津駅前」
+ * だったが、既存のチェックは回帰基準駅の「魚津駅前」（魚津市民バスの停留所、別の
+ * 物理駅）しか見ていなかった。同じ県に似た名前の別駅が複数あるため、報告された
+ * 駅名そのものでも検証できるよう駅名を引数化し、両方を呼ぶ。
+ */
+async function checkPartialBandMessage(html, stationName = '魚津駅前') {
+  console.log(`\n=== 帯が0件（予算以下には行ける場所がある場合）の案内文チェック（${stationName}） ===`);
   const errors = [];
   const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'dangerously', pretendToBeVisual: true });
   const { window } = dom;
@@ -1124,9 +1167,9 @@ async function checkPartialBandMessage(html) {
   });
   const doc = window.document;
 
-  const item = await waitForSuggestion(doc, window, '魚津駅前', '魚津駅前');
+  const item = await waitForSuggestion(doc, window, stationName, stationName);
   if (!item) {
-    console.log('ℹ️  検証用の出発駅「魚津駅前」が見つからないためスキップします');
+    console.log(`ℹ️  検証用の出発駅「${stationName}」が見つからないためスキップします`);
     window.close();
     return true;
   }
@@ -1144,7 +1187,7 @@ async function checkPartialBandMessage(html) {
   const resultsList = doc.getElementById('results-list');
   const hasCards = resultsList.querySelectorAll('.spot-card').length > 0;
   if (hasCards) {
-    console.log('ℹ️  魚津駅前×往復¥1000の帯が0件でなくなっている（データの変化）ためスキップします');
+    console.log(`ℹ️  ${stationName}×往復¥1000の帯が0件でなくなっている（データの変化）ためスキップします`);
     window.close();
     return true;
   }
@@ -1154,7 +1197,7 @@ async function checkPartialBandMessage(html) {
   const ok = noResultsText === expectedText;
   console.log(
     ok
-      ? `✅ 魚津駅前×往復¥1000で想定どおりの案内文が表示されました: 「${noResultsText}」`
+      ? `✅ ${stationName}×往復¥1000で想定どおりの案内文が表示されました: 「${noResultsText}」`
       : `❌ 案内文が想定と異なります（実際: "${noResultsText}" / 期待: "${expectedText}"）`
   );
 
@@ -1165,6 +1208,92 @@ async function checkPartialBandMessage(html) {
 
   window.close();
   return ok && errors.length === 0;
+}
+
+/**
+ * 【2026-10-07追加】検索ボタンの状態変化チェック（Minamiさんが公開ページで発見：
+ * 予算を変えても検索ボタンを押すまで前の結果・見出しが残り、予算欄¥800なのに
+ * 結果は¥400のまま、という画面になって誤解された）。
+ * main.jsのupdateSearchButtonState()が、次の3点を満たすかを確認する：
+ * 1. 予算を変える（検索はしない）→ ボタンの文言が「この条件で検索」になり、
+ *    強調クラス（search-btn-pending）が付く
+ * 2. その状態で検索する → ボタンが既定の文言「検索」・既定の見た目に戻る
+ * 3. 検索後、予算を最後に検索した値と同じ値に戻す → ボタンは既定のまま
+ *    （一度「この条件で検索」になってから戻しても、強調が残り続けないこと）
+ */
+async function checkSearchButtonState(html) {
+  console.log('\n=== 検索ボタンの状態変化チェック（予算・出発駅が直近の検索条件と違うとき） ===');
+  const errors = [];
+  const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'dangerously', pretendToBeVisual: true });
+  const { window } = dom;
+  stubMatchMedia(window, true);
+  stubFetch(window);
+  window.addEventListener('error', (e) => errors.push(e.error ? (e.error.stack || e.error.message) : e.message));
+
+  await new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 50);
+    if (window.document.readyState === 'complete') done();
+    else window.addEventListener('load', done);
+  });
+  const doc = window.document;
+  const searchBtn = doc.getElementById('search-btn');
+  const isPending = () => searchBtn.classList.contains('search-btn-pending') && searchBtn.textContent === 'この条件で検索';
+  const isDefault = () => !searchBtn.classList.contains('search-btn-pending') && searchBtn.textContent === '検索';
+
+  const item = await waitForSuggestion(doc, window, '高松築港', '高松築港');
+  if (!item) {
+    console.log('❌ 検証用の出発駅「高松築港」の候補が見つかりません');
+    window.close();
+    return false;
+  }
+  item.dispatchEvent(new window.Event('click', { bubbles: true }));
+  doc.getElementById('budget-input').value = '1000';
+  doc.getElementById('search-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await waitFor(() => resultsSettled(doc), 8000);
+
+  const initialOk = isDefault();
+  console.log(
+    initialOk
+      ? '✅ 検索直後はボタンが既定の見た目（「検索」）です'
+      : `❌ 検索直後のボタンの見た目が想定と異なります（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}）`
+  );
+
+  // 1. 予算を変える（検索はしない）→ 強調表示になること
+  doc.getElementById('budget-increment').dispatchEvent(new window.Event('click', { bubbles: true }));
+  const pendingAfterBudgetChange = isPending();
+  console.log(
+    pendingAfterBudgetChange
+      ? '✅ 予算を変えて検索せずにいると、ボタンが「この条件で検索」（強調表示）になりました'
+      : `❌ 予算を変えてもボタンが強調表示になりません（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}）`
+  );
+
+  // 2. その状態で検索する → 既定の見た目に戻ること
+  doc.getElementById('search-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await waitFor(() => resultsSettled(doc), 8000);
+  const revertedAfterSearch = isDefault();
+  console.log(
+    revertedAfterSearch
+      ? '✅ 検索すると、ボタンが既定の見た目（「検索」）に戻りました'
+      : `❌ 検索してもボタンが既定の見た目に戻りません（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}）`
+  );
+
+  // 3. 予算を変えてから、最後に検索した値（¥1000）に戻す → 既定のままであること
+  doc.getElementById('budget-increment').dispatchEvent(new window.Event('click', { bubbles: true }));
+  doc.getElementById('budget-decrement').dispatchEvent(new window.Event('click', { bubbles: true }));
+  const revertedAfterUndo = isDefault();
+  console.log(
+    revertedAfterUndo
+      ? '✅ 予算を変えても、最後に検索した値に戻すとボタンは既定のままです'
+      : `❌ 最後に検索した値に戻してもボタンが強調表示のままです（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}）`
+  );
+
+  if (errors.length > 0) {
+    console.log('⚠️  ページ実行中に発生したエラー:');
+    errors.forEach((e) => console.log('  - ' + e));
+  }
+
+  window.close();
+  return initialOk && pendingAfterBudgetChange && revertedAfterSearch && revertedAfterUndo && errors.length === 0;
 }
 
 async function main() {
@@ -1184,11 +1313,14 @@ async function main() {
   const transferDisplayOk = await checkTransferDisplay(html);
   const spotLevelBandingOk = await checkSpotLevelBanding(html);
   const departureMismatchOk = await checkDepartureMismatchGuard(html);
-  const partialBandMessageOk = await checkPartialBandMessage(html);
+  const partialBandMessageOk = await checkPartialBandMessage(html, '魚津駅前');
+  const partialBandMessageUozuEkiOk = await checkPartialBandMessage(html, '電鉄魚津駅前');
+  const searchButtonStateOk = await checkSearchButtonState(html);
 
   if (
     publishedOk && desktopOk && mobileOk && cardsOk && loadingStateOk && transferDisplayOk &&
-    spotLevelBandingOk && departureMismatchOk && partialBandMessageOk
+    spotLevelBandingOk && departureMismatchOk && partialBandMessageOk && partialBandMessageUozuEkiOk &&
+    searchButtonStateOk
   ) {
     console.log('\n✅ 検証成功: 初期表示・検索結果カードともに想定通りです');
   } else {

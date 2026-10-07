@@ -218,17 +218,23 @@ header p {
   margin: 0;
 }
 
-/* 出発駅サジェスション */
+/* 出発駅サジェスション
+   position:fixedにして.layout-left（overflow-y:auto）の外に逃がす。
+   .layout-leftの内側のまま絶対配置（position:absolute）にすると、
+   祖先のoverflow:autoがはみ出した分を切り詰めてしまい、候補一覧が
+   地図の裏に潜って1件ほどしか見えなくなる不具合があった
+   （2026-10-07、Minamiさんが公開ページPC幅1920で発見）。
+   position:fixedはoverflow:autoな祖先の影響を受けないため、
+   表示位置はJS側（main.jsのpositionDepartureSuggestions）で
+   入力欄のgetBoundingClientRect()から都度計算する。 */
 #departure-suggestions {
-  position: absolute;
-  width: calc(100% - 2rem);
+  position: fixed;
   max-height: 300px;
   overflow-y: auto;
   background: white;
   border: 1px solid var(--color-border);
-  border-top: none;
   border-radius: 0 0 4px 4px;
-  z-index: 10;
+  z-index: 1000;
 }
 
 .form-group {
@@ -275,6 +281,19 @@ header p {
 
 #search-btn:active {
   transform: translateY(0);
+}
+
+/* 予算・出発駅が直近の検索条件と違うときの強調表示（「この条件で検索」）。
+   2026-10-07、Minamiさんが公開ページで発見：予算を変えても検索ボタンを
+   押すまで前回の結果が残り続け、画面の予算欄と結果の見出しがずれて誤解された。
+   自動再検索にはしない（＋／−連打のたびに検索が重なるのを避けるMinamiさんの判断）ため、
+   ボタンの色と文言だけで「まだこの条件で検索していない」と伝える。 */
+#search-btn.search-btn-pending {
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-deep) 100%);
+}
+
+#search-btn.search-btn-pending:hover {
+  box-shadow: 0 4px 12px rgba(255, 107, 43, 0.4);
 }
 
 /* ========================================
