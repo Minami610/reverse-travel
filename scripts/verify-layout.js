@@ -30,7 +30,9 @@ const screenshotDir = path.join(rootDir, 'data/screenshots/verify-layout');
 
 const VIEWPORTS = {
   pc: { width: 1920, height: 1080 },
-  sp: { width: 390, height: 844 },
+  // 2026-10-08、1本目（お気に入り・マイリスト・共有）の指示でスマホ幅を
+  // 375pxに指定されたため、375×667（iPhone SE/8相当）に変更した。
+  sp: { width: 375, height: 667 },
 };
 
 const MIME = {
@@ -87,6 +89,12 @@ function rectsOverlap(a, b) {
 function isFullyVisible(rect, viewport) {
   if (!rect || rect.width <= 0 || rect.height <= 0) return false;
   return rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= viewport.width + 1 && rect.y + rect.height <= viewport.height + 1;
+}
+
+/** タップ領域が44px四方以上あるか（Minamiさんの指示：スマホで押しやすい大きさ） */
+const TOUCH_TARGET_MIN_PX = 44;
+function isTouchTargetLargeEnough(rect) {
+  return !!rect && rect.width >= TOUCH_TARGET_MIN_PX - 1 && rect.height >= TOUCH_TARGET_MIN_PX - 1;
 }
 
 const results = [];
@@ -271,6 +279,103 @@ async function captureSearchButtonPendingScreen(page, viewportLabel) {
   return screenshotPath;
 }
 
+/**
+ * カードの☆（マイリスト保存）・共有ボタンを確認する（2026-10-08追加）。
+ * 重なり・はみ出しに加え、タップ領域が44px四方以上あることを見る。
+ */
+async function captureCardFavoriteShareScreen(page, viewportLabel) {
+  await searchAt(page, '高松築港', 1000);
+  const screenshotPath = path.join(screenshotDir, `card-favorite-share-${viewportLabel}.png`);
+  await page.screenshot({ path: screenshotPath, fullPage: false });
+
+  const viewport = VIEWPORTS[viewportLabel];
+  const firstCard = page.locator('.spot-card').first();
+  const favBtn = firstCard.locator('.favorite-btn');
+  const shareBtn = firstCard.locator('.share-btn');
+  const favBox = await favBtn.boundingBox();
+  const shareBox = await shareBtn.boundingBox();
+
+  record(`[${viewportLabel}] カード: ☆ボタンが画面内に収まっている`, isFullyVisible(favBox, viewport));
+  record(`[${viewportLabel}] カード: 共有ボタンが画面内に収まっている`, isFullyVisible(shareBox, viewport));
+  record(`[${viewportLabel}] カード: ☆ボタンのタップ領域が44px四方以上`, isTouchTargetLargeEnough(favBox), favBox ? `${favBox.width.toFixed(0)}×${favBox.height.toFixed(0)}` : 'なし');
+  record(`[${viewportLabel}] カード: 共有ボタンのタップ領域が44px四方以上`, isTouchTargetLargeEnough(shareBox), shareBox ? `${shareBox.width.toFixed(0)}×${shareBox.height.toFixed(0)}` : 'なし');
+  record(`[${viewportLabel}] カード: ☆・共有ボタンが重なっていない`, !rectsOverlap(favBox, shareBox));
+
+  // ☆を押して、カード本体の詳細遷移に巻き込まれていないこと（押しても詳細画面に
+  // ならない＝クリックがカードに伝播していないこと）を確認する
+  await favBtn.click();
+  await page.waitForTimeout(150);
+  const stillOnResultsList = await page.locator('#app-layout').getAttribute('data-view');
+  record(`[${viewportLabel}] カード: ☆を押しても詳細画面に遷移しない（クリックの巻き込み防止）`, stillOnResultsList === 'results');
+
+  await checkNoHorizontalOverflow(page, `[${viewportLabel}] カードの☆・共有`);
+  return screenshotPath;
+}
+
+/** 詳細画面の☆・共有ボタンを確認する（2026-10-08追加） */
+async function captureDetailFavoriteShareScreen(page, viewportLabel) {
+  await searchAt(page, '高松築港', 1000);
+  await page.locator('.spot-card').first().click();
+  await page.waitForSelector('#detail-content h2', { timeout: 15000 });
+  const screenshotPath = path.join(screenshotDir, `detail-favorite-share-${viewportLabel}.png`);
+  await page.screenshot({ path: screenshotPath, fullPage: true });
+
+  const viewport = VIEWPORTS[viewportLabel];
+  const favBox = await page.locator('.detail-favorite-btn').boundingBox();
+  const shareBox = await page.locator('.detail-share-btn').boundingBox();
+  record(`[${viewportLabel}] 詳細画面: ☆ボタンが画面内に収まっている`, isFullyVisible(favBox, viewport));
+  record(`[${viewportLabel}] 詳細画面: 共有ボタンが画面内に収まっている`, isFullyVisible(shareBox, viewport));
+  record(`[${viewportLabel}] 詳細画面: ☆ボタンのタップ領域が44px四方以上`, isTouchTargetLargeEnough(favBox), favBox ? `${favBox.width.toFixed(0)}×${favBox.height.toFixed(0)}` : 'なし');
+  record(`[${viewportLabel}] 詳細画面: 共有ボタンのタップ領域が44px四方以上`, isTouchTargetLargeEnough(shareBox), shareBox ? `${shareBox.width.toFixed(0)}×${shareBox.height.toFixed(0)}` : 'なし');
+  record(`[${viewportLabel}] 詳細画面: ☆・共有ボタンが重なっていない`, !rectsOverlap(favBox, shareBox));
+
+  await checkNoHorizontalOverflow(page, `[${viewportLabel}] 詳細画面の☆・共有`);
+  // 一覧に戻しておく（他のキャプチャ関数が毎回searchAtし直すので必須ではないが、
+  // 状態を崩したまま次に渡さない）
+  await page.click('#back-btn').catch(() => {});
+  return screenshotPath;
+}
+
+/**
+ * マイリスト画面を確認する（2026-10-08追加）。まずカードから1件保存した上で
+ * ヘッダーの「★ マイリスト」ボタンから開き、行の表示・閉じるボタン・
+ * 削除/共有ボタンのタップ領域を見る。
+ */
+async function captureMylistScreen(page, viewportLabel) {
+  await searchAt(page, '高松築港', 1000);
+  // 直前のcaptureCardFavoriteShareScreen()が同じカードの☆を既に押している
+  // 場合があるため（同じページ・同じlocalStorageを使い回すため状態が残る）、
+  // 既に保存済みなら押し直さない（押すとトグルで解除されてしまう）。
+  const favBtn = page.locator('.spot-card').first().locator('.favorite-btn');
+  const alreadyActive = await favBtn.evaluate((el) => el.classList.contains('favorite-btn-active'));
+  if (!alreadyActive) {
+    await favBtn.click();
+    await page.waitForTimeout(100);
+  }
+
+  await page.click('#mylist-btn');
+  await page.waitForSelector('#mylist-body .mylist-row', { timeout: 15000 });
+  const screenshotPath = path.join(screenshotDir, `mylist-${viewportLabel}.png`);
+  await page.screenshot({ path: screenshotPath, fullPage: true });
+
+  const viewport = VIEWPORTS[viewportLabel];
+  const modalBox = await page.locator('#mylist-modal .modal-panel').boundingBox();
+  record(`[${viewportLabel}] マイリスト画面: モーダルが画面幅に収まっている`, !!modalBox && modalBox.x >= -1 && modalBox.x + modalBox.width <= viewport.width + 1);
+
+  const closeBox = await page.locator('#mylist-modal-close').boundingBox();
+  record(`[${viewportLabel}] マイリスト画面: 閉じるボタンのタップ領域が44px四方以上`, isTouchTargetLargeEnough(closeBox), closeBox ? `${closeBox.width.toFixed(0)}×${closeBox.height.toFixed(0)}` : 'なし');
+
+  const removeBox = await page.locator('.mylist-remove-btn').first().boundingBox();
+  const shareBox = await page.locator('.mylist-share-btn').first().boundingBox();
+  record(`[${viewportLabel}] マイリスト画面: 削除ボタンのタップ領域が44px四方以上`, isTouchTargetLargeEnough(removeBox), removeBox ? `${removeBox.width.toFixed(0)}×${removeBox.height.toFixed(0)}` : 'なし');
+  record(`[${viewportLabel}] マイリスト画面: 共有ボタンのタップ領域が44px四方以上`, isTouchTargetLargeEnough(shareBox), shareBox ? `${shareBox.width.toFixed(0)}×${shareBox.height.toFixed(0)}` : 'なし');
+  record(`[${viewportLabel}] マイリスト画面: 削除・共有ボタンが重なっていない`, !rectsOverlap(removeBox, shareBox));
+
+  await checkNoHorizontalOverflow(page, `[${viewportLabel}] マイリスト画面`);
+  await page.click('#mylist-modal-close');
+  return screenshotPath;
+}
+
 async function main() {
   assertBundleFresh('verify-layout');
   assertSiteDataFresh('verify-layout');
@@ -305,6 +410,9 @@ async function main() {
       savedPaths.push(await captureResultsListScreen(page, label));
       savedPaths.push(await captureHowToScreen(page, label));
       savedPaths.push(await captureSearchButtonPendingScreen(page, label));
+      savedPaths.push(await captureCardFavoriteShareScreen(page, label));
+      savedPaths.push(await captureDetailFavoriteShareScreen(page, label));
+      savedPaths.push(await captureMylistScreen(page, label));
 
       if (pageErrors.length > 0) {
         record(`[${label}] ページ実行中にエラーが発生していない`, false, pageErrors.join('; '));
