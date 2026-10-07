@@ -3380,6 +3380,7 @@ class ReverseTravel {
     this.currentSpots = []; // 検索結果（おすすめ順、地図のピンもこの集合のまま）
     this.currentReachableCount = 0; // 帯内の到達駅数（デバッグ・将来利用のため保持。表示の分岐には使わない）
     this.currentBudget = null; // 帯の見出し・0件時のボタン計算に使う直近の検索予算
+    this.currentHasCheaperSpots = false; // 帯は0件だが、予算以下にはスポットがあるか（0件案内文の出し分けに使う）
     this.currentSortOrder = 'recommended';
 
     this.initUI();
@@ -3872,7 +3873,7 @@ class ReverseTravel {
     const cacheKey = `route_${stationId}_${budget}`;
     if (this.cache.has(cacheKey)) {
       const cached = this.cache.get(cacheKey);
-      this.displayResults(cached.spots, stationId, cached.reachableCount, budget);
+      this.displayResults(cached.spots, stationId, cached.reachableCount, budget, cached.hasCheaperSpots);
       return;
     }
 
@@ -3896,22 +3897,28 @@ class ReverseTravel {
       const bandSpots = allSpots.filter((s) => s.source_round_trip_fare > budget - BAND_WIDTH);
       console.log(`帯（¥${budget - BAND_WIDTH + 1}〜¥${budget}）内のスポット:`, bandSpots);
 
-      // キャッシュ保存（デバッグ用に帯の中の到達駅数相当の値も保持する）
-      this.cache.set(cacheKey, { spots: bandSpots, reachableCount: reachableStations.length });
+      // 【2026-10-07追加】帯が0件のときの案内文を出し分けるため、「予算以下には
+      // 何かあるが、この帯には無い」のか「予算以下に何も無い」のかを覚えておく
+      // （buildNoResultsMessage()参照）。
+      const hasCheaperSpots = allSpots.length > bandSpots.length;
 
-      this.displayResults(bandSpots, stationId, reachableStations.length, budget);
+      // キャッシュ保存（デバッグ用に帯の中の到達駅数相当の値も保持する）
+      this.cache.set(cacheKey, { spots: bandSpots, reachableCount: reachableStations.length, hasCheaperSpots });
+
+      this.displayResults(bandSpots, stationId, reachableStations.length, budget, hasCheaperSpots);
     } catch (error) {
       console.error('検索失敗:', error);
       alert('検索中にエラーが発生しました');
     }
   }
 
-  displayResults(spots, departureStationId, reachableCount, budget) {
+  displayResults(spots, departureStationId, reachableCount, budget, hasCheaperSpots) {
     this.currentDepartureStationId = departureStationId;
     this.currentDepartureStationName = this.data.stations?.[departureStationId]?.display_name || departureStationId;
     this.currentSpots = spots;
     this.currentReachableCount = reachableCount;
     this.currentBudget = budget;
+    this.currentHasCheaperSpots = !!hasCheaperSpots;
     this.currentSortOrder = 'recommended';
     this.elements.sortSelect.value = 'recommended';
 
@@ -4009,12 +4016,21 @@ class ReverseTravel {
    * 「到達駅自体がない」を利用者が区別する意味がなくなった（どちらも「この帯では
    * 行ける場所がない」という同じ結論になるため）ため、メッセージを一本化し、
    * 上下の次の帯をボタンで提示する形に変えた。
+   *
+   * 【2026-10-07修正】上の一本化は言い過ぎだった：予算以下にスポットが1件も
+   * 無いとき（本当にどこにも行けない）と、予算以下にはスポットがあるが
+   * この帯にだけ無いとき（もっと安く行ける場所しかない）を同じ文言で
+   * 「見つかりませんでした」と言うと、後者が「どこにも行けない」と誤読される
+   * （Minamiさんが公開ページで発見。例：魚津駅前の往復¥1000）。
+   * this.currentHasCheaperSpots（performSearch()が設定）で両者を出し分ける。
    */
   async buildNoResultsMessage() {
     const budget = this.currentBudget;
     const { lower, higher } = await this.findNearestBudgetsWithResults(budget);
 
-    let html = `<p class="no-results">往復${formatBandLabel(budget)}で行ける場所は見つかりませんでした。</p>`;
+    let html = this.currentHasCheaperSpots
+      ? `<p class="no-results">この駅からは、往復¥${budget - BAND_WIDTH}以下で行ける場所しかありません。</p>`
+      : `<p class="no-results">往復${formatBandLabel(budget)}で行ける場所は見つかりませんでした。</p>`;
     if (lower !== null || higher !== null) {
       html += '<div class="no-results-actions">';
       if (lower !== null) {

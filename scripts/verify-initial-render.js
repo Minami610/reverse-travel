@@ -1100,6 +1100,73 @@ async function checkDepartureMismatchGuard(html) {
   return exactMatchOk && mismatchOk && errors.length === 0;
 }
 
+/**
+ * 【2026-10-07追加】帯が0件のときの案内文の出し分けを検証する
+ * （Minamiさんが公開ページで発見：予算以下に行ける場所はあるのに、この帯だけ
+ * 0件のときも「見つかりませんでした」と出ると「どこにも行けない」と誤読される）。
+ * 魚津駅前は、行ける範囲の運賃がすべて¥800以下に収まる既知の基準駅
+ * （config/regression-baseline.json参照）のため、往復¥1000で検索すると
+ * 「この駅からは、往復¥800以下で行ける場所しかありません。」が出るはず。
+ */
+async function checkPartialBandMessage(html) {
+  console.log('\n=== 帯が0件（予算以下には行ける場所がある場合）の案内文チェック ===');
+  const errors = [];
+  const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'dangerously', pretendToBeVisual: true });
+  const { window } = dom;
+  stubMatchMedia(window, true);
+  stubFetch(window);
+  window.addEventListener('error', (e) => errors.push(e.error ? (e.error.stack || e.error.message) : e.message));
+
+  await new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 50);
+    if (window.document.readyState === 'complete') done();
+    else window.addEventListener('load', done);
+  });
+  const doc = window.document;
+
+  const item = await waitForSuggestion(doc, window, '魚津駅前', '魚津駅前');
+  if (!item) {
+    console.log('ℹ️  検証用の出発駅「魚津駅前」が見つからないためスキップします');
+    window.close();
+    return true;
+  }
+  item.dispatchEvent(new window.Event('click', { bubbles: true }));
+  doc.getElementById('budget-input').value = '1000';
+  doc.getElementById('search-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+
+  const rendered = await waitFor(() => resultsSettled(doc), 8000);
+  if (!rendered) {
+    console.log('❌ 検索結果が表示されませんでした（タイムアウト）');
+    window.close();
+    return false;
+  }
+
+  const resultsList = doc.getElementById('results-list');
+  const hasCards = resultsList.querySelectorAll('.spot-card').length > 0;
+  if (hasCards) {
+    console.log('ℹ️  魚津駅前×往復¥1000の帯が0件でなくなっている（データの変化）ためスキップします');
+    window.close();
+    return true;
+  }
+
+  const noResultsText = resultsList.querySelector('.no-results')?.textContent || '';
+  const expectedText = 'この駅からは、往復¥800以下で行ける場所しかありません。';
+  const ok = noResultsText === expectedText;
+  console.log(
+    ok
+      ? `✅ 魚津駅前×往復¥1000で想定どおりの案内文が表示されました: 「${noResultsText}」`
+      : `❌ 案内文が想定と異なります（実際: "${noResultsText}" / 期待: "${expectedText}"）`
+  );
+
+  if (errors.length > 0) {
+    console.log('⚠️  ページ実行中に発生したエラー:');
+    errors.forEach((e) => console.log('  - ' + e));
+  }
+
+  window.close();
+  return ok && errors.length === 0;
+}
+
 async function main() {
   if (!fs.existsSync(distIndexPath)) {
     console.error('dist/index.html が見つかりません。先に npm run bundle を実行してください');
@@ -1117,10 +1184,11 @@ async function main() {
   const transferDisplayOk = await checkTransferDisplay(html);
   const spotLevelBandingOk = await checkSpotLevelBanding(html);
   const departureMismatchOk = await checkDepartureMismatchGuard(html);
+  const partialBandMessageOk = await checkPartialBandMessage(html);
 
   if (
     publishedOk && desktopOk && mobileOk && cardsOk && loadingStateOk && transferDisplayOk &&
-    spotLevelBandingOk && departureMismatchOk
+    spotLevelBandingOk && departureMismatchOk && partialBandMessageOk
   ) {
     console.log('\n✅ 検証成功: 初期表示・検索結果カードともに想定通りです');
   } else {
