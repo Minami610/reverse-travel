@@ -1778,6 +1778,19 @@ header p {
     gap: 0.5rem;
   }
 
+  /* 【2026-10-07修正】.form-row を縦積み（flex-direction:column）にすると、
+     主軸が縦になるため、横積み用の flex-basis（1 1 220px）がそのまま
+     「高さ220px」として効いてしまい、出発駅欄の下に大きな空白ができていた
+     （Minamiさんがスマホ実機・screenshot両方で発見）。.form-group-budget には
+     この上書きが既にあったが、.form-group-departure 側が抜けていたのが原因。
+     横幅いっぱいに広がらない（右側が空く）問題も、align-items:flex-start
+     （.form-row、縦積みでは横軸に効く）の下でwidth指定が無いために起きて
+     いたため、同じ上書きで両方解消する。 */
+  .form-group-departure {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+
   .form-group-budget {
     flex: 0 0 auto;
     width: 100%;

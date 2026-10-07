@@ -104,6 +104,45 @@ async function checkNoHorizontalOverflow(page, label) {
   record(`${label}: 横スクロールが発生していない`, overflow <= 1, `はみ出し ${overflow}px`);
 }
 
+/**
+ * 【2026-10-07追加】出発駅の入力欄の下端と、予算の見出しの上端の間に、不自然な
+ * 空白ができていないかを確認する（Minamiさんがスマホ実機・screenshotの両方で発見：
+ * スマホ幅で両者の間に150px超の空白があった）。
+ * 原因は、.form-rowがスマホ幅でflex-direction:columnになる際、.form-group-budgetには
+ * 縦積み用の上書き（flex:0 0 auto; width:100%）があったのに.form-group-departureには
+ * 無く、横積み用のflex-basis（1 1 220px）が縦積みでは「高さ220px」として効いて
+ * しまっていたこと（position:fixed化とは無関係。CSS側の修正コメント参照）。
+ * 重なり・見切れだけでなく「離れすぎ」も検出するため、重なり判定とは別に
+ * しきい値（40px。通常のgap・marginの数倍）を設けて明示的に確認する。
+ */
+async function checkDepartureBudgetGap(page, viewportLabel) {
+  const GAP_THRESHOLD_PX = 40;
+  const inputBox = await page.locator('#departure-input').boundingBox();
+  const budgetLabelBox = await page.locator('label[for="budget-input"]').boundingBox();
+  if (!inputBox || !budgetLabelBox) {
+    record(`[${viewportLabel}] 出発駅欄と予算見出しの間隔: 要素が見つかる`, false);
+    return;
+  }
+  const gap = budgetLabelBox.y - (inputBox.y + inputBox.height);
+  record(
+    `[${viewportLabel}] 出発駅欄の下端と予算見出しの上端の間に不自然な空白がない`,
+    gap <= GAP_THRESHOLD_PX,
+    `間隔 ${gap.toFixed(1)}px（しきい値 ${GAP_THRESHOLD_PX}px）`
+  );
+  // 「出発駅の入力欄が横幅いっぱいに広がっていない」もあわせて確認する
+  // （同じ修正で解消するため、ここでまとめて見る）。PCは出発駅・予算が横並びで
+  // 入力欄が行幅いっぱいにならないのが正しい設計のため、スマホ幅のみ見る。
+  const formRowBox = viewportLabel === 'sp' ? await page.locator('.form-row').boundingBox() : null;
+  if (formRowBox) {
+    const widthDiff = formRowBox.width - inputBox.width;
+    record(
+      `[${viewportLabel}] 出発駅の入力欄が行の横幅いっぱいに広がっている`,
+      widthDiff <= 2,
+      `行の幅 ${formRowBox.width.toFixed(1)}px / 入力欄の幅 ${inputBox.width.toFixed(1)}px`
+    );
+  }
+}
+
 async function captureNoResultsScreen(page, viewportLabel) {
   await searchAt(page, 'ＪＲ栗林駅', 300);
   const screenshotPath = path.join(screenshotDir, `no-results-${viewportLabel}.png`);
@@ -260,6 +299,7 @@ async function main() {
         return input && input.placeholder === '駅名を入力...';
       }, { timeout: 15000 });
 
+      await checkDepartureBudgetGap(page, label);
       savedPaths.push(await captureNoResultsScreen(page, label));
       savedPaths.push(await captureSuggestionsScreen(page, label));
       savedPaths.push(await captureResultsListScreen(page, label));
