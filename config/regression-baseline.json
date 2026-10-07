@@ -4,44 +4,44 @@
     "37": {
       "pref_name": "香川県",
       "generated_at": "2026-10-07",
-      "generated_at_note": "帯の判定をスポット単位に直したことに伴う基準値の全面的な作り直し。reachableは累積到達駅数（帯では絞らない）、spots/transferはスポット単位の帯判定後の件数。高松築港の往復¥2000でspotsが5件と少ないのは、高松築港から行ける範囲のスポットの大半が、より安い帯（¥400・¥1000等）で既にそのスポットの最安経路として数えられているため（1スポットにつき1帯のみでカウントする設計のため、累積到達駅数（¥2000で346駅）に比べてspotsが少なく見えるのは正常）。",
+      "generated_at_note": "Minamiさんの判断による個別除外30件（地名・地区名18件、放送局・送信所10件、高松運転所、日本皇民党）の追加を反映した基準値。これらは香川の多くの駅の周辺に散らばっていたため、ほぼ全駅のspots件数が減っている（高松築港400: 60→48等）。到達駅数(reachable)への影響はない（個別除外はスポット側のみに効く）。",
       "departures": [
         {
           "display_name": "高松築港",
           "note": "香川最大のハブ駅",
-          "budgets": { "400": { "reachable": 10, "spots": 60 }, "1000": { "reachable": 207, "spots": 17, "transfer": 1 }, "2000": { "reachable": 346, "spots": 0 } }
+          "budgets": { "400": { "reachable": 10, "spots": 48 }, "1000": { "reachable": 207, "spots": 15, "transfer": 1 }, "2000": { "reachable": 346, "spots": 0 } }
         },
         {
           "display_name": "琴電琴平",
           "note": "琴平線の末端駅（鉄道のみ）",
-          "budgets": { "400": { "reachable": 2, "spots": 10 }, "1000": { "reachable": 7, "spots": 5 }, "2000": { "reachable": 219, "spots": 4, "transfer": 4 } }
+          "budgets": { "400": { "reachable": 2, "spots": 9 }, "1000": { "reachable": 7, "spots": 5 }, "2000": { "reachable": 219, "spots": 3, "transfer": 3 } }
         },
         {
           "display_name": "長尾",
           "note": "長尾線の末端駅（鉄道のみ）",
-          "budgets": { "400": { "reachable": 5, "spots": 13 }, "1000": { "reachable": 14, "spots": 42 }, "2000": { "reachable": 270, "spots": 6, "transfer": 6 } }
+          "budgets": { "400": { "reachable": 5, "spots": 12 }, "1000": { "reachable": 14, "spots": 38 }, "2000": { "reachable": 270, "spots": 5, "transfer": 5 } }
         },
         {
           "display_name": "琴電志度",
           "note": "志度線の末端駅（鉄道のみ）",
-          "budgets": { "400": { "reachable": 5, "spots": 20 }, "1000": { "reachable": 23, "spots": 37 }, "2000": { "reachable": 286, "spots": 7, "transfer": 7 } }
+          "budgets": { "400": { "reachable": 5, "spots": 19 }, "1000": { "reachable": 23, "spots": 32 }, "2000": { "reachable": 286, "spots": 6, "transfer": 6 } }
         },
         {
           "display_name": "仏生山",
           "note": "中間規模の駅（鉄道＋バス）",
-          "budgets": { "400": { "reachable": 5, "spots": 19 }, "1000": { "reachable": 113, "spots": 26, "transfer": 6 }, "2000": { "reachable": 339, "spots": 3, "transfer": 3 } }
+          "budgets": { "400": { "reachable": 5, "spots": 10 }, "1000": { "reachable": 113, "spots": 22, "transfer": 4 }, "2000": { "reachable": 339, "spots": 3, "transfer": 3 } }
         },
         {
           "display_name": "ＪＲ栗林駅",
           "note": "バスのみの停留所（鉄道の乗換駅なし）。往復¥400の帯（¥201〜¥400）のreachable=0は2026-10-01のことでんバス運賃改定で最低片道運賃が¥200→¥210になり、この帯に収まらなくなったことによる正しい結果（意図的な0件の基準値。バグではない）",
-          "budgets": { "400": { "reachable": 0, "spots": 0 }, "1000": { "reachable": 122, "spots": 22, "transfer": 22 }, "2000": { "reachable": 289, "spots": 2, "transfer": 2 } }
+          "budgets": { "400": { "reachable": 0, "spots": 0 }, "1000": { "reachable": 122, "spots": 17, "transfer": 17 }, "2000": { "reachable": 289, "spots": 2, "transfer": 2 } }
         }
       ]
     },
     "16": {
       "pref_name": "富山県",
       "generated_at": "2026-10-07",
-      "generated_at_note": "帯の判定をスポット単位に直したことに伴う基準値の全面的な作り直し（理由は香川と同じ）。あわせて「N番のりば」統合クラスタの表示名修正（末広町3番のりば→末広町）を反映したビルドの値。魚津駅前・黒部駅前・松任駅は、行ける範囲の運賃がすべて¥800以下に収まるため、往復¥1000・¥2000の帯はspots=0になる（reachableは累積のため0ではない。意図的、バグではない）。",
+      "generated_at_note": "Minamiさんの判断による6件の個別許可（TOYAMAキラリと同じ仕組みで復元：海の駅蜃気楼・三郎丸蒸留所・富山ガラス工房・富山市天文台・戸出御蔵・オータム天然温泉しあわせの湯II）と、2件の個別除外（唐島荘ユースホステル・高岡都市圏）を反映した基準値。再ビルド時、常願寺川・小矢部川・黒部川の3件が原因不明（matchedExcludedQids=null、WDQSのbbox取得が一時的に欠落した可能性）で前回ビルドから消えていた。この3件は除外クラス・個別除外のいずれにも該当せず、configの変更とは無関係（CLAUDE.md「WDQSの応答時間は振れる」参照）。保護対象クラスの川(Q4022)自体は他にも多数生存しており、次回ビルドで復帰するか監視する。あわせて「烏帽子山」が新規に1件追加されている（Wikidata側の自然な変動）。",
       "departures": [
         {
           "display_name": "富山駅前",
@@ -51,17 +51,17 @@
         {
           "display_name": "高岡駅",
           "note": "高岡市の中心駅",
-          "budgets": { "400": { "reachable": 23, "spots": 36 }, "1000": { "reachable": 295, "spots": 37, "transfer": 7 }, "2000": { "reachable": 419, "spots": 12, "transfer": 11 } }
+          "budgets": { "400": { "reachable": 23, "spots": 35 }, "1000": { "reachable": 295, "spots": 39, "transfer": 7 }, "2000": { "reachable": 419, "spots": 12, "transfer": 11 } }
         },
         {
           "display_name": "新高岡駅",
           "note": "北陸新幹線の駅",
-          "budgets": { "400": { "reachable": 12, "spots": 32 }, "1000": { "reachable": 131, "spots": 35, "transfer": 23 }, "2000": { "reachable": 514, "spots": 48, "transfer": 48 } }
+          "budgets": { "400": { "reachable": 12, "spots": 31 }, "1000": { "reachable": 131, "spots": 35, "transfer": 23 }, "2000": { "reachable": 514, "spots": 48, "transfer": 48 } }
         },
         {
           "display_name": "魚津駅前",
           "note": "魚津市民バス（均一運賃）のみに接続する停留所。往復¥1000・¥2000の帯（¥801〜¥1000／¥1801〜¥2000）のspots=0は、この駅から行ける範囲のスポットの最安運賃がすべて¥800以下に収まっているため（意図的。バグではない）",
-          "budgets": { "400": { "reachable": 212, "spots": 40 }, "1000": { "reachable": 236, "spots": 0 }, "2000": { "reachable": 236, "spots": 0 } }
+          "budgets": { "400": { "reachable": 212, "spots": 41 }, "1000": { "reachable": 236, "spots": 0 }, "2000": { "reachable": 236, "spots": 0 } }
         },
         {
           "display_name": "黒部駅前",
