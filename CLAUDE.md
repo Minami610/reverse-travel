@@ -126,9 +126,13 @@ scripts/
     generate-spots.json.js          【無効化済み】旧方式。generateSpots()は呼ぶと即エラー。
                                     Wikipedia本文取得等のユーティリティは新パイプラインが流用
     refresh-and-normalize-spots.js  【無効化済み】旧方式のキャッシュ再正規化。呼ぶと即エラー
-    generate-municipality-table.js  市区町村→都道府県の対応表（municipality-to-pref.json）と、
+    generate-municipality-table.js  市区町村→都道府県の対応表（municipality-to-pref.json）を生成。
                                     駅の表示名曖昧さ回避用の市区町村代表座標
-                                    （municipality-locations.json）を生成
+                                    （municipality-locations.json）も以前はここで生成していたが、
+                                    2026-10-02に国土数値情報N03ポリゴン判定
+                                    （municipality-polygon-lookup.js）へ置き換えて廃止した
+    municipality-polygon-lookup.js  国土数値情報「行政区域データ」(N03)による市区町村ポリゴン判定
+                                    （駅の表示名曖昧さ回避用。data/raw-gis/n03/にビルド時キャッシュ）
 assets/js/  main.js / gtfs-loader.js / fare-calculator.js / spot-finder.js /
             route-formatter.js / route-duration.js / map-view.js / layout-controller.js
 config/     target-operators.json / spot-config.json / spot-ranking-config.json /
@@ -201,7 +205,11 @@ generate-spots-by-region.jsを手動実行したときだけ有効で、旧経�
 - **駅は「駅名」文字列ではなく安定した駅ID（station_id）をキーにする**（`stations.json`・`reachable`・`route-details.json`・出発駅候補リストすべて）。**2026-09-29実装**（`parse-and-transform.js`の`buildStationClusters()`）。同名かつ1000m以内の停留所だけを1駅とみなし、1000mを超えて離れていれば別駅として分裂させる。station_idはクラスタ内で辞書順最小のstop_id、表示名（display_name）は別に持つ。
   **1000mという閾値の根拠**：香川で現在1つの駅として扱われているグループの最大の広がりは春日川駅（鉄道3停留所＋バス2停留所、最大821.6m）。この値を下回ると香川の既存駅が分裂するため、安全マージンを見て1000mにした（実測：この閾値で香川362駅名中、分裂は0件）。
   **クラスタの直径にも同じ1000mの上限を課す**（`splitClusterByDiameter()`）。単連結（single-link）でクラスタリングすると「A-Bが900m、B-Cが900m」の連鎖で1.8km離れたAとCが同じ駅になりうる（同名の停留所が多い都市部で起きうる）ため、クラスタの直径（全ペア間の最大距離）が閾値を超えていたら直径の両端点を種に最近傍分割で再帰的に分割する。分割が起きたクラスタ数・全クラスタの直径上位10件は毎回のビルドでログに出す。
-  **同名の駅が複数クラスタに分裂した場合の表示名は、最寄りの市区町村名で曖昧さ回避する**（例：「西町（小松市）」、`generate-municipality-table.js`が生成する`municipality-locations.json`の市区町村代表座標への最近傍探索。市区町村境界ポリゴンは持たないため近似）。市区町村名まで同じで区別できない場合のみ番号を付ける。`municipality-locations.json`が無い場合は番号にフォールバックする。
+  **同名の駅が複数クラスタに分裂した場合の表示名は、最寄りの市区町村名で曖昧さ回避する**（例：「西町（小松市）」）。
+  **2026-10-02実装**：当初は`generate-municipality-table.js`が生成する`municipality-locations.json`（Wikidataの市区町村代表座標）への最近傍探索だったが、
+  代表点が市域の広い自治体（富山市等）で市街地から離れた場所にあり誤判定した実例（富山市中心部が隣の舟橋村に誤判定）が出たため、
+  国土数値情報N03の行政区域ポリゴンに実際に入っているかで判定する方式（`municipality-polygon-lookup.js`の`buildMunicipalityPolygonFinder()`、`parse-and-transform.js`が呼ぶ）に置き換えた。
+  `municipality-locations.json`はもう生成されない。市区町村名まで同じで区別できない場合のみ番号を付ける。
   **このクラスタリングが解決する範囲は同一都道府県（＝同一ビルド）内の同名衝突のみ。** station_idがstop_id由来になった結果、遠く離れた同名駅が誤って合体することはもう起きない（旧・駅名文字列キー時代の問題は解消済み）。**段階1で実際に注意が必要なのは逆の問題**：県境にある物理的に同じ駅が、県ごとに別ビルドで作られると別々のstation_idになり、乗換が失われること（例：富山側フィードの加越能バス「金沢駅西口」と、石川側フィードの金沢駅周辺の停留所は、別々の県ビルドでは別IDになる）。
   **設計方針（段階1で実装、未着手）**：駅クラスタリングは県ごとの独立ビルド内で完結させる（現状のまま）。県境の同一駅は、全県ビルド後に別途「県またぎ駅マージ」ステップ（`mergeIndexedSpotRegions()`のQID版と同じ考え方）で、隣接県の`stations.json`同士を突き合わせ、同名かつ近接（同じ1000m級の閾値を想定）のペアを検出してエイリアス表（`{県A側station_id: 正規station_id, 県B側station_id: 正規station_id}`）を生成し、フロントエンドの読み込み時にこれを適用する。県単位ビルドの独立性・再開可能性（CLAUDE.md「作業の進め方」参照）を保つため、各県の`buildStationClusters()`自体には手を入れない。
   なお、空文字列の駅名（出入口・改札等、乗車できないGTFS要素）はクラスタリング対象から除外した結果、香川の駅数は363→362になった（従来は空文字列がひとまとまりの偽駅として扱われていた）。
