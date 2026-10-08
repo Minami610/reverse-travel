@@ -27,6 +27,25 @@ function formatBandLabel(budget) {
   return `¥${budget - BAND_WIDTH + 1}〜¥${budget}`;
 }
 
+// ☆（マイリスト）・共有ボタンの線画アイコン（2026-10-09、文字"★"/"☆"/"⇧"から
+// SVGに変更。Minamiさんの指示：カード・詳細画面・マイリストの3か所とも揃える）。
+// 色はアイコンを包む<span>自身のcolorで決める（fill="currentColor"がボタンの
+// 文字色を継承して意図しない色になるのを避けるため、.icon-starクラス側で
+// color を明示的に指定し直している。CSS側を参照）。
+const STAR_OUTLINE_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+const STAR_FILLED_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+const SHARE_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v13"/><path d="m8 6 4-4 4 4"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-7"/></svg>';
+
+/** ☆アイコンのspan（未保存=線だけ、保存済み=黄色の塗り）を組み立てる */
+function starIconHtml(active) {
+  return `<span class="icon icon-star${active ? ' icon-star-filled' : ''}">${active ? STAR_FILLED_SVG : STAR_OUTLINE_SVG}</span>`;
+}
+
+/** 共有アイコンのspanを組み立てる（状態による見た目の変化なし） */
+function shareIconHtml() {
+  return `<span class="icon icon-share">${SHARE_SVG}</span>`;
+}
+
 class ReverseTravel {
   constructor() {
     this.loader = new GTFSLoader();
@@ -209,7 +228,7 @@ class ReverseTravel {
         const spot = this.currentSpots.find((s) => s.id === favBtn.getAttribute('data-spot-id'));
         if (spot) {
           const saved = this.toggleFavoriteForSpot(spot);
-          this.showToast(saved ? 'マイリストに保存しました' : 'マイリストから削除しました');
+          this.showToast(saved ? 'マイリストに保存しました' : 'マイリストから外しました');
         }
         return;
       }
@@ -590,9 +609,11 @@ class ReverseTravel {
 
   /**
    * 画面上の☆ボタンの見た目（押下状態）を、localStorageの現在値に合わせて一括更新する。
-   * 詳細画面のボタン（.detail-favorite-btn）はアイコン＋文言（「★ マイリストに保存/
-   * から削除」）を表示するため、ここでテキストも更新する。カード側はaria-labelのみ
-   * （見た目は★アイコンの色だけで表す）。
+   * 「削除」という語は、マイリスト画面の×ボタンだけに使う（Minamiさんの指示）ため、
+   * ここではaria-label・トースト・詳細画面の文言のいずれも「外す」を使う。
+   * 詳細画面のボタン（.detail-favorite-btn）はアイコン＋文言（「マイリストに保存」/
+   * 「保存済み」）を表示するため、ここでアイコン・文言の両方を更新する。
+   * カード側はアイコンとaria-labelのみ更新する（文言表示が無いため）。
    */
   refreshFavoriteButtons() {
     document.querySelectorAll('.favorite-btn').forEach((btn) => {
@@ -600,11 +621,16 @@ class ReverseTravel {
       const active = isFavorite(qid);
       btn.classList.toggle('favorite-btn-active', active);
       btn.setAttribute('aria-pressed', String(active));
-      const label = active ? 'マイリストから削除' : 'マイリストに保存';
-      if (btn.classList.contains('detail-favorite-btn')) {
-        btn.textContent = `★ ${label}`;
-      } else {
-        btn.setAttribute('aria-label', label);
+      btn.setAttribute('aria-label', active ? 'マイリストから外す' : 'マイリストに保存');
+
+      const iconEl = btn.querySelector('.icon-star');
+      if (iconEl) {
+        iconEl.classList.toggle('icon-star-filled', active);
+        iconEl.innerHTML = active ? STAR_FILLED_SVG : STAR_OUTLINE_SVG;
+      }
+      const labelEl = btn.querySelector('.btn-label');
+      if (labelEl) {
+        labelEl.textContent = active ? '保存済み' : 'マイリストに保存';
       }
     });
   }
@@ -642,10 +668,22 @@ class ReverseTravel {
     else if (result === 'failed') this.showToast('共有できませんでした');
   }
 
+  /**
+   * 共有結果等の軽量な通知を表示する。
+   * 【2026-10-09修正】固定のbottom値（1rem）だと、フッター（出典・免責表示）の
+   * 実際の高さがスマホ幅の折り返し等で変わったときに重なってしまっていた
+   * （Minamiさんがスクリーンショットで発見）。フッターの実際の高さを毎回
+   * 測り直し、その上に出す（フッターが見つからない場合は安全マージンのみ）。
+   */
   showToast(message) {
     const toast = this.elements.shareToast;
     if (!toast) return;
     toast.textContent = message;
+
+    const footerEl = document.getElementById('app-footer');
+    const footerHeight = footerEl ? footerEl.getBoundingClientRect().height : 0;
+    toast.style.bottom = `calc(${footerHeight}px + 0.75rem + env(safe-area-inset-bottom, 0px))`;
+
     toast.hidden = false;
     clearTimeout(this._toastTimer);
     this._toastTimer = setTimeout(() => {
@@ -1111,7 +1149,7 @@ class ReverseTravel {
     const actionsHtml = shared
       ? ''
       : `
-        <button type="button" class="mylist-share-btn" data-action="mylist-share" data-index="${index}" aria-label="共有">⇧</button>
+        <button type="button" class="mylist-share-btn" data-action="mylist-share" data-index="${index}" aria-label="共有">${shareIconHtml()}</button>
         <button type="button" class="mylist-remove-btn" data-action="mylist-remove" data-index="${index}" aria-label="マイリストから削除">×</button>
       `;
 
@@ -1297,8 +1335,8 @@ class ReverseTravel {
         return `
         <div class="spot-card" data-spot-id="${spot.id}">
           <div class="spot-card-actions">
-            <button type="button" class="favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}" aria-label="${fav ? 'マイリストから削除' : 'マイリストに保存'}">★</button>
-            <button type="button" class="share-btn" data-spot-id="${spot.id}" aria-label="共有">⇧</button>
+            <button type="button" class="favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}" aria-label="${fav ? 'マイリストから外す' : 'マイリストに保存'}">${starIconHtml(fav)}</button>
+            <button type="button" class="share-btn" data-spot-id="${spot.id}" aria-label="共有">${shareIconHtml()}</button>
           </div>
           ${spot.image
             ? `<img src="${spot.image}" alt="${spot.name}" class="spot-image">`
@@ -1410,8 +1448,8 @@ class ReverseTravel {
     const html = `
       <h2>${spot.name}</h2>
       <div class="detail-actions">
-        <button type="button" class="favorite-btn detail-favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}">★ ${fav ? 'マイリストから削除' : 'マイリストに保存'}</button>
-        <button type="button" class="share-btn detail-share-btn" data-spot-id="${spot.id}">⇧ 共有</button>
+        <button type="button" class="favorite-btn detail-favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}" aria-label="${fav ? 'マイリストから外す' : 'マイリストに保存'}">${starIconHtml(fav)}<span class="btn-label">${fav ? '保存済み' : 'マイリストに保存'}</span></button>
+        <button type="button" class="share-btn detail-share-btn" data-spot-id="${spot.id}" aria-label="共有">${shareIconHtml()}<span class="btn-label">共有</span></button>
       </div>
       ${spot.image
         ? `<img src="${spot.image}" alt="${spot.name}" class="detail-image">`
@@ -1431,7 +1469,7 @@ class ReverseTravel {
       // toggleFavoriteForSpot()内でrefreshFavoriteButtons()が呼ばれ、
       // このボタン自体の見た目（押下状態・文言）も更新される。
       const saved = this.toggleFavoriteForSpot(spot);
-      this.showToast(saved ? 'マイリストに保存しました' : 'マイリストから削除しました');
+      this.showToast(saved ? 'マイリストに保存しました' : 'マイリストから外しました');
     });
     this.elements.detailContent.querySelector('.detail-share-btn')?.addEventListener('click', () => {
       this.shareSpot(spot);

@@ -1479,24 +1479,29 @@ async function checkFavoriteCardToggle(html) {
   );
 
   // 詳細画面を開き、同じスポットの☆が保存済み状態で表示されるか
+  // 【2026-10-09修正】Minamiさんの指示で文言・aria-labelを変更：「削除」という語は
+  // マイリスト画面の×ボタンだけに使うため、詳細画面は「保存済み」「マイリストに保存」
+  // （aria-labelは「マイリストから外す」）を使う。
   firstCard.dispatchEvent(new window.Event('click', { bubbles: true }));
   const detailFavBtn = doc.querySelector('.detail-favorite-btn');
   const detailShowsActive = !!detailFavBtn?.classList.contains('favorite-btn-active') &&
-    detailFavBtn?.textContent === '★ マイリストから削除';
+    detailFavBtn?.textContent.trim() === '保存済み' &&
+    detailFavBtn?.getAttribute('aria-label') === 'マイリストから外す';
   console.log(
     detailShowsActive
-      ? '✅ 詳細画面でも同じスポットが「マイリストから削除」（保存済み）として表示されます'
-      : `❌ 詳細画面の☆ボタンに保存状態が反映されていません（文言="${detailFavBtn?.textContent}"）`
+      ? '✅ 詳細画面でも同じスポットが「保存済み」として表示されます（aria-labelは「マイリストから外す」）'
+      : `❌ 詳細画面の☆ボタンに保存状態が反映されていません（文言="${detailFavBtn?.textContent.trim()}", aria-label="${detailFavBtn?.getAttribute('aria-label')}"）`
   );
 
   // 詳細画面の☆を押して解除
   detailFavBtn.dispatchEvent(new window.Event('click', { bubbles: true }));
   const countAfterRemove = doc.getElementById('mylist-count')?.textContent;
-  const detailShowsInactive = detailFavBtn.textContent === '★ マイリストに保存';
+  const detailShowsInactive = detailFavBtn.textContent.trim() === 'マイリストに保存' &&
+    detailFavBtn.getAttribute('aria-label') === 'マイリストに保存';
   console.log(
     countAfterRemove === '0' && detailShowsInactive
       ? '✅ 詳細画面から解除すると、件数が0に戻り文言も「マイリストに保存」に戻ります'
-      : `❌ 詳細画面からの解除が反映されません（count=${countAfterRemove}, 文言="${detailFavBtn.textContent}"）`
+      : `❌ 詳細画面からの解除が反映されません（count=${countAfterRemove}, 文言="${detailFavBtn.textContent.trim()}"）`
   );
 
   const allOk = activeAfterFirstClick && countAfterFirstClick === '1' && detailShowsActive &&

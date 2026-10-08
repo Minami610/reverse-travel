@@ -9,6 +9,7 @@
   --color-main-light: #EEF7DC;     /* 薄黄緑 */
   --color-accent: #FF6B2B;         /* オレンジ */
   --color-accent-deep: #CC4A0A;    /* 深オレンジ */
+  --color-star: #FFC107;           /* 黄色（☆保存済みの塗り色） */
   --color-text: #1F2937;           /* ダークグレー */
   --color-text-sub: #6B7280;       /* グレー */
   --color-bg: #F6FAF0;             /* 薄緑白 */
@@ -722,7 +723,6 @@ header p {
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.92);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
-  font-size: 1.2rem;
   color: var(--color-text-sub);
   cursor: pointer;
   transition: color 0.15s, transform 0.1s;
@@ -733,8 +733,27 @@ header p {
   transform: scale(0.92);
 }
 
-.favorite-btn-active {
-  color: var(--color-accent);
+/* ☆・共有の線画アイコン共通スタイル。fill="currentColor"がボタン自身の
+   color（文字色）をそのまま継承すると、ボタンの背景色を変えたときに
+   アイコンの色まで意図せず変わってしまうため、アイコンを包むspan自身に
+   colorを指定し直して切り離す。 */
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-star {
+  color: var(--color-text-sub);
+}
+
+/* 保存済み＝黄色の塗り（Minamiさんの指示） */
+.icon-star-filled {
+  color: var(--color-star);
+}
+
+.icon-share {
+  color: var(--color-text-sub);
 }
 
 /* ホバーの浮き上がり効果はbox-shadow、色分けはoutlineと別プロパティに
@@ -867,14 +886,28 @@ header p {
   padding: 0.5rem 1rem;
   font-size: 0.9rem;
   font-weight: 600;
+  gap: 0.4rem;
   color: var(--color-text);
   background: var(--color-main-light);
+  border: 1px solid transparent;
   box-shadow: none;
 }
 
-.detail-actions .favorite-btn.favorite-btn-active {
+/* 未保存＝目立つオレンジ塗り（保存を促すCTA）。2026-10-09、Minamiさんの指示で
+   保存済み/未保存の強調を入れ替えた（以前は保存済みをオレンジにしていたが、
+   「まだ押していない」方を目立たせる方が自然なため）。 */
+.detail-actions .favorite-btn:not(.favorite-btn-active) {
   background: var(--color-accent);
   color: white;
+}
+
+/* 保存済み＝白地に枠線（既にやったことを示す、控えめな見た目）。
+   ☆アイコン自体は.icon-star-filledが独立して黄色を保つ（ボタンの文字色とは
+   別のcolorプロパティのため、ここでボタン文字色を変えても影響しない）。 */
+.detail-actions .favorite-btn.favorite-btn-active {
+  background: white;
+  color: var(--color-text);
+  border-color: var(--color-border);
 }
 
 #back-btn {
@@ -1201,6 +1234,14 @@ header p {
     padding: 0.5rem 0.75rem;
   }
 
+  /* 2026-10-09、Minamiさんがスマホ幅のスクリーンショットで発見：説明文が
+     「予…」のように省略記号で切れていた。幅を削り合う形（text-overflow:
+     ellipsis）では、タイトル・マイリストボタンを両方は入りきらないため、
+     スマホ幅では説明文自体を表示しない（タイトルとマイリストボタンだけ残す）。 */
+  header p {
+    display: none;
+  }
+
   .form-row {
     flex-direction: column;
     gap: 0.5rem;
@@ -1364,16 +1405,22 @@ header p {
 /* 共有結果（コピーしました等）の軽量な通知。画面下部中央に固定表示し、
    showToast()が数秒後に自動でhiddenへ戻す。フッター（#app-footer）より
    手前に重ねるため、z-indexをモーダルと同程度にする。 */
+/* 2026-10-09修正：1行に収まる幅にする（最大幅=画面幅-32px、折り返さない）。
+   bottomの値はJS側（showToast()）がフッターの実高さを測って毎回上書きする
+   （フッターと重ならないようにするため）。 */
 .share-toast {
   position: fixed;
   left: 50%;
-  bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
   transform: translateX(-50%);
+  max-width: calc(100vw - 32px);
   background: rgba(31, 41, 55, 0.92);
   color: white;
   padding: 0.6rem 1.2rem;
   border-radius: 999px;
   font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   z-index: 2100;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
 }

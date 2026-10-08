@@ -151,6 +151,41 @@ async function checkDepartureBudgetGap(page, viewportLabel) {
   }
 }
 
+/**
+ * 【2026-10-09追加】ヘッダー内の文字が省略記号（text-overflow:ellipsis）で
+ * 切れていないかを確認する。Minamiさんがスマホ幅のスクリーンショットで発見：
+ * タイトル横の説明文が「予…」で切れていた。要素のscrollWidthがclientWidthを
+ * 超えていれば、内容が収まりきらず省略されている（＝切れている）とみなす。
+ * header自体だけでなく、header配下の可視要素すべてを対象にする（見出し・
+ * 説明文・マイリストボタンの文言のいずれが切れても検出できるようにするため）。
+ */
+async function checkHeaderNotTruncated(page, viewportLabel) {
+  const truncated = await page.evaluate(() => {
+    const header = document.querySelector('header');
+    if (!header) return null;
+    const results = [];
+    const walk = (el) => {
+      const style = getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') return;
+      if (el.scrollWidth > el.clientWidth + 1 && style.overflow !== 'visible') {
+        results.push({ tag: el.tagName, id: el.id, cls: el.className, text: el.textContent.trim().slice(0, 30) });
+      }
+      for (const child of el.children) walk(child);
+    };
+    walk(header);
+    return results;
+  });
+  if (truncated === null) {
+    record(`[${viewportLabel}] ヘッダー: headerが見つかる`, false);
+    return;
+  }
+  record(
+    `[${viewportLabel}] ヘッダー内の文字が省略記号で切れていない`,
+    truncated.length === 0,
+    truncated.length > 0 ? truncated.map((t) => `<${t.tag}${t.id ? '#' + t.id : ''}>"${t.text}"`).join(', ') : undefined
+  );
+}
+
 async function captureNoResultsScreen(page, viewportLabel) {
   await searchAt(page, 'ＪＲ栗林駅', 300);
   const screenshotPath = path.join(screenshotDir, `no-results-${viewportLabel}.png`);
@@ -405,6 +440,7 @@ async function main() {
       }, { timeout: 15000 });
 
       await checkDepartureBudgetGap(page, label);
+      await checkHeaderNotTruncated(page, label);
       savedPaths.push(await captureNoResultsScreen(page, label));
       savedPaths.push(await captureSuggestionsScreen(page, label));
       savedPaths.push(await captureResultsListScreen(page, label));
