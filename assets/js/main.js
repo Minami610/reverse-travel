@@ -7,6 +7,7 @@ import { GTFSLoader } from './gtfs-loader.js';
 import { FareCalculator } from './fare-calculator.js';
 import { SpotFinder } from './spot-finder.js';
 import { RouteFormatter } from './route-formatter.js';
+import { estimateTripFrequency, formatDayLabel, operatorLabelWord } from './route-duration.js';
 import { MapView } from './map-view.js';
 import { LayoutController } from './layout-controller.js';
 import {
@@ -35,6 +36,13 @@ function formatBandLabel(budget) {
 const STAR_OUTLINE_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
 const STAR_FILLED_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
 const SHARE_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v13"/><path d="m8 6 4-4 4 4"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-7"/></svg>';
+// 応援マーク（塗りのハート）。押せるボタンに見えないよう、cursor:defaultなどは
+// CSS側（.support-badge）で担保する（2026-10-10、2本目「便の少ない路線を応援」）。
+const HEART_FILLED_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 21s-6.7-4.3-9.3-8.1C.8 10.1 1.4 6.6 4.3 5 6.4 3.8 9 4.3 12 7.1 15 4.3 17.6 3.8 19.7 5c2.9 1.6 3.5 5.1 1.6 7.9C18.7 16.7 12 21 12 21z"/></svg>';
+// 応援マークの線（1日何便以下で付けるか）。config/support-badge.jsonから読む
+// （フロントにはビルド時にdocs/data/national/support-badge.jsonとしてコピーされる）。
+// 取得前・取得失敗時のフォールバック値は、config/support-badge.jsonの初期値と揃えてある。
+const DEFAULT_SUPPORT_BADGE_MAX_TRIPS = 3;
 
 /** ☆アイコンのspan（未保存=線だけ、保存済み=黄色の塗り）を組み立てる */
 function starIconHtml(active) {
@@ -644,12 +652,16 @@ class ReverseTravel {
       stationId: this.currentDepartureStationId,
       departureName: this.currentDepartureStationName,
     });
+    const freqInfo = this.buildFrequencyDisplay(spot);
+    const frequencyText = freqInfo ? `${freqInfo.dayLabel}1日${freqInfo.tripCount}便の${freqInfo.word}です。` : null;
     const text = buildSpotShareText(
       spot.name,
       this.currentDepartureStationName,
       spot.source_round_trip_fare,
       typeof spot.source_ride_duration_min === 'number' ? spot.source_ride_duration_min : null,
-      url
+      url,
+      spot.municipality,
+      frequencyText
     );
     const result = await shareOrCopy(text, url);
     if (result === 'copied') this.showToast('コピーしました');
@@ -1314,6 +1326,71 @@ class ReverseTravel {
   }
 
   /**
+   * config/support-badge.jsonから読んだ応援マークの閾値（1日◯便以下）。
+   * 取得前・取得失敗時はDEFAULT_SUPPORT_BADGE_MAX_TRIPSにフォールバックする
+   * （spot-finder.jsのsitelinks閾値フォールバックと同じ考え方）。
+   */
+  getSupportBadgeMaxTrips() {
+    const value = window.EMBEDDED_SUPPORT_BADGE_CONFIG?.max_trips_per_day;
+    return typeof value === 'number' ? value : DEFAULT_SUPPORT_BADGE_MAX_TRIPS;
+  }
+
+  /**
+   * スポットのアクセス区間の便数情報を解決する（route-details.jsonに
+   * ビルド時に埋め込み済みの値を引くだけ）。spotのsource_*フィールドから
+   * fare-calculator.jsのcalculateReachable()が返す「駅」相当の形へ組み立て直す。
+   * @returns {{tripCount:number, dayCode:number, demandCount:number, routeId:string}|null}
+   */
+  getSpotFrequency(spot) {
+    if (!this.data?.routeDetails || !this.currentDepartureStationId) return null;
+    const stationLike = {
+      reachBy: spot.source_reach_by,
+      transferAt: spot.source_transfer_at,
+      viaOperator: spot.source_via_operator,
+      legOperators: spot.source_leg_operators,
+      station_id: spot.source_station_id,
+    };
+    return estimateTripFrequency(this.data.routeDetails, this.currentDepartureStationId, stationLike);
+  }
+
+  /**
+   * カード・詳細画面・共有文で共通して使う、便数まわりの表示情報一式を組み立てる。
+   * 便数が解決できない場合（経路未確定等）はnullを返し、呼び出し側は便数関連の
+   * 表示を一切出さない（無言で0件等の誤った数字を出さないため）。
+   */
+  buildFrequencyDisplay(spot) {
+    const freq = this.getSpotFrequency(spot);
+    if (!freq) return null;
+    const maxTrips = this.getSupportBadgeMaxTrips();
+    const dayLabel = formatDayLabel(freq.dayCode);
+    const word = operatorLabelWord(this.data.routeInfo, freq.routeId);
+    return {
+      tripCount: freq.tripCount,
+      dayLabel,
+      word,
+      isBadgeEligible: freq.tripCount <= maxTrips,
+      hasDemand: freq.demandCount > 0,
+    };
+  }
+
+  /** カードの応援マーク＋説明枠（バッジ対象のときだけ） */
+  renderSupportBadge(info) {
+    if (!info || !info.isBadgeEligible) return '';
+    return `
+      <div class="support-badge" aria-hidden="false">
+        <span class="support-badge-heart">${HEART_FILLED_SVG}この路線を応援</span>
+      </div>
+      <p class="support-badge-note">${info.dayLabel}1日${info.tripCount}便の${info.word}で行けます。あなたが乗ることが、この路線を支える力になります。${info.hasDemand ? '要予約の便があります。' : ''}</p>
+    `;
+  }
+
+  /** バッジ対象でないカードにも小さく出す便数（例："平日1日12便"） */
+  renderSmallFrequencyNote(info) {
+    if (!info || info.isBadgeEligible) return '';
+    return `<p class="spot-frequency-note">${info.dayLabel}1日${info.tripCount}便${info.hasDemand ? '・要予約の便あり' : ''}</p>`;
+  }
+
+  /**
    * 一覧部分のみを再描画する。並び替え時は表示対象スポットの集合が
    * 変わらないため地図は呼び出し元で再描画しない。
    * カードのクリック／ホバーは initUI で一覧全体に委譲済みのため、
@@ -1332,8 +1409,9 @@ class ReverseTravel {
     const html = spots
       .map(spot => {
         const fav = isFavorite(spot.id);
+        const freqInfo = this.buildFrequencyDisplay(spot);
         return `
-        <div class="spot-card" data-spot-id="${spot.id}">
+        <div class="spot-card${freqInfo?.isBadgeEligible ? ' spot-card-supported' : ''}" data-spot-id="${spot.id}">
           <div class="spot-card-actions">
             <button type="button" class="favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}" aria-label="${fav ? 'マイリストから外す' : 'マイリストに保存'}">${starIconHtml(fav)}</button>
             <button type="button" class="share-btn" data-spot-id="${spot.id}" aria-label="共有">${shareIconHtml()}</button>
@@ -1344,6 +1422,8 @@ class ReverseTravel {
           <h3>${spot.name}</h3>
           <p class="spot-description">${this.formatDescription(spot)}</p>
           <p class="spot-summary">${this.formatSpotSummary(spot)}</p>
+          ${this.renderSupportBadge(freqInfo)}
+          ${this.renderSmallFrequencyNote(freqInfo)}
           <button class="detail-btn" data-spot-id="${spot.id}">詳細を見る</button>
         </div>
       `;

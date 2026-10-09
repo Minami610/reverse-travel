@@ -165,12 +165,20 @@ export function parseListParam(value) {
 }
 
 /**
- * 共有テキストを組み立てる（2026-10-08時点の1本目では便数・市町村名は含めない。
- * Minamiさんの判断：2本目でデータを作る段階からまとめて追加する）。
+ * 共有テキストを組み立てる。
+ * 「スポット名（市町村）／出発地からバスで往復¥X、約Y分。／平日1日◯便の路線です。／URL」
+ * （2026-10-10、2本目で市町村名・便数を追加。市町村が無いときは括弧ごと省く。
+ * 便数が解決できない場合はfrequencyTextをnull/undefinedのまま渡す＝その行ごと省く。
+ * 呼び出し側の都合でmunicipality/frequencyTextを渡せない場合も、両方省略すれば
+ * 1本目までと同じ文面になる＝後方互換）。
+ * @param {string|null} [municipality]
+ * @param {string|null} [frequencyText] - 例: "平日1日4便の路線です。"（main.jsのbuildFrequencyDisplay由来）
  */
-export function buildSpotShareText(spotName, departureName, roundTripFare, durationMin, url) {
+export function buildSpotShareText(spotName, departureName, roundTripFare, durationMin, url, municipality, frequencyText) {
   const durationPart = typeof durationMin === 'number' ? `、約${durationMin}分` : '';
-  return `${spotName}／${departureName}からバスで往復¥${roundTripFare}${durationPart}。／${url}`;
+  const namePart = municipality ? `${spotName}（${municipality}）` : spotName;
+  const freqPart = frequencyText ? `／${frequencyText}` : '';
+  return `${namePart}／${departureName}からバスで往復¥${roundTripFare}${durationPart}。${freqPart}／${url}`;
 }
 
 /**

@@ -74,10 +74,10 @@ function decodeRouteDetails(indexed) {
     for (const [destId, byOperator] of Object.entries(destMap)) {
       decoded[originId][destId] = {};
       for (const [operatorId, entry] of Object.entries(byOperator)) {
-        // 2026-10-06: wait_minを削除した新形式。直行は長さ2、乗換1回は長さ5（旧: 3/7）。
-        decoded[originId][destId][operatorId] = entry.length === 2
-          ? [routeIndex[entry[0]], entry[1]]
-          : [entry[0], routeIndex[entry[1]], entry[2], routeIndex[entry[3]], entry[4]];
+        // 2026-10-10: 便数情報が末尾3要素として常に付く形式。直行は長さ5、乗換1回は長さ8（旧: 2/5）。
+        decoded[originId][destId][operatorId] = entry.length === 5
+          ? [routeIndex[entry[0]], entry[1], entry[2], entry[3], entry[4]]
+          : [entry[0], routeIndex[entry[1]], entry[2], routeIndex[entry[3]], entry[4], entry[5], entry[6], entry[7]];
       }
     }
   }
@@ -115,12 +115,16 @@ export class GTFSLoader {
    * 出発駅として選べる時点で既に公開中の県に絞られている。
    */
   async loadStationIndex() {
-    const [stationIndex, adjacency, publishedPrefectures, rankingConfig] = await Promise.all([
+    const [stationIndex, adjacency, publishedPrefectures, rankingConfig, supportBadgeConfig] = await Promise.all([
       this.fetchJson('data/national/station-index.json'),
       this.fetchJson('data/national/prefecture-adjacency.json'),
       this.fetchJson('data/national/published-prefectures.json'),
       this.fetchJson('data/national/spot-ranking-config.json').catch((error) => {
         console.warn(`⚠️ スポットランキング設定の取得に失敗しました（${error.message}）。デフォルト値を使用します`);
+        return null;
+      }),
+      this.fetchJson('data/national/support-badge.json').catch((error) => {
+        console.warn(`⚠️ 応援マーク設定の取得に失敗しました（${error.message}）。デフォルト値を使用します`);
         return null;
       }),
     ]);
@@ -129,6 +133,9 @@ export class GTFSLoader {
     this.publishedPrefectures = publishedPrefectures;
     if (rankingConfig) {
       window.EMBEDDED_SPOT_RANKING_CONFIG = rankingConfig;
+    }
+    if (supportBadgeConfig) {
+      window.EMBEDDED_SUPPORT_BADGE_CONFIG = supportBadgeConfig;
     }
     console.log(`✅ 駅一覧をロード（${stationIndex.length}駅、公開中${publishedPrefectures.length}都道府県分）`);
     return { stationIndex, adjacency, publishedPrefectures };

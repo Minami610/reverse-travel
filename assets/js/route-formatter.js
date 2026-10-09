@@ -22,7 +22,7 @@
  * コンストラクタの4番目の引数として追加）。
  */
 
-import { parseRouteEntry, routeEntryMinutes, lookupRouteEntry } from './route-duration.js';
+import { parseRouteEntry, routeEntryMinutes, lookupRouteEntry, formatDayLabel } from './route-duration.js';
 
 /** 2点間の距離をメートルで返す（Haversine公式） */
 function haversineMeters(lat1, lon1, lat2, lon2) {
@@ -137,18 +137,22 @@ export class RouteFormatter {
     }
 
     if (parsed.type === 'direct') {
-      return `<div class="route-info">${this.renderLegLine(parsed.route_id, departureName, destName, parsed.duration_min, fare)}${roundTripNote}</div>`;
+      return `<div class="route-info">${this.renderLegLine(parsed.route_id, departureName, destName, parsed.duration_min, fare, this.frequencyOf(parsed))}${roundTripNote}</div>`;
     }
 
     // 運賃表上は「直接到達」だが、実際には同一事業者内で乗換が必要な区間。
     // 運賃はゾーン制の通し運賃のため、区間ごとには分割せず合計を1回だけ表示する。
+    // 便数は区間ごとではなくエントリ単位（2区間のボトルネック）で1つだけ保持しているため、
+    // 同じ値を両方の区間行に表示する（同一事業者内の乗換のため、どちらの区間も
+    // 同じ事業者の便であることに変わりはない）。
     const viaName = this.displayName(parsed.via);
     const totalMinutes = this.totalMinutes(parsed);
+    const freq = this.frequencyOf(parsed);
     return `
       <div class="route-info">
-        ${this.renderLegLine(parsed.legs[0].route_id, departureName, viaName, parsed.legs[0].duration_min, null)}
+        ${this.renderLegLine(parsed.legs[0].route_id, departureName, viaName, parsed.legs[0].duration_min, null, freq)}
         <div class="route-transfer-note">↓ ${viaName}で乗換</div>
-        ${this.renderLegLine(parsed.legs[1].route_id, viaName, destName, parsed.legs[1].duration_min, null)}
+        ${this.renderLegLine(parsed.legs[1].route_id, viaName, destName, parsed.legs[1].duration_min, null, freq)}
         <div class="route-total">合計（片道） ¥${fare}（通し運賃）・約${totalMinutes}分</div>
         <p class="route-disclaimer">※乗り換えの待ち時間は、運行本数から見積もった目安です</p>
         ${roundTripNote}
@@ -209,23 +213,40 @@ export class RouteFormatter {
     if (!parsed) {
       return `<p class="route-unresolved">${originName} → ${destName}（経路情報を確定できませんでした）</p>`;
     }
+    const freq = this.frequencyOf(parsed);
     if (parsed.type === 'direct') {
-      return this.renderLegLine(parsed.route_id, originName, destName, parsed.duration_min, fare);
+      return this.renderLegLine(parsed.route_id, originName, destName, parsed.duration_min, fare, freq);
     }
     const viaName = this.displayName(parsed.via);
     return `
-      ${this.renderLegLine(parsed.legs[0].route_id, originName, viaName, parsed.legs[0].duration_min, null)}
+      ${this.renderLegLine(parsed.legs[0].route_id, originName, viaName, parsed.legs[0].duration_min, null, freq)}
       <div class="route-transfer-note">↓ ${viaName}で乗換</div>
-      ${this.renderLegLine(parsed.legs[1].route_id, viaName, destName, parsed.legs[1].duration_min, fare)}
+      ${this.renderLegLine(parsed.legs[1].route_id, viaName, destName, parsed.legs[1].duration_min, fare, freq)}
     `;
   }
 
-  renderLegLine(routeId, originName, destName, durationMin, fare) {
+  /** parseRouteEntry()の戻り値から便数情報を取り出す（tripCount<0＝未解決はnull扱い） */
+  frequencyOf(parsed) {
+    if (!parsed || parsed.tripCount === undefined || parsed.tripCount < 0) return null;
+    return { tripCount: parsed.tripCount, dayCode: parsed.dayCode, demandCount: parsed.demandCount };
+  }
+
+  /** 便数情報を区間行に添える文言（例："・平日1日4便"、予約制があれば"・要予約"も） */
+  renderFrequencyNote(freq) {
+    if (!freq) return '';
+    const dayLabel = formatDayLabel(freq.dayCode);
+    let text = `${dayLabel}1日${freq.tripCount}便`;
+    if (freq.demandCount > 0) text += '・要予約';
+    return `<span class="route-leg-frequency">${text}</span>`;
+  }
+
+  renderLegLine(routeId, originName, destName, durationMin, fare, frequency) {
     const label = this.routeLabel(routeId);
     const mode = this.routeMode(routeId);
     const icon = mode === 'bus' ? '🚌' : '🚃';
     const farePart = fare !== null && fare !== undefined ? `¥${fare}・` : '';
-    return `<p class="route-leg route-leg-${mode}">${icon} ${label}　${originName} → ${destName}（${farePart}約${durationMin}分）</p>`;
+    const freqNote = this.renderFrequencyNote(frequency);
+    return `<p class="route-leg route-leg-${mode}">${icon} ${label}　${originName} → ${destName}（${farePart}約${durationMin}分）${freqNote ? `<br>${freqNote}` : ''}</p>`;
   }
 
   renderUnresolved(spot) {
