@@ -527,8 +527,10 @@ async function captureReservationScreen(page, viewportLabel) {
 
 /**
  * 「この先へ」セクション（2026-10-10、3本目。feature/kono-sakiブランチ）を確認する。
+ * 【2026-10-10修正反映】デザイン③（横長1行×3件、左56px写真・中央名前+一言・右運賃）、
+ * 運賃表記「往復¥1,234（+¥120 または 追加なし）」、種類別の一言に更新済み。
  * 高松築港・往復¥1000の帯内1件目の詳細画面には、同じ路線の先が無い実データのため
- * 「すぐ近く」3件が表示される（実データで確認済み）。暗い枠・3件・運賃差の表記・
+ * 「すぐ近く」3件が表示される（実データで確認済み）。暗い枠・3件・新運賃表記・
  * カードをクリックすると候補の詳細へ切り替わることを確認する。
  */
 async function captureOnwardSectionScreen(page, viewportLabel) {
@@ -546,6 +548,9 @@ async function captureOnwardSectionScreen(page, viewportLabel) {
   const cardCount = await page.locator('.onward-card').count();
   record(`[${viewportLabel}] この先へ: カードが1〜3件表示されている`, cardCount >= 1 && cardCount <= 3, `${cardCount}件`);
 
+  const fareText = await page.locator('.onward-fare').first().textContent();
+  record(`[${viewportLabel}] この先へ: 運賃が「往復¥...（+¥... または 追加なし）」の形式`, /^往復¥[\d,]+（(追加なし|\+¥[\d,]+)）$/.test(fareText), fareText);
+
   const firstHeading = await page.locator('#detail-content h2').textContent();
   await page.locator('.onward-card').first().click();
   await page.waitForTimeout(200);
@@ -554,6 +559,71 @@ async function captureOnwardSectionScreen(page, viewportLabel) {
 
   await checkNoHorizontalOverflow(page, `[${viewportLabel}] この先へ`);
   await page.click('#back-btn').catch(() => {});
+  await page.click('#back-btn').catch(() => {});
+  return screenshotPath;
+}
+
+/**
+ * 応援マーク（ハート）付きの「この先へ」候補の例（Minami指示8番）。
+ * 富山駅前・往復¥1600・1件目の詳細（伏木万葉大橋）は、実データ確認済みで
+ * 3件とも応援マーク対象（.onward-heart）が付く「すぐ近く」候補になる。
+ */
+async function captureOnwardBadgeScreen(page, viewportLabel) {
+  await searchAt(page, '富山駅前', 1600);
+  await page.locator('.spot-card').first().click();
+  await page.waitForSelector('#detail-content h2', { timeout: 15000 });
+  const heartCount = await page.locator('.onward-card .onward-heart').count();
+  record(`[${viewportLabel}] この先へ: 応援マーク付きの候補がある例が見つかる`, heartCount > 0, `${heartCount}件`);
+  if (heartCount === 0) {
+    await page.click('#back-btn').catch(() => {});
+    return null;
+  }
+
+  const onwardSection = page.locator('.onward-section');
+  const screenshotPath = path.join(screenshotDir, `onward-badge-${viewportLabel}.png`);
+  await screenshotElementSafely(page, onwardSection, screenshotPath, VIEWPORTS[viewportLabel]);
+
+  await checkNoHorizontalOverflow(page, `[${viewportLabel}] この先へ（応援マーク付き）`);
+  await page.click('#back-btn').catch(() => {});
+  return screenshotPath;
+}
+
+/**
+ * 「この先へ」候補を開いて、スマホ本体の戻る操作（history.back()、UIの
+ * 「← 戻る」ボタンには触れない）で1つ前の詳細画面に戻った状態（Minami指示8番）。
+ * popstateでの戻りが実際の画面にも正しく反映されることを目視できる形で残す。
+ */
+async function captureOnwardBackScreen(page, viewportLabel) {
+  await searchAt(page, '富山駅前', 1600);
+  await page.locator('.spot-card').first().click();
+  await page.waitForSelector('#detail-content h2', { timeout: 15000 });
+  const originalHeading = await page.locator('#detail-content h2').textContent();
+
+  const hasOnward = await page.locator('.onward-card').count() > 0;
+  record(`[${viewportLabel}] この先へ: 戻り確認用に候補が1件以上ある`, hasOnward);
+  if (!hasOnward) {
+    await page.click('#back-btn').catch(() => {});
+    return null;
+  }
+
+  await page.locator('.onward-card').first().click();
+  await page.waitForTimeout(200);
+  const candidateHeading = await page.locator('#detail-content h2').textContent();
+
+  await page.goBack(); // スマホ本体の戻る操作を模す（UIボタンのクリックではない）
+  await page.waitForTimeout(200);
+  const backHeading = await page.locator('#detail-content h2').textContent();
+  record(
+    `[${viewportLabel}] この先へ: スマホ本体の戻る操作で候補の1つ前（元のスポット）の詳細に戻る`,
+    backHeading === originalHeading && backHeading !== candidateHeading,
+    `候補="${candidateHeading}" → 戻った後="${backHeading}"（元="${originalHeading}"）`
+  );
+
+  const detailContent = page.locator('#detail-content');
+  const screenshotPath = path.join(screenshotDir, `onward-back-detail-${viewportLabel}.png`);
+  await screenshotElementSafely(page, detailContent, screenshotPath, VIEWPORTS[viewportLabel]);
+
+  await checkNoHorizontalOverflow(page, `[${viewportLabel}] この先へ（戻った後の詳細）`);
   await page.click('#back-btn').catch(() => {});
   return screenshotPath;
 }
@@ -602,6 +672,10 @@ async function main() {
       if (reservationPaths) savedPaths.push(...reservationPaths);
       const onwardPath = await captureOnwardSectionScreen(page, label);
       if (onwardPath) savedPaths.push(onwardPath);
+      const onwardBadgePath = await captureOnwardBadgeScreen(page, label);
+      if (onwardBadgePath) savedPaths.push(onwardBadgePath);
+      const onwardBackPath = await captureOnwardBackScreen(page, label);
+      if (onwardBackPath) savedPaths.push(onwardBackPath);
 
       if (pageErrors.length > 0) {
         record(`[${label}] ページ実行中にエラーが発生していない`, false, pageErrors.join('; '));

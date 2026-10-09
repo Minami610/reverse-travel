@@ -1578,8 +1578,10 @@ async function checkSharedSpotBandBypass(html) {
   );
 
   // 「← 一覧に戻る」で、このスポットを含む一覧に戻れること
+  // （2026-10-10：戻るボタンはhistory.back()→popstateという非同期経路になったため、
+  // 同期チェックではなくwaitForで画面切り替えを待つ必要がある）
   doc.getElementById('back-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
-  const backToList = doc.getElementById('app-layout')?.getAttribute('data-view') === 'results';
+  const backToList = await waitFor(() => doc.getElementById('app-layout')?.getAttribute('data-view') === 'results', 3000);
   const cardIncluded = !!doc.querySelector(`.spot-card[data-spot-id="${qid}"]`);
   console.log(
     backToList && cardIncluded
@@ -2088,6 +2090,126 @@ async function checkOperatorClassification() {
  * 3. 戻るボタンで、一覧にではなく元のスポットの詳細画面に1回で戻る（履歴スタック）
  * 4. その状態でもう一度戻るボタンを押すと、一覧に戻る（履歴が空になった後の通常動作）
  */
+/**
+ * 「この先へ」候補選定ロジック（onward-candidates.js）の合成データ検証（2026-10-10、
+ * Minami指摘の修正指示6番）。実データ・DOMを使わず、関数を直接呼ぶ。
+ * - 循環線・枝分かれで方向を誤判定しないこと（同じ路線の手前の駅を「先」としない。
+ *   1つの停車パターンに無くても別パターンにあれば「先」と判定できること）
+ * - 合計運賃が常に¥2000（ONWARD_MAX_FARE）以下であること（呼び出し元がより大きい
+ *   maxBudgetを渡しても、ここで明示的に上限を適用すること）
+ * - 「すぐ近く」は徒歩20分以内のみであること
+ */
+async function checkOnwardCandidateSynthetic() {
+  console.log('\n=== 「この先へ」候補選定ロジック（onward-candidates.js）の合成データ検証 ===');
+  const { buildOnwardCandidates } = await import(toEngineModuleUrl('assets/js/onward-candidates.js'));
+  let ok = true;
+
+  const mkSpot = (id, stationId, lat, lon, fare = 400) => ({
+    id, name: id, source_station_id: stationId, source_round_trip_fare: fare,
+    source_reach_by: 'direct', source_via_operator: 'op', latitude: lat, longitude: lon,
+  });
+
+  // --- 1a) 枝分かれ（複数の停車パターン）で、別パターンにしかない先の駅を
+  //     誤って除外しないこと（この回の本題：旧方式「代表1本だけ採用」が持っていた
+  //     誤除外リスクの回帰確認）---
+  // 路線'op:BRANCH'に2つの停車パターン：S1→S2→S3（系統1）、S1→S2→S4（系統2、S3を通らない分岐）
+  const routeSequencesBranch = {
+    'op:BRANCH': [
+      ['op:S1', 'op:S2', 'op:S3'],
+      ['op:S1', 'op:S2', 'op:S4'],
+    ],
+  };
+  // routeDetailsは実データ同様、出発駅から「現在地」だけでなく各候補駅への
+  // エントリも持つ（resolveLastLegは候補側の「最後の区間」も検証するため必要）
+  const routeDetailsBranch = {
+    'op:S1': {
+      'op:S2': { op: ['op:BRANCH', 10, 5, 31, 0] },
+      'op:S3': { op: ['op:BRANCH', 15, 5, 31, 0] },
+      'op:S4': { op: ['op:BRANCH', 18, 5, 31, 0] },
+    },
+  };
+  const curBranch = mkSpot('cur-branch', 'op:S2', 34.0, 134.0);
+  const aheadS3 = mkSpot('ahead-s3', 'op:S3', 35.0, 135.0); // 系統1だけに登場
+  const aheadS4 = mkSpot('ahead-s4', 'op:S4', 35.1, 135.1); // 系統2だけに登場
+  const branchCandidates = buildOnwardCandidates(
+    { routeDetails: routeDetailsBranch, routeSequences: routeSequencesBranch, departureStationId: 'op:S1', allSpots: [curBranch, aheadS3, aheadS4], maxBudget: 2000 },
+    curBranch
+  );
+  const branchIds = branchCandidates.map((c) => c.spot.id).sort();
+  const branchOk = ['ahead-s3', 'ahead-s4'].every((id) => branchIds.includes(id)) && branchCandidates.every((c) => c.type === 'same-route');
+  ok = ok && branchOk;
+  console.log(branchOk
+    ? '✅ 枝分かれ（系統違い）でも、別パターンにしかない先の駅を正しく「同じ路線の先」として拾います'
+    : `❌ 枝分かれパターンの統合に失敗（候補=${JSON.stringify(branchIds)}）`);
+
+  // --- 1b) 循環線・双方向路線（同じroute_idを両方向が使う）で、手前の駅を
+  //     「先」と誤判定しないこと（実際に香川・高松築港→大麻山で見つかった実バグの再現：
+  //     手前の「仏生山」が「+¥-740」＝運賃が今より安いのに「先」と表示された）---
+  const routeSequencesBidir = {
+    'rail:LINE': [
+      ['st:TAKAMATSU', 'st:BUSSHOZAN', 'st:OOMASAN'], // 上り
+      ['st:OOMASAN', 'st:BUSSHOZAN', 'st:TAKAMATSU'], // 下り（同じroute_id）
+    ],
+  };
+  const routeDetailsBidir = {
+    'st:TAKAMATSU': {
+      'st:BUSSHOZAN': { rail: ['rail:LINE', 10, 5, 31, 0] },
+      'st:OOMASAN': { rail: ['rail:LINE', 20, 5, 31, 0] },
+    },
+  };
+  const curBidir = { id: 'cur-bidir', name: '仏生山相当', source_station_id: 'st:BUSSHOZAN', source_round_trip_fare: 400, source_reach_by: 'direct', source_via_operator: 'rail', latitude: 34.3, longitude: 134.0 };
+  const aheadOomasan = { id: 'ahead-oomasan', name: '大麻山相当', source_station_id: 'st:OOMASAN', source_round_trip_fare: 740, source_reach_by: 'direct', source_via_operator: 'rail', latitude: 34.4, longitude: 134.1 };
+  const behindTakamatsu = { id: 'behind-takamatsu', name: '高松築港相当', source_station_id: 'st:TAKAMATSU', source_round_trip_fare: 200, source_reach_by: 'direct', source_via_operator: 'rail', latitude: 34.3, longitude: 134.05 };
+  const bidirCandidates = buildOnwardCandidates(
+    { routeDetails: routeDetailsBidir, routeSequences: routeSequencesBidir, departureStationId: 'st:TAKAMATSU', allSpots: [curBidir, aheadOomasan, behindTakamatsu], maxBudget: 2000 },
+    curBidir
+  );
+  const bidirIds = bidirCandidates.map((c) => c.spot.id);
+  const aheadIncluded = bidirIds.includes('ahead-oomasan');
+  const behindExcluded = !bidirIds.includes('behind-takamatsu');
+  const bidirOk = aheadIncluded && behindExcluded;
+  ok = ok && bidirOk;
+  console.log(bidirOk
+    ? '✅ 双方向路線（同じroute_idを両方向が使う）でも、手前の駅を「先」と誤判定しません'
+    : `❌ 双方向路線での方向判定に失敗（候補=${JSON.stringify(bidirIds)}）`);
+
+  // --- 2) 合計運賃は常に¥2000以下（呼び出し元がより大きいmaxBudgetを渡しても） ---
+  const currentSpotBudget = mkSpot('cur-b', 'op:X', 34.0, 134.0, 400);
+  const overBudgetSpot = mkSpot('over-budget', 'op:X', 34.0001, 134.0001, 2500); // 同駅・徒歩圏内だが運賃超過
+  const withinBudgetSpot = mkSpot('within-budget', 'op:X', 34.0002, 134.0002, 2000); // 上限ちょうど
+  const budgetCandidates = buildOnwardCandidates(
+    { routeDetails: {}, routeSequences: {}, departureStationId: 'op:DEP', allSpots: [currentSpotBudget, overBudgetSpot, withinBudgetSpot], maxBudget: 5000 },
+    currentSpotBudget
+  );
+  const noOverBudget = !budgetCandidates.some((c) => c.spot.id === 'over-budget');
+  const allUnder2000 = budgetCandidates.every((c) => c.spot.source_round_trip_fare <= 2000);
+  const cappedAt2000 = noOverBudget && allUnder2000;
+  ok = ok && cappedAt2000;
+  console.log(cappedAt2000
+    ? '✅ 呼び出し元がより大きいmaxBudgetを渡しても、運賃¥2000超の候補は出ません'
+    : `❌ ¥2000の上限が効いていません（候補=${JSON.stringify(budgetCandidates.map((c) => ({ id: c.spot.id, fare: c.spot.source_round_trip_fare })))}）`);
+
+  // --- 3) 「すぐ近く」は徒歩20分以内のみ ---
+  // 時速4km換算：15分=1.0km（緯度0.009度相当）、25分=1.667km（緯度0.015度相当）
+  const currentSpotWalk = mkSpot('cur-w', 'op:Y', 34.0, 134.0, 400);
+  const near15 = mkSpot('near-15min', 'op:Y', 34.009009, 134.0, 400);
+  const near25 = mkSpot('near-25min', 'op:Y', 34.015015, 134.0, 400);
+  const walkCandidates = buildOnwardCandidates(
+    { routeDetails: {}, routeSequences: {}, departureStationId: 'op:DEP', allSpots: [currentSpotWalk, near15, near25], maxBudget: 2000 },
+    currentSpotWalk
+  );
+  const near15Entry = walkCandidates.find((c) => c.spot.id === 'near-15min');
+  const near15Ok = !!near15Entry && near15Entry.type === 'nearby' && near15Entry.walkMinutes <= 20;
+  const near25Excluded = !walkCandidates.some((c) => c.spot.id === 'near-25min');
+  const walkCapOk = near15Ok && near25Excluded;
+  ok = ok && walkCapOk;
+  console.log(walkCapOk
+    ? `✅ 「すぐ近く」は徒歩20分以内のみ含まれます（約15分=含む、約25分=除外）`
+    : `❌ 徒歩時間の上限判定に失敗（15分候補=${JSON.stringify(near15Entry)}, 25分候補の有無=${walkCandidates.some((c) => c.spot.id === 'near-25min')}）`);
+
+  return ok;
+}
+
 async function checkOnwardNavigation(html) {
   console.log('\n=== 「この先へ」機能の検証 ===');
   const errors = [];
@@ -2147,11 +2269,21 @@ async function checkOnwardNavigation(html) {
     return countOk && errors.length === 0;
   }
 
+  // 運賃表記：「往復¥1,234（+¥120）」または差0のとき「往復¥1,234（追加なし）」
+  // （Minami指示：「+¥0」という表記をやめる。2026-10-10修正）
   const fareTexts = onwardCards.map((c) => c.querySelector('.onward-fare')?.textContent || '');
-  const fareFormatOk = fareTexts.every((t) => /^\+¥\d+$/.test(t));
+  const fareFormatOk = fareTexts.every((t) => /^往復¥[\d,]+（(追加なし|\+¥[\d,]+)）$/.test(t));
   console.log(fareFormatOk
-    ? `✅ 各候補の運賃差が「+¥数字」の形式で表示されています（${fareTexts.join(', ')}）`
-    : `❌ 運賃差の表記が想定外です（${fareTexts.join(', ')}）`);
+    ? `✅ 各候補の運賃が「往復¥1,234（+¥120 または 追加なし）」の形式で表示されています（${fareTexts.join(', ')}）`
+    : `❌ 運賃の表記が想定外です（${fareTexts.join(', ')}）`);
+
+  // 一言：種類ごとの文言（同じバスで約◯分先／ここから歩いて約◯分／ここから約◯km）が
+  // 空でないこと（Minami指示：先頭30文字の説明文をやめ、種類別の一言にする。2026-10-10）
+  const blurbTexts = onwardCards.map((c) => c.querySelector('.onward-blurb')?.textContent || '');
+  const blurbFormatOk = blurbTexts.every((t) => /^(同じバスで(約\d+分先|その先)|ここから歩いて約\d+分|ここから約[\d.]+km)$/.test(t));
+  console.log(blurbFormatOk
+    ? `✅ 各候補の一言が種類別の文言で表示されています（${blurbTexts.join(' / ')}）`
+    : `❌ 一言の文言が想定外です（${blurbTexts.join(' / ')}）`);
 
   const candidateName = onwardCards[0].querySelector('.onward-name')?.textContent?.trim();
   onwardCards[0].dispatchEvent(new window.Event('click', { bubbles: true }));
@@ -2167,23 +2299,26 @@ async function checkOnwardNavigation(html) {
     ? `✅ 「この先へ」カードをクリックすると候補の詳細画面に切り替わりました（"${candidateHeading}"）`
     : `❌ 候補クリックでの詳細画面の切り替えに失敗しました（見出し="${candidateHeading}"）`);
 
-  // 戻るボタン1回目：一覧にではなく、元のスポットの詳細に戻るはず
-  doc.getElementById('back-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+  // スマホ本体の戻る操作（popstate）1回目：UIの「← 戻る」ボタンには一切触れず、
+  // window.history.back()を直接呼んでOS/スマホの戻るジェスチャーを模す
+  // （Minami指示6-d）。一覧にではなく、元のスポットの詳細に戻るはず（履歴スタック）。
+  window.history.back();
   const backToOriginalDetail = await waitFor(() => {
     const view = doc.getElementById('app-layout')?.getAttribute('data-view');
     const h2 = doc.getElementById('detail-content')?.querySelector('h2')?.textContent;
     return view === 'detail' && h2 === originalSpotName;
   }, 3000);
   console.log(backToOriginalDetail
-    ? '✅ 戻るボタンで、一覧にではなく元のスポットの詳細画面に1回で戻りました（履歴スタック）'
-    : `❌ 戻るボタンの動作が想定と異なります（data-view="${doc.getElementById('app-layout')?.getAttribute('data-view')}", h2="${doc.getElementById('detail-content')?.querySelector('h2')?.textContent}"）`);
+    ? '✅ スマホ本体の戻る操作（popstate、ボタンには触れていない）で、一覧にではなく元のスポットの詳細画面に1回で戻りました（履歴スタック）'
+    : `❌ popstateでの戻る動作が想定と異なります（data-view="${doc.getElementById('app-layout')?.getAttribute('data-view')}", h2="${doc.getElementById('detail-content')?.querySelector('h2')?.textContent}"）`);
 
-  // 戻るボタン2回目：履歴が空になったので、通常どおり一覧に戻るはず
+  // 「← 戻る」ボタン：履歴が空になったので、通常どおり一覧に戻るはず
+  // （ボタンの実体もhistory.back()を呼ぶだけなので、UIボタンでも同じ結果になることを確認する）
   doc.getElementById('back-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
-  const backToList = doc.getElementById('app-layout')?.getAttribute('data-view') === 'results';
+  const backToList = await waitFor(() => doc.getElementById('app-layout')?.getAttribute('data-view') === 'results', 3000);
   console.log(backToList
-    ? '✅ 履歴が空になった後は、通常どおり一覧に戻りました'
-    : `❌ 2回目の戻るボタンで一覧に戻りませんでした（data-view="${doc.getElementById('app-layout')?.getAttribute('data-view')}"）`);
+    ? '✅ 履歴が空になった後、「← 戻る」ボタンで通常どおり一覧に戻りました'
+    : `❌ 「← 戻る」ボタンで一覧に戻りませんでした（data-view="${doc.getElementById('app-layout')?.getAttribute('data-view')}"）`);
 
   if (errors.length > 0) {
     console.log('⚠️  ページ実行中に発生したエラー:');
@@ -2191,7 +2326,7 @@ async function checkOnwardNavigation(html) {
   }
 
   window.close();
-  return countOk && fareFormatOk && movedToCandidate && backToOriginalDetail && backToList && errors.length === 0;
+  return countOk && fareFormatOk && blurbFormatOk && movedToCandidate && backToOriginalDetail && backToList && errors.length === 0;
 }
 
 async function main() {
@@ -2224,6 +2359,7 @@ async function main() {
   const frequencyDisplayLogicOk = await checkFrequencyDisplayLogic();
   const shareTextMunicipalityOk = await checkShareTextMunicipalityAndFrequency();
   const operatorClassificationOk = await checkOperatorClassification();
+  const onwardCandidateSyntheticOk = await checkOnwardCandidateSynthetic();
   const onwardNavigationOk = await checkOnwardNavigation(html);
 
   if (
@@ -2232,7 +2368,7 @@ async function main() {
     searchButtonStateOk && favoritesStorageOk && favoriteCardToggleOk && sharedSpotBandBypassOk &&
     sharedSpotSidMismatchOk && sharedSpotAmbiguousNameOk && sharedListMixedDepartureOk &&
     serviceFrequencyComputationOk && frequencyDisplayLogicOk && shareTextMunicipalityOk &&
-    operatorClassificationOk && onwardNavigationOk
+    operatorClassificationOk && onwardCandidateSyntheticOk && onwardNavigationOk
   ) {
     console.log('\n✅ 検証成功: 初期表示・検索結果カードともに想定通りです');
   } else {
