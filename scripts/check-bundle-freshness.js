@@ -115,6 +115,16 @@ export function assertSiteDataFresh(callerLabel) {
     problems.push('config/spot-ranking-config.json が docs/data/national/spot-ranking-config.json より新しい');
   }
 
+  const supportBadgeSrc = path.join(rootDir, 'config/support-badge.json');
+  const supportBadgeDest = path.join(rootDir, 'docs/data/national/support-badge.json');
+  if (
+    fs.existsSync(supportBadgeSrc) &&
+    fs.existsSync(supportBadgeDest) &&
+    fs.statSync(supportBadgeSrc).mtimeMs > fs.statSync(supportBadgeDest).mtimeMs
+  ) {
+    problems.push('config/support-badge.json が docs/data/national/support-badge.json より新しい');
+  }
+
   if (problems.length > 0) {
     console.error(`❌ ${callerLabel}: docs/data/ が古い可能性があります:`);
     problems.forEach((p) => console.error(`  - ${p}`));

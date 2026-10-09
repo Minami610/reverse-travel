@@ -97,6 +97,41 @@ function isTouchTargetLargeEnough(rect) {
   return !!rect && rect.width >= TOUCH_TARGET_MIN_PX - 1 && rect.height >= TOUCH_TARGET_MIN_PX - 1;
 }
 
+/**
+ * 要素のスクリーンショットを安全に撮る（2026-10-10追加）。
+ * 【背景】応援マークの説明枠を追加したことでカードが縦に伸び、スマホ幅（375×667）
+ * ではカード1枚がビューポート高さを超えることがある。
+ * 【試行錯誤】(1) Playwright純正のlocator.screenshot()は、要素がビューポートより
+ * 高い場合に内部でスクロールしながら複数フレームを継ぎ合わせるが、position:fixedの
+ * フッターが継ぎ合わせ画像のあちこちに写り込んだ。(2) フッターを非表示にしたうえで
+ * locator.screenshot()を使っても、#results-listが内部スクロール要素（ページ自体は
+ * スクロールしない）であるこのレイアウトでは、要素が何番目のカードか（＝内部スクロール量）
+ * によって、カードより上のタブ・並び替え欄まで写り込んだり、逆に下端が欠けたりする
+ * 不具合が再現した（内部スクロールとPlaywrightの要素スクロールが噛み合わない）。
+ * 対策：ビューポート自体を、内部スクロールが一切不要なくらい大きく広げてから
+ * （#results-list等の内部スクロールを実質無効化する）、boundingBox()で測った座標を
+ * そのままpage.screenshot({clip})に渡す。単一フレーム・内部スクロール無しの状態に
+ * 揃えることで、cropがずれる要因を取り除く。
+ */
+async function screenshotElementSafely(page, locator, screenshotPath, viewport) {
+  await page.evaluate(() => {
+    const footer = document.getElementById('app-footer');
+    if (footer) footer.style.display = 'none';
+  });
+  // 内部スクロールが要らないくらい大きいビューポートにして、スクロール起因のずれを無くす
+  await page.setViewportSize({ width: viewport.width, height: 3000 });
+  await locator.scrollIntoViewIfNeeded();
+  const box = await locator.boundingBox();
+  if (!box) throw new Error('要素のbounding boxが取得できませんでした');
+  await page.screenshot({ path: screenshotPath, clip: box });
+
+  await page.evaluate(() => {
+    const footer = document.getElementById('app-footer');
+    if (footer) footer.style.display = '';
+  });
+  await page.setViewportSize({ width: viewport.width, height: viewport.height });
+}
+
 const results = [];
 function record(label, ok, detail) {
   results.push({ label, ok, detail });
@@ -411,6 +446,85 @@ async function captureMylistScreen(page, viewportLabel) {
   return screenshotPath;
 }
 
+/**
+ * ①応援マークありのカード全体・③曜日限定のカード全体（2026-10-10、2本目
+ * 「便の少ない路線を応援」）。富山駅前→伏木万葉大橋（往復¥1600、2便/日・
+ * 月・金のみ、実データから確認済み）は応援マーク対象かつ曜日限定の両方を
+ * 満たすため、①③は同一カードで兼ねる（Minami報告：撮るスポットと一致させる）。
+ * カード要素そのものをscreenshot()する（scrollIntoViewIfNeededしてから）。
+ * 写真より下（マーク・説明枠・便数）まで写るようにするため、ページ全体ではなく
+ * 要素単位のスクリーンショットにした。
+ */
+async function captureSupportBadgeCardScreen(page, viewportLabel) {
+  await searchAt(page, '富山駅前', 1600);
+  const card = page.locator('.spot-card.spot-card-supported').first();
+  const screenshotPath = path.join(screenshotDir, `support-badge-card-${viewportLabel}.png`);
+  await screenshotElementSafely(page, card, screenshotPath, VIEWPORTS[viewportLabel]);
+
+  const badgeCount = await page.locator('.spot-card-supported').count();
+  record(`[${viewportLabel}] 応援マーク: バッジ付きカードが表示されている`, badgeCount > 0, `${badgeCount}件`);
+
+  const badgeNoteText = (await card.locator('.support-badge-note').textContent().catch(() => '')) || '';
+  record(`[${viewportLabel}] 応援マーク: 説明枠に「応援」の文言が入っている`, badgeNoteText.includes('支える力'), badgeNoteText);
+  record(`[${viewportLabel}] 曜日限定: 「月・金のみ」等の曜日限定文言が入っている`, /[月火水木金]・[月火水木金]のみ/.test(badgeNoteText), badgeNoteText);
+
+  // 押せるボタンに見えないこと：<button>要素ではないことを確認する
+  const heartTag = await card.locator('.support-badge-heart').evaluate((el) => el.tagName);
+  record(`[${viewportLabel}] 応援マーク: ハート表示がbutton要素ではない（押せるボタンに見えない）`, heartTag !== 'BUTTON', heartTag);
+
+  await checkNoHorizontalOverflow(page, `[${viewportLabel}] 応援マークカード`);
+  return screenshotPath;
+}
+
+/** ②マークなしのカード全体（便数の小さな表示が見えること）。富山駅前→TOYAMAキラリ、42便/日 */
+async function captureNonBadgeFrequencyScreen(page, viewportLabel) {
+  await searchAt(page, '富山駅前', 400);
+  const card = page.locator('.spot-card').filter({ has: page.locator('.spot-frequency-note') }).first();
+  const screenshotPath = path.join(screenshotDir, `non-badge-frequency-card-${viewportLabel}.png`);
+  await screenshotElementSafely(page, card, screenshotPath, VIEWPORTS[viewportLabel]);
+
+  const noBadge = await page.locator('.spot-card-supported').count();
+  record(`[${viewportLabel}] マークなしカード: 高頻度路線にはバッジが付かない`, noBadge === 0, `${noBadge}件`);
+
+  const freqNoteText = (await card.locator('.spot-frequency-note').textContent().catch(() => '')) || '';
+  record(`[${viewportLabel}] マークなしカード: 便数が小さく表示されている`, /\d+便/.test(freqNoteText), freqNoteText);
+
+  await checkNoHorizontalOverflow(page, `[${viewportLabel}] マークなしカード`);
+  return screenshotPath;
+}
+
+/**
+ * ④要予約のカード全体・⑤要予約の区間がある詳細画面の経路部分。
+ * 八尾駅→往復¥400の帯で、実際にUIが表示する並び順で最初に「要予約」を含むのは
+ * 「八尾おわら資料館」（1便/日・全便予約制）。前回の報告は手元の検証スクリプトが
+ * calculateReachable()の上限を¥2000（実際の検索は¥400）で呼んでいたため並び順が
+ * ずれ、「井田主馬ヶ城」と誤って報告していた。実際の検索（¥400）で並び順を
+ * 再確認し、スクリーンショットの「八尾おわら資料館」が正しい。
+ */
+async function captureReservationScreen(page, viewportLabel) {
+  await searchAt(page, '八尾駅', 400);
+  const card = page.locator('.spot-card').filter({ hasText: '要予約' }).first();
+  const cardFound = await card.count() > 0;
+  record(`[${viewportLabel}] 予約制: カードに「要予約」の文言があるスポットが見つかる`, cardFound);
+  if (!cardFound) return null;
+
+  const screenshotPath = path.join(screenshotDir, `reservation-card-${viewportLabel}.png`);
+  await screenshotElementSafely(page, card, screenshotPath, VIEWPORTS[viewportLabel]);
+
+  await card.locator('.detail-btn').click();
+  await page.waitForSelector('#detail-content h2', { timeout: 15000 });
+  const routeInfo = page.locator('#detail-content .route-info');
+  const detailScreenshotPath = path.join(screenshotDir, `reservation-detail-route-${viewportLabel}.png`);
+  await screenshotElementSafely(page, routeInfo, detailScreenshotPath, VIEWPORTS[viewportLabel]);
+
+  const detailText = await page.locator('#detail-content').textContent();
+  record(`[${viewportLabel}] 予約制: 詳細画面の経路にも「要予約」が出る`, detailText.includes('要予約'));
+
+  await checkNoHorizontalOverflow(page, `[${viewportLabel}] 予約制詳細画面`);
+  await page.click('#back-btn').catch(() => {});
+  return [screenshotPath, detailScreenshotPath];
+}
+
 async function main() {
   assertBundleFresh('verify-layout');
   assertSiteDataFresh('verify-layout');
@@ -449,6 +563,10 @@ async function main() {
       savedPaths.push(await captureCardFavoriteShareScreen(page, label));
       savedPaths.push(await captureDetailFavoriteShareScreen(page, label));
       savedPaths.push(await captureMylistScreen(page, label));
+      savedPaths.push(await captureSupportBadgeCardScreen(page, label));
+      savedPaths.push(await captureNonBadgeFrequencyScreen(page, label));
+      const reservationPaths = await captureReservationScreen(page, label);
+      if (reservationPaths) savedPaths.push(...reservationPaths);
 
       if (pageErrors.length > 0) {
         record(`[${label}] ページ実行中にエラーが発生していない`, false, pageErrors.join('; '));

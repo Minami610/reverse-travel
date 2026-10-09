@@ -542,7 +542,7 @@ async function checkResultCards(html) {
     const styleOk =
       cardStyle.display !== 'none' &&
       cardStyle.minHeight === '280px' &&
-      imgStyle.height === '130px' &&
+      imgStyle.height === '180px' && // 2026-10-10、デザイン②「写真を大きく出す」で130px→180pxに変更
       imgStyle.flexShrink === '0';
 
     if (!structureOk || !styleOk) {
@@ -1747,6 +1747,329 @@ async function checkSharedListMixedDeparture(html) {
   return bothShown && errors.length === 0;
 }
 
+/**
+ * compute-service-frequency.js の便数計算ロジックを、合成GTFSデータ（一時ディレクトリに
+ * calendar.txt等を実際に書き出す）で検証する（2026-10-10、2本目「便の少ない路線を
+ * 応援」マーク機能。Minami指示：「合成データで、区間をまたぐ便の数え方、行きと
+ * 帰りの少ない方、calendar_datesの運休日・臨時便の反映を確かめる」）。
+ *
+ * 代表日（祝日でない水曜日）はjp-holidays.jsの実関数で算出し、テスト側でハード
+ * コードしない（本番ロジックと食い違う日付を使って見かけ上だけ通るのを防ぐため）。
+ */
+async function checkServiceFrequencyComputation() {
+  console.log('\n=== 便数計算（compute-service-frequency.js）の合成データ検証 ===');
+  const os = await import('os');
+  const { findFirstNonHolidayWeekdayOnOrAfter } = await import(toEngineModuleUrl('scripts/build-pipeline/jp-holidays.js'));
+  const { augmentRouteDetailsWithFrequency } = await import(toEngineModuleUrl('scripts/build-pipeline/compute-service-frequency.js'));
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'freq-test-'));
+  const operatorId = 'testop';
+  const opDir = path.join(tmpRoot, operatorId);
+  fs.mkdirSync(opDir, { recursive: true });
+
+  const feedStartDate = '20260302'; // 月曜（2026年3月は大型連休が無く、祝日探索の検証に適する）
+  const repWed = findFirstNonHolidayWeekdayOnOrAfter(feedStartDate, 3);
+
+  fs.writeFileSync(path.join(opDir, 'feed_info.txt'),
+    'feed_publisher_name,feed_publisher_url,feed_lang,feed_start_date,feed_end_date\n' +
+    `テスト事業者,http://example.com,ja,${feedStartDate},20261231\n`);
+
+  fs.writeFileSync(path.join(opDir, 'stops.txt'),
+    'stop_id,stop_name,stop_lat,stop_lon\n' +
+    ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'].map((id, i) => `${id},stop${id},34.${String(i).padStart(3, '0')},134.${String(i).padStart(3, '0')}\n`).join(''));
+
+  fs.writeFileSync(path.join(opDir, 'routes.txt'),
+    'route_id,route_short_name,route_long_name,route_type\n' +
+    'X,,RouteX,3\nY,,RouteY,3\nW,,RouteW,3\nV,,RouteV,3\nG,,RouteG,3\nH,,RouteH,3\n');
+
+  fs.writeFileSync(path.join(opDir, 'trips.txt'),
+    'route_id,trip_id,service_id\n' +
+    'X,tripX1,MF\n' +
+    'Y,tripY1,MF\n' +
+    'W,tripW1,TueFri\n' +
+    'V,tripV_out1,MF\nV,tripV_out2,MF\n' +
+    'V,tripV_in1,MF\n' +
+    'G,tripG1,MF_G\n' +
+    'H,tripH1,ADHOC_H\n');
+
+  fs.writeFileSync(path.join(opDir, 'stop_times.txt'),
+    'trip_id,stop_id,stop_sequence,arrival_time,departure_time,pickup_type\n' +
+    'tripX1,A,1,08:00:00,08:00:00,0\ntripX1,B,2,08:10:00,08:10:00,0\n' +
+    'tripY1,A,1,09:00:00,09:00:00,0\ntripY1,B,2,09:10:00,09:10:00,0\n' +
+    'tripW1,C,1,08:00:00,08:00:00,0\ntripW1,D,2,08:10:00,08:10:00,0\n' +
+    'tripV_out1,E,1,08:00:00,08:00:00,0\ntripV_out1,F,2,08:10:00,08:10:00,0\n' +
+    'tripV_out2,E,1,10:00:00,10:00:00,0\ntripV_out2,F,2,10:10:00,10:10:00,0\n' +
+    'tripV_in1,F,1,09:00:00,09:00:00,0\ntripV_in1,E,2,09:10:00,09:10:00,0\n' +
+    'tripG1,G,1,08:00:00,08:00:00,0\ntripG1,H,2,08:10:00,08:10:00,0\n' +
+    // H線はI→J（G線のG→Hとは別区間にする：運休日と臨時便を同じ区間で重ねると
+    // 「運休で0便になったG線」を「同じ日に走った臨時便」が穴埋めしてしまい、
+    // 2つの検証が互いを打ち消し合うため、独立した区間に分ける）
+    'tripH1,I,1,08:00:00,08:00:00,0\ntripH1,J,2,08:10:00,08:10:00,0\n');
+
+  fs.writeFileSync(path.join(opDir, 'calendar.txt'),
+    'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\n' +
+    `MF,1,1,1,1,1,0,0,${feedStartDate},20261231\n` +
+    `TueFri,0,1,0,0,1,0,0,${feedStartDate},20261231\n` +
+    `MF_G,1,1,1,1,1,0,0,${feedStartDate},20261231\n`
+    // ADHOC_Hはcalendar.txtに行を持たない（calendar_dates.txtのADDのみで運行＝臨時便の典型パターン）
+  );
+
+  fs.writeFileSync(path.join(opDir, 'calendar_dates.txt'),
+    'service_id,date,exception_type\n' +
+    `MF_G,${repWed},2\n` + // 運休日：代表水曜だけG線（G→H）を運休にする
+    `ADHOC_H,${repWed},1\n` // 臨時便：H線（I→J）は代表水曜だけ特別運行
+  );
+
+  const stopIdToStationId = new Map(
+    ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'].map((id) => [`${operatorId}:${id}`, `${operatorId}:${id}`])
+  );
+
+  // routeDetails: X/Yが同じ区間(A→B)を別route_idで担う（route_idをまたぐ合算の検証）、
+  // Wは火・金のみ、VはE→Fの行き(2便)とF→Eの帰り(1便)で非対称、
+  // G→Hは運休日（代表水曜だけ運休）、I→Jは臨時便（代表水曜だけ特別運行）の検証用
+  const routeDetails = {
+    [`${operatorId}:A`]: { [`${operatorId}:B`]: { [operatorId]: [`${operatorId}:X`, 10] } },
+    [`${operatorId}:C`]: { [`${operatorId}:D`]: { [operatorId]: [`${operatorId}:W`, 10] } },
+    [`${operatorId}:E`]: {
+      [`${operatorId}:F`]: { [operatorId]: [`${operatorId}:V`, 10] },
+    },
+    [`${operatorId}:F`]: {
+      [`${operatorId}:E`]: { [operatorId]: [`${operatorId}:V`, 10] },
+    },
+    [`${operatorId}:G`]: { [`${operatorId}:H`]: { [operatorId]: [`${operatorId}:G`, 10] } },
+    [`${operatorId}:I`]: { [`${operatorId}:J`]: { [operatorId]: [`${operatorId}:H`, 10] } },
+  };
+
+  const result = augmentRouteDetailsWithFrequency(routeDetails, tmpRoot, stopIdToStationId);
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+
+  let ok = true;
+
+  // 1. 区間をまたぐ便の数え方：A→Bはroute_id X・Yどちらも同じ日に通るため合計2便
+  //    （fareデータ上は「X線の経路」として解決されるが、便数は同一事業者内でroute_idを
+  //    またいで合算する設計のため、X単体の1便ではなく2便になるはず）
+  const abEntry = result.routeDetails[`${operatorId}:A`][`${operatorId}:B`][operatorId];
+  const abTripCount = abEntry[abEntry.length - 3];
+  const abOk = abTripCount === 2;
+  ok = ok && abOk;
+  console.log(abOk ? '✅ route_idをまたぐ合算：A→Bが2便（X線1便+Y線1便）' : `❌ route_idをまたぐ合算に失敗（期待2便、実際${abTripCount}便）`);
+
+  // 2. 曜日ビットフラグ：C→D（W線）は火・金のみ運行 → dayCode=0b10010=18（bit1=火, bit4=金）
+  const cdEntry = result.routeDetails[`${operatorId}:C`][`${operatorId}:D`][operatorId];
+  const cdDayCode = cdEntry[cdEntry.length - 2];
+  const cdOk = cdDayCode === 0b10010;
+  ok = ok && cdOk;
+  console.log(cdOk ? '✅ 曜日ビットフラグ：火・金のみ運行がdayCode=18として正しく出る' : `❌ 曜日ビットフラグが想定外（期待18、実際${cdDayCode}）`);
+
+  // 3. 行き・帰りの少ない方：E→F（2便）・F→E（1便）→ どちらのエントリも1便が採用される
+  const efEntry = result.routeDetails[`${operatorId}:E`][`${operatorId}:F`][operatorId];
+  const feEntry = result.routeDetails[`${operatorId}:F`][`${operatorId}:E`][operatorId];
+  const efTripCount = efEntry[efEntry.length - 3];
+  const feTripCount = feEntry[feEntry.length - 3];
+  const minOk = efTripCount === 1 && feTripCount === 1;
+  ok = ok && minOk;
+  console.log(minOk ? '✅ 行き・帰りの少ない方：E⇔Fとも帰り(1便)が採用される' : `❌ 行き帰りの最小値採用に失敗（E→F=${efTripCount}, F→E=${feTripCount}、期待は両方1）`);
+
+  // 4. calendar_datesの運休日：G→H（G線、代表水曜だけ運休）→ 水曜のbitは立たず、他の平日で解決される
+  const ghEntry = result.routeDetails[`${operatorId}:G`][`${operatorId}:H`][operatorId];
+  const ghDayCode = ghEntry[ghEntry.length - 2];
+  const wedBitOff = (ghDayCode & (1 << 2)) === 0; // bit2=水
+  const stillWeekday = ghDayCode >= 0 && ghDayCode <= 31;
+  const cancelOk = wedBitOff && stillWeekday;
+  ok = ok && cancelOk;
+  console.log(cancelOk
+    ? '✅ calendar_datesの運休日：代表水曜の運休が反映され、水曜のビットが立たない'
+    : `❌ 運休日の反映に失敗（dayCode=${ghDayCode}）`);
+
+  // 5. calendar_datesの臨時便：I→J（H線、calendar.txtに行を持たずADD例外のみで
+  //    代表水曜だけ運行）→ 水曜のbitだけが立ち、便数1で解決される
+  const ijEntry = result.routeDetails[`${operatorId}:I`][`${operatorId}:J`][operatorId];
+  const ijTripCount = ijEntry[ijEntry.length - 3];
+  const ijDayCode = ijEntry[ijEntry.length - 2];
+  const adhocOk = ijTripCount === 1 && ijDayCode === 0b00100; // bit2=水のみ
+  ok = ok && adhocOk;
+  console.log(adhocOk
+    ? '✅ calendar_datesの臨時便：calendar.txtに行が無くADD例外のみの便が、その日だけ正しく解決される'
+    : `❌ 臨時便の反映に失敗（tripCount=${ijTripCount}, dayCode=${ijDayCode}）`);
+
+  console.log(ok ? '（この合成データ検証は本番のdata/derived/docsには一切影響しません）' : '');
+  return ok;
+}
+
+/**
+ * 便数まわりの表示用ロジック（route-duration.jsのformatDayLabel/operatorLabelWord/
+ * estimateTripFrequency）を合成データで検証する。応援マークの線（3便）ちょうど・
+ * その上下、曜日が限られる区間の文言、土休日のみの文言、コミュニティバス/バス/路線の
+ * 呼び分けを確認する（2026-10-10、Minami指示）。
+ */
+async function checkFrequencyDisplayLogic() {
+  console.log('\n=== 便数の表示ロジック（route-duration.js）の合成データ検証 ===');
+  const { estimateTripFrequency, formatDayLabel, operatorLabelWord } = await import(toEngineModuleUrl('assets/js/route-duration.js'));
+
+  let ok = true;
+
+  // 1. 曜日の文言
+  const labelChecks = [
+    [31, '平日'],
+    [32, '土休日'],
+    [0b10010, '火・金のみ'], // bit1=火, bit4=金
+    [0b00001, '月のみ'],
+  ];
+  for (const [code, expected] of labelChecks) {
+    const actual = formatDayLabel(code);
+    const pass = actual === expected;
+    ok = ok && pass;
+    console.log(pass ? `✅ formatDayLabel(${code}) === "${expected}"` : `❌ formatDayLabel(${code})が「${expected}」ではなく「${actual}」`);
+  }
+
+  // 2. 応援マークの線（3便）ちょうど・その上下 → main.jsのbuildFrequencyDisplay()と
+  //    同じ比較式（tripCount <= maxTrips）で境界を確認する
+  const maxTrips = 3;
+  const boundaryChecks = [[2, true], [3, true], [4, false]];
+  for (const [tripCount, expectedEligible] of boundaryChecks) {
+    const actualEligible = tripCount <= maxTrips;
+    const pass = actualEligible === expectedEligible;
+    ok = ok && pass;
+    console.log(pass
+      ? `✅ ${tripCount}便/線${maxTrips}便 → バッジ対象=${expectedEligible}`
+      : `❌ ${tripCount}便/線${maxTrips}便の判定が想定と異なる`);
+  }
+
+  // 3. コミュニティバス／バス／路線の呼び分け
+  const routeInfo = {
+    communityBusRoute: { route_type: '3', is_community_operator: true },
+    privateBusRoute: { route_type: '3', is_community_operator: false },
+    railRoute: { route_type: '1', is_community_operator: false },
+  };
+  const wordChecks = [
+    ['communityBusRoute', 'コミュニティバス'],
+    ['privateBusRoute', 'バス'],
+    ['railRoute', '路線'],
+  ];
+  for (const [routeId, expected] of wordChecks) {
+    const actual = operatorLabelWord(routeInfo, routeId);
+    const pass = actual === expected;
+    ok = ok && pass;
+    console.log(pass ? `✅ operatorLabelWord(${routeId}) === "${expected}"` : `❌ operatorLabelWord(${routeId})が「${expected}」ではなく「${actual}」`);
+  }
+
+  // 4. estimateTripFrequency：直行・事業者をまたぐ乗換（行き・帰りの少ない方は
+  //    compute-service-frequency.js側で確定済みの値をそのまま引くだけだが、
+  //    reachBy='transfer'のとき2エントリのうち小さい方を選ぶ分岐はフロント側の責務）
+  const routeDetails = {
+    dep: { mid: { op1: ['routeA', 10, 5, 31, 0] }, dest: { op1: ['routeB', 10, 2, 31, 1] } },
+    mid: { dest: { op2: ['routeC', 10, 8, 31, 0] } },
+  };
+  const directStation = { reachBy: 'direct', station_id: 'dest', viaOperator: 'op1' };
+  const directFreq = estimateTripFrequency(routeDetails, 'dep', directStation);
+  const directOk = directFreq?.tripCount === 2 && directFreq?.demandCount === 1;
+  ok = ok && directOk;
+  console.log(directOk ? '✅ estimateTripFrequency：直行区間の便数・予約制数を正しく引ける' : `❌ 直行区間の便数解決に失敗（${JSON.stringify(directFreq)}）`);
+
+  const transferStation = { reachBy: 'transfer', transferAt: 'mid', station_id: 'dest', legOperators: ['op1', 'op2'] };
+  const transferFreq = estimateTripFrequency(routeDetails, 'dep', transferStation);
+  // dep→mid(op1)=5便、mid→dest(op2)=8便 → 少ない方の5便が採用される
+  const transferOk = transferFreq?.tripCount === 5;
+  ok = ok && transferOk;
+  console.log(transferOk ? '✅ estimateTripFrequency：事業者をまたぐ乗換で少ない方の便数が採用される' : `❌ 乗換便数の最小値採用に失敗（${JSON.stringify(transferFreq)}）`);
+
+  return ok;
+}
+
+/**
+ * 共有文（favorites.jsのbuildSpotShareText）が、市町村名の有無・便数情報の有無で
+ * 正しく文面を組み立てる／省略することを確認する（2026-10-10、Minami指示：
+ * 「市町村が無いときは括弧ごと省く」）。
+ */
+async function checkShareTextMunicipalityAndFrequency() {
+  console.log('\n=== 共有文の市町村名・便数の有無による組み立てチェック ===');
+  const { buildSpotShareText } = await import(toEngineModuleUrl('assets/js/favorites.js'));
+
+  let ok = true;
+
+  const withBoth = buildSpotShareText('テスト地', '出発駅', 500, 20, 'http://example.com/x', '○○市', '平日1日3便の路線です。');
+  const withBothOk = withBoth === 'テスト地（○○市）／出発駅からバスで往復¥500、約20分。／平日1日3便の路線です。／http://example.com/x';
+  ok = ok && withBothOk;
+  console.log(withBothOk ? '✅ 市町村・便数ともありのときの文面' : `❌ 市町村・便数ともありの文面が想定と異なる: "${withBoth}"`);
+
+  const withoutMunicipality = buildSpotShareText('テスト地', '出発駅', 500, 20, 'http://example.com/x', null, '平日1日3便の路線です。');
+  const withoutMunicipalityOk = withoutMunicipality.startsWith('テスト地／') && !withoutMunicipality.includes('（');
+  ok = ok && withoutMunicipalityOk;
+  console.log(withoutMunicipalityOk ? '✅ 市町村が無いとき、括弧ごと省かれる' : `❌ 市町村なし時の省略に失敗: "${withoutMunicipality}"`);
+
+  const withoutFrequency = buildSpotShareText('テスト地', '出発駅', 500, 20, 'http://example.com/x', '○○市', null);
+  const withoutFrequencyOk = withoutFrequency === 'テスト地（○○市）／出発駅からバスで往復¥500、約20分。／http://example.com/x';
+  ok = ok && withoutFrequencyOk;
+  console.log(withoutFrequencyOk ? '✅ 便数情報が無いとき、その行ごと省かれる（1本目までと同じ文面に戻る）' : `❌ 便数なし時の省略に失敗: "${withoutFrequency}"`);
+
+  return ok;
+}
+
+/**
+ * operator-classification.js（コミュニティバス判定）を検証する（2026-10-10、
+ * endsWith→includesへの修正に伴うテスト）。
+ * 1. 「株式会社○○バス」のように法人格が先頭に来る表記でも私企業と判定されること
+ *    （修正前のendsWithでは見落としていたケース）。
+ * 2. 公開中3県の全事業者で、修正前後の判定結果が変わらないこと
+ *    （data/derived/pref/配下のdata-sources.jsonから実際のfeed_publisher_nameを読む）。
+ */
+async function checkOperatorClassification() {
+  console.log('\n=== コミュニティバス判定（operator-classification.js）の検証 ===');
+  const { isCommunityBusOperator } = await import(toEngineModuleUrl('scripts/build-pipeline/operator-classification.js'));
+
+  let ok = true;
+
+  // 1. 法人格が先頭に来るケース（endsWithでは取りこぼしていた）
+  const prefixCases = [
+    ['株式会社〇〇バス', false],
+    ['有限会社△△交通', false],
+    ['（株）□□観光バス', false],
+    ['(株)××タクシー', false],
+    ['〇〇市', true],
+    ['△△町営バス運営委員会', true],
+  ];
+  for (const [name, expected] of prefixCases) {
+    const actual = isCommunityBusOperator(name);
+    const pass = actual === expected;
+    ok = ok && pass;
+    console.log(pass
+      ? `✅ isCommunityBusOperator("${name}") === ${expected}`
+      : `❌ isCommunityBusOperator("${name}")が${expected}ではなく${actual}`);
+  }
+
+  // 2. 公開中3県の全事業者で判定結果が変わらないこと
+  const publishedConfigPath = path.join(rootDir, 'config/published-prefectures.json');
+  const published = JSON.parse(fs.readFileSync(publishedConfigPath, 'utf-8')).published || [];
+  let totalOperators = 0;
+  for (const code of published) {
+    const codeStr = String(code).padStart(2, '0');
+    const dataSourcesPath = path.join(rootDir, 'data/derived/pref', codeStr, 'data-sources.json');
+    if (!fs.existsSync(dataSourcesPath)) {
+      console.log(`  ⚠️  都道府県コード${codeStr}: data-sources.jsonが見つからないためスキップ`);
+      continue;
+    }
+    const routeInfoPath = path.join(rootDir, 'data/derived/pref', codeStr, 'route-info.json');
+    const manifest = JSON.parse(fs.readFileSync(dataSourcesPath, 'utf-8'));
+    const routeInfo = JSON.parse(fs.readFileSync(routeInfoPath, 'utf-8'));
+    for (const feed of manifest.feeds || []) {
+      totalOperators += 1;
+      const expected = isCommunityBusOperator(feed.feed_publisher_name);
+      // route-info.json側に実際に書き込まれた値（ビルド時にbuild-prefecture.jsが
+      // 同じ関数で計算した値）と一致するかを確認する＝「今と変わらない」の直接比較
+      const actualRoute = Object.values(routeInfo).find((r) => r.operator_id === feed.operator_id);
+      if (!actualRoute) continue;
+      const pass = actualRoute.is_community_operator === expected;
+      ok = ok && pass;
+      if (!pass) {
+        console.log(`❌ ${feed.operator_id}（${feed.feed_publisher_name}）: route-info.json=${actualRoute.is_community_operator} / 現在の関数=${expected}`);
+      }
+    }
+  }
+  console.log(ok ? `✅ 公開中${published.length}都道府県・${totalOperators}事業者で判定結果が変化していません` : '❌ 判定結果が変化した事業者があります（上記参照）');
+
+  return ok;
+}
+
 async function main() {
   if (!fs.existsSync(distIndexPath)) {
     console.error('dist/index.html が見つかりません。先に npm run bundle を実行してください');
@@ -1773,12 +2096,18 @@ async function main() {
   const sharedSpotSidMismatchOk = await checkSharedSpotSidMismatch(html);
   const sharedSpotAmbiguousNameOk = await checkSharedSpotAmbiguousName(html);
   const sharedListMixedDepartureOk = await checkSharedListMixedDeparture(html);
+  const serviceFrequencyComputationOk = await checkServiceFrequencyComputation();
+  const frequencyDisplayLogicOk = await checkFrequencyDisplayLogic();
+  const shareTextMunicipalityOk = await checkShareTextMunicipalityAndFrequency();
+  const operatorClassificationOk = await checkOperatorClassification();
 
   if (
     publishedOk && desktopOk && mobileOk && cardsOk && loadingStateOk && transferDisplayOk &&
     spotLevelBandingOk && departureMismatchOk && partialBandMessageOk && partialBandMessageUozuEkiOk &&
     searchButtonStateOk && favoritesStorageOk && favoriteCardToggleOk && sharedSpotBandBypassOk &&
-    sharedSpotSidMismatchOk && sharedSpotAmbiguousNameOk && sharedListMixedDepartureOk
+    sharedSpotSidMismatchOk && sharedSpotAmbiguousNameOk && sharedListMixedDepartureOk &&
+    serviceFrequencyComputationOk && frequencyDisplayLogicOk && shareTextMunicipalityOk &&
+    operatorClassificationOk
   ) {
     console.log('\n✅ 検証成功: 初期表示・検索結果カードともに想定通りです');
   } else {
