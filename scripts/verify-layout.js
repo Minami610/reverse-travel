@@ -525,6 +525,39 @@ async function captureReservationScreen(page, viewportLabel) {
   return [screenshotPath, detailScreenshotPath];
 }
 
+/**
+ * 「この先へ」セクション（2026-10-10、3本目。feature/kono-sakiブランチ）を確認する。
+ * 高松築港・往復¥1000の帯内1件目の詳細画面には、同じ路線の先が無い実データのため
+ * 「すぐ近く」3件が表示される（実データで確認済み）。暗い枠・3件・運賃差の表記・
+ * カードをクリックすると候補の詳細へ切り替わることを確認する。
+ */
+async function captureOnwardSectionScreen(page, viewportLabel) {
+  await searchAt(page, '高松築港', 1000);
+  await page.locator('.spot-card').first().click();
+  await page.waitForSelector('#detail-content h2', { timeout: 15000 });
+  const onwardSection = page.locator('.onward-section');
+  const hasOnward = await onwardSection.count() > 0;
+  record(`[${viewportLabel}] この先へ: セクションが表示されている`, hasOnward);
+  if (!hasOnward) return null;
+
+  const screenshotPath = path.join(screenshotDir, `onward-section-${viewportLabel}.png`);
+  await screenshotElementSafely(page, onwardSection, screenshotPath, VIEWPORTS[viewportLabel]);
+
+  const cardCount = await page.locator('.onward-card').count();
+  record(`[${viewportLabel}] この先へ: カードが1〜3件表示されている`, cardCount >= 1 && cardCount <= 3, `${cardCount}件`);
+
+  const firstHeading = await page.locator('#detail-content h2').textContent();
+  await page.locator('.onward-card').first().click();
+  await page.waitForTimeout(200);
+  const secondHeading = await page.locator('#detail-content h2').textContent();
+  record(`[${viewportLabel}] この先へ: カードをクリックすると詳細が切り替わる`, secondHeading !== firstHeading, `${firstHeading} → ${secondHeading}`);
+
+  await checkNoHorizontalOverflow(page, `[${viewportLabel}] この先へ`);
+  await page.click('#back-btn').catch(() => {});
+  await page.click('#back-btn').catch(() => {});
+  return screenshotPath;
+}
+
 async function main() {
   assertBundleFresh('verify-layout');
   assertSiteDataFresh('verify-layout');
@@ -567,6 +600,8 @@ async function main() {
       savedPaths.push(await captureNonBadgeFrequencyScreen(page, label));
       const reservationPaths = await captureReservationScreen(page, label);
       if (reservationPaths) savedPaths.push(...reservationPaths);
+      const onwardPath = await captureOnwardSectionScreen(page, label);
+      if (onwardPath) savedPaths.push(onwardPath);
 
       if (pageErrors.length > 0) {
         record(`[${label}] ページ実行中にエラーが発生していない`, false, pageErrors.join('; '));

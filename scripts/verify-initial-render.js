@@ -824,7 +824,13 @@ async function checkTransferDisplay(html) {
   let distanceExampleText = null;
 
   for (const card of cards) {
+    const cardSpotName = card.querySelector('h3')?.textContent || '';
     card.dispatchEvent(new window.Event('click', { bubbles: true }));
+    // 【2026-10-10追記】showSpotDetail()が「この先へ」候補の計算のため非同期になった
+    // （3本目）。クリック直後に同期でinnerHTMLを読むと、非同期処理が終わる前の
+    // 古い内容（前のカードの詳細、または空）を読んでしまうため、このカード自身の
+    // 名前が見出しに現れるまで待つ。
+    await waitFor(() => doc.getElementById('detail-content').querySelector('h2')?.textContent === cardSpotName, 3000);
     const detailHtml = doc.getElementById('detail-content').innerHTML;
     if (/乗り換えの待ち時間は、運行本数から見積もった目安です/.test(detailHtml)) {
       disclaimerFound = true;
@@ -1483,6 +1489,9 @@ async function checkFavoriteCardToggle(html) {
   // マイリスト画面の×ボタンだけに使うため、詳細画面は「保存済み」「マイリストに保存」
   // （aria-labelは「マイリストから外す」）を使う。
   firstCard.dispatchEvent(new window.Event('click', { bubbles: true }));
+  // 【2026-10-10追記】showSpotDetail()が「この先へ」候補計算のため非同期になった
+  // （3本目）。クリック直後の同期読み取りだと描画前（ボタン未生成）を読んでしまうため待つ。
+  await waitFor(() => !!doc.querySelector('.detail-favorite-btn'), 3000);
   const detailFavBtn = doc.querySelector('.detail-favorite-btn');
   const detailShowsActive = !!detailFavBtn?.classList.contains('favorite-btn-active') &&
     detailFavBtn?.textContent.trim() === '保存済み' &&
@@ -2070,6 +2079,121 @@ async function checkOperatorClassification() {
   return ok;
 }
 
+/**
+ * 「この先へ」機能（2026-10-10、3本目。feature/kono-sakiブランチ）を検証する。
+ * 構造的な検証にとどめる（特定のスポット名をハードコードしない）。今後データが
+ * 作り直されても通り続けるようにするため。
+ * 1. 詳細画面に.onward-cardが0〜3件表示され、運賃表記が「+¥数字」の形になっている
+ * 2. 候補をクリックすると、その候補の詳細画面に切り替わる
+ * 3. 戻るボタンで、一覧にではなく元のスポットの詳細画面に1回で戻る（履歴スタック）
+ * 4. その状態でもう一度戻るボタンを押すと、一覧に戻る（履歴が空になった後の通常動作）
+ */
+async function checkOnwardNavigation(html) {
+  console.log('\n=== 「この先へ」機能の検証 ===');
+  const errors = [];
+  const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'dangerously', pretendToBeVisual: true });
+  const { window } = dom;
+  stubMatchMedia(window, true);
+  stubFetch(window);
+  window.addEventListener('error', (e) => errors.push(e.error ? (e.error.stack || e.error.message) : e.message));
+
+  await new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 50);
+    if (window.document.readyState === 'complete') done();
+    else window.addEventListener('load', done);
+  });
+  const doc = window.document;
+
+  const item = await waitForSuggestion(doc, window, '高松築港', '高松築港');
+  if (!item) {
+    console.log('❌ 検証用の出発駅「高松築港」の候補が見つかりません');
+    window.close();
+    return false;
+  }
+  item.dispatchEvent(new window.Event('click', { bubbles: true }));
+  // 【注意】予算は「帯」表示（予算-200より高く予算以下）のため、¥2000にすると
+  // 高額帯（¥1801〜¥2000）だけになり0件になりうる。帯内に確実にカードがある
+  // ことが分かっている¥1000を使う（「この先へ」自体の候補計算は内部で
+  // MAX_BUDGET=2000のallSpotsを使うため、帯を絞っても候補の母集団は変わらない）。
+  doc.getElementById('budget-input').value = '1000';
+  doc.getElementById('search-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+
+  const rendered = await waitFor(() => resultsSettled(doc), 8000);
+  if (!rendered) {
+    console.log('❌ 検索結果が表示されませんでした（タイムアウト）');
+    window.close();
+    return false;
+  }
+
+  const firstCard = doc.querySelector('.spot-card');
+  if (!firstCard) {
+    console.log('❌ 結果カードが1件もありません');
+    window.close();
+    return false;
+  }
+  const originalSpotName = firstCard.querySelector('h3')?.textContent;
+  firstCard.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await waitFor(() => doc.getElementById('detail-content')?.querySelector('h2')?.textContent === originalSpotName, 5000);
+
+  const onwardCards = [...doc.querySelectorAll('.onward-card')];
+  const countOk = onwardCards.length >= 0 && onwardCards.length <= 3;
+  console.log(countOk
+    ? `✅ 「この先へ」候補が${onwardCards.length}件表示されています（0〜3件の範囲内）`
+    : `❌ 「この先へ」候補の件数が想定外です（${onwardCards.length}件）`);
+
+  if (onwardCards.length === 0) {
+    console.log('ℹ️  この出発駅・予算では候補が無かったため、クリック遷移・履歴の検証はスキップします');
+    window.close();
+    return countOk && errors.length === 0;
+  }
+
+  const fareTexts = onwardCards.map((c) => c.querySelector('.onward-fare')?.textContent || '');
+  const fareFormatOk = fareTexts.every((t) => /^\+¥\d+$/.test(t));
+  console.log(fareFormatOk
+    ? `✅ 各候補の運賃差が「+¥数字」の形式で表示されています（${fareTexts.join(', ')}）`
+    : `❌ 運賃差の表記が想定外です（${fareTexts.join(', ')}）`);
+
+  const candidateName = onwardCards[0].querySelector('.onward-name')?.textContent?.trim();
+  onwardCards[0].dispatchEvent(new window.Event('click', { bubbles: true }));
+  const movedToCandidate = await waitFor(
+    () => {
+      const h2 = doc.getElementById('detail-content')?.querySelector('h2')?.textContent;
+      return !!h2 && h2 !== originalSpotName;
+    },
+    5000
+  );
+  const candidateHeading = doc.getElementById('detail-content')?.querySelector('h2')?.textContent;
+  console.log(movedToCandidate
+    ? `✅ 「この先へ」カードをクリックすると候補の詳細画面に切り替わりました（"${candidateHeading}"）`
+    : `❌ 候補クリックでの詳細画面の切り替えに失敗しました（見出し="${candidateHeading}"）`);
+
+  // 戻るボタン1回目：一覧にではなく、元のスポットの詳細に戻るはず
+  doc.getElementById('back-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+  const backToOriginalDetail = await waitFor(() => {
+    const view = doc.getElementById('app-layout')?.getAttribute('data-view');
+    const h2 = doc.getElementById('detail-content')?.querySelector('h2')?.textContent;
+    return view === 'detail' && h2 === originalSpotName;
+  }, 3000);
+  console.log(backToOriginalDetail
+    ? '✅ 戻るボタンで、一覧にではなく元のスポットの詳細画面に1回で戻りました（履歴スタック）'
+    : `❌ 戻るボタンの動作が想定と異なります（data-view="${doc.getElementById('app-layout')?.getAttribute('data-view')}", h2="${doc.getElementById('detail-content')?.querySelector('h2')?.textContent}"）`);
+
+  // 戻るボタン2回目：履歴が空になったので、通常どおり一覧に戻るはず
+  doc.getElementById('back-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+  const backToList = doc.getElementById('app-layout')?.getAttribute('data-view') === 'results';
+  console.log(backToList
+    ? '✅ 履歴が空になった後は、通常どおり一覧に戻りました'
+    : `❌ 2回目の戻るボタンで一覧に戻りませんでした（data-view="${doc.getElementById('app-layout')?.getAttribute('data-view')}"）`);
+
+  if (errors.length > 0) {
+    console.log('⚠️  ページ実行中に発生したエラー:');
+    errors.forEach((e) => console.log('  - ' + e));
+  }
+
+  window.close();
+  return countOk && fareFormatOk && movedToCandidate && backToOriginalDetail && backToList && errors.length === 0;
+}
+
 async function main() {
   if (!fs.existsSync(distIndexPath)) {
     console.error('dist/index.html が見つかりません。先に npm run bundle を実行してください');
@@ -2100,6 +2224,7 @@ async function main() {
   const frequencyDisplayLogicOk = await checkFrequencyDisplayLogic();
   const shareTextMunicipalityOk = await checkShareTextMunicipalityAndFrequency();
   const operatorClassificationOk = await checkOperatorClassification();
+  const onwardNavigationOk = await checkOnwardNavigation(html);
 
   if (
     publishedOk && desktopOk && mobileOk && cardsOk && loadingStateOk && transferDisplayOk &&
@@ -2107,7 +2232,7 @@ async function main() {
     searchButtonStateOk && favoritesStorageOk && favoriteCardToggleOk && sharedSpotBandBypassOk &&
     sharedSpotSidMismatchOk && sharedSpotAmbiguousNameOk && sharedListMixedDepartureOk &&
     serviceFrequencyComputationOk && frequencyDisplayLogicOk && shareTextMunicipalityOk &&
-    operatorClassificationOk
+    operatorClassificationOk && onwardNavigationOk
   ) {
     console.log('\n✅ 検証成功: 初期表示・検索結果カードともに想定通りです');
   } else {
