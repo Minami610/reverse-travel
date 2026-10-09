@@ -139,6 +139,7 @@ async function generateInlineJSScript(jsDir) {
     'map-view.js',
     'layout-controller.js',
     'favorites.js',
+    'onward-candidates.js',
     'main.js',
   ];
 

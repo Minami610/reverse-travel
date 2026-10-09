@@ -39,6 +39,7 @@ const JS_FILES = [
   'map-view.js',
   'layout-controller.js',
   'favorites.js',
+  'onward-candidates.js',
   'main.js',
 ].map((f) => path.join(rootDir, 'assets/js', f));
 
