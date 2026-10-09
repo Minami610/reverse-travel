@@ -1457,7 +1457,7 @@ header p {
 
 .spot-image {
   width: 100%;
-  height: 130px;
+  height: 180px; /* 2026-10-10、デザイン②「写真を大きく出す」(Minami指示)。旧130px */
   flex-shrink: 0;
   object-fit: cover;
 }
@@ -1504,6 +1504,56 @@ header p {
   font-weight: 600;
   color: var(--color-main-deep);
   margin-bottom: 0.4rem;
+}
+
+/* 応援マーク（2026-10-10、2本目「便の少ない路線を応援」）。
+   塗りのハート＋文言のみで、押せるボタンに見えないようbutton要素を使わず
+   cursor:defaultにする（Minami指示：「応援マークは押せるボタンに見えないこと」）。 */
+.support-badge {
+  display: flex;
+  align-items: center;
+  padding: 0.3rem 0.75rem 0;
+  cursor: default;
+}
+
+.support-badge-heart {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--color-accent-deep);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.support-badge-heart svg {
+  color: var(--color-accent-deep);
+}
+
+.support-badge-note {
+  margin: 0.3rem 0.75rem 0.4rem;
+  padding: 0.5rem 0.6rem;
+  background-color: #FFF3EA; /* オレンジ地 */
+  border: 1px solid var(--color-accent);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--color-text);
+}
+
+/* マークが付かないカードの小さな便数表示 */
+.spot-frequency-note {
+  padding: 0 0.75rem;
+  margin-bottom: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--color-text-sub);
+}
+
+/* 詳細画面：経路の各区間に添える便数（route-formatter.js renderFrequencyNote） */
+.route-leg-frequency {
+  display: inline-block;
+  margin-top: 0.1rem;
+  font-size: 0.8rem;
+  color: var(--color-text-sub);
 }
 
 .detail-btn {
@@ -2434,10 +2484,10 @@ function decodeRouteDetails(indexed) {
     for (const [destId, byOperator] of Object.entries(destMap)) {
       decoded[originId][destId] = {};
       for (const [operatorId, entry] of Object.entries(byOperator)) {
-        // 2026-10-06: wait_minを削除した新形式。直行は長さ2、乗換1回は長さ5（旧: 3/7）。
-        decoded[originId][destId][operatorId] = entry.length === 2
-          ? [routeIndex[entry[0]], entry[1]]
-          : [entry[0], routeIndex[entry[1]], entry[2], routeIndex[entry[3]], entry[4]];
+        // 2026-10-10: 便数情報が末尾3要素として常に付く形式。直行は長さ5、乗換1回は長さ8（旧: 2/5）。
+        decoded[originId][destId][operatorId] = entry.length === 5
+          ? [routeIndex[entry[0]], entry[1], entry[2], entry[3], entry[4]]
+          : [entry[0], routeIndex[entry[1]], entry[2], routeIndex[entry[3]], entry[4], entry[5], entry[6], entry[7]];
       }
     }
   }
@@ -2475,12 +2525,16 @@ class GTFSLoader {
    * 出発駅として選べる時点で既に公開中の県に絞られている。
    */
   async loadStationIndex() {
-    const [stationIndex, adjacency, publishedPrefectures, rankingConfig] = await Promise.all([
+    const [stationIndex, adjacency, publishedPrefectures, rankingConfig, supportBadgeConfig] = await Promise.all([
       this.fetchJson('data/national/station-index.json'),
       this.fetchJson('data/national/prefecture-adjacency.json'),
       this.fetchJson('data/national/published-prefectures.json'),
       this.fetchJson('data/national/spot-ranking-config.json').catch((error) => {
         console.warn(`⚠️ スポットランキング設定の取得に失敗しました（${error.message}）。デフォルト値を使用します`);
+        return null;
+      }),
+      this.fetchJson('data/national/support-badge.json').catch((error) => {
+        console.warn(`⚠️ 応援マーク設定の取得に失敗しました（${error.message}）。デフォルト値を使用します`);
         return null;
       }),
     ]);
@@ -2489,6 +2543,9 @@ class GTFSLoader {
     this.publishedPrefectures = publishedPrefectures;
     if (rankingConfig) {
       window.EMBEDDED_SPOT_RANKING_CONFIG = rankingConfig;
+    }
+    if (supportBadgeConfig) {
+      window.EMBEDDED_SUPPORT_BADGE_CONFIG = supportBadgeConfig;
     }
     console.log(`✅ 駅一覧をロード（${stationIndex.length}駅、公開中${publishedPrefectures.length}都道府県分）`);
     return { stationIndex, adjacency, publishedPrefectures };
@@ -2654,8 +2711,20 @@ class GTFSLoader {
  * 両方から使う。
  *
  * route-details.json の RouteEntry はファイルサイズ抑制のため配列形式：
- *   直行:   [route_id, duration_min]                               （長さ2）
- *   乗換1回: [via, route_id_1, duration_min_1, route_id_2, duration_min_2] （長さ5）
+ *   直行:   [route_id, duration_min, tripCount, dayCode, demandCount]（長さ5）
+ *   乗換1回: [via, route_id_1, duration_min_1, route_id_2, duration_min_2,
+ *            tripCount, dayCode, demandCount]（長さ8）
+ *
+ * 【2026-10-10追記】末尾3要素は便数情報（2本目「便の少ない路線を応援」マーク機能、
+ * scripts/build-pipeline/compute-service-frequency.js参照）。
+ *   tripCount: その区間のボトルネック便数（行き・帰りの小さい方、route_idをまたいで集計）。
+ *              -1は「代表日が見つからず便数を解決できなかった」ことを示す。
+ *   dayCode: 0〜31は運行する平日の曜日ビットフラグ（bit0=月…bit4=金）、32は週末代表
+ *            （土休日のみ運行）、-1はtripCount同様「解決できなかった」。
+ *   demandCount: tripCountのうち予約制（pickup_type=2）の便数。
+ * 直行・乗換1回のどちらも常にこの3要素を持つ（長さを固定することで、
+ * 「乗換1回・便数情報なし」(旧:長さ5)と「直行・便数情報あり」(長さ5)が
+ * 長さだけで区別できなくなる問題を避けている）。
  *
  * 【2026-10-06追記】期待待ち時間（wait_min）はRouteEntryに含めない。以前は
  * 「駅ペア×路線」ごとに埋め込んでいたが、富山でroute-details.jsonが肥大化した
@@ -2671,11 +2740,14 @@ class GTFSLoader {
  * 呼び出し側は必ず「運賃を決めた事業者」のIDを渡すこと。
  */
 
-/** RouteEntry配列 → {type, route_id, duration_min} または {type, via, legs} */
+/** RouteEntry配列 → {type, route_id, duration_min, tripCount, dayCode, demandCount} または {type, via, legs, tripCount, dayCode, demandCount} */
 function parseRouteEntry(entry) {
   if (!entry) return null;
-  if (entry.length === 2) {
-    return { type: 'direct', route_id: entry[0], duration_min: entry[1] };
+  if (entry.length === 5) {
+    return {
+      type: 'direct', route_id: entry[0], duration_min: entry[1],
+      tripCount: entry[2], dayCode: entry[3], demandCount: entry[4],
+    };
   }
   return {
     type: 'transfer',
@@ -2684,7 +2756,71 @@ function parseRouteEntry(entry) {
       { route_id: entry[1], duration_min: entry[2] },
       { route_id: entry[3], duration_min: entry[4] },
     ],
+    tripCount: entry[5], dayCode: entry[6], demandCount: entry[7],
   };
+}
+
+/** dayCode: 0〜31=平日ビットフラグ、32=週末代表、-1=解決できなかった */
+const WEEKEND_DAY_CODE = 32;
+const WEEKDAY_BIT_LABELS = ['月', '火', '水', '木', '金'];
+
+/**
+ * 便数情報（{tripCount, dayCode, demandCount}）を人間が読める曜日の文言にする。
+ * @returns {string} 例: "平日"・"火・金のみ"・"土休日"・"（運行曜日不明）"
+ */
+function formatDayLabel(dayCode) {
+  if (dayCode === WEEKEND_DAY_CODE) return '土休日';
+  if (dayCode === 31) return '平日'; // 0b11111 = 月〜金すべて
+  if (dayCode >= 0 && dayCode < 31) {
+    const days = [];
+    for (let i = 0; i < 5; i++) if (dayCode & (1 << i)) days.push(WEEKDAY_BIT_LABELS[i]);
+    return days.length > 0 ? `${days.join('・')}のみ` : '（運行曜日不明）';
+  }
+  return '（運行曜日不明）';
+}
+
+/**
+ * 便数情報のroute_idから、カード・共有文で使う事業者の呼び方を決める。
+ * 「コミュニティバス」の語は、route-info.jsonのis_community_operator
+ * （build-prefecture.jsがfeed_info.txtのfeed_publisher_nameから機械的に判定、
+ * scripts/build-pipeline/operator-classification.js参照）がtrueの事業者だけに使う。
+ * それ以外はroute_type（0/1/2=鉄道系、3=バス）に応じて「バス」「路線」とする。
+ * @param {object} routeInfo - route-info.json
+ * @param {string|undefined} routeId
+ * @returns {string} "コミュニティバス" | "バス" | "路線"
+ */
+function operatorLabelWord(routeInfo, routeId) {
+  const route = routeInfo?.[routeId];
+  if (!route) return '路線';
+  if (route.is_community_operator) return 'コミュニティバス';
+  return parseInt(route.route_type, 10) === 3 ? 'バス' : '路線';
+}
+
+/**
+ * 出発駅ID→到達駅IDの便数情報（行き・帰りの小さい方。ビルド時に確定済みの値を
+ * そのまま引くだけ）を解決する。estimateRideMinutes/estimateSelectionMinutesと
+ * 同じ、reachBy='direct'|'transfer'の分岐構造を踏襲する。
+ * @returns {{tripCount:number, dayCode:number, demandCount:number}|null}
+ *   解決できない場合（経路自体が無い、またはtripCount<0＝代表日なし）はnull
+ */
+function estimateTripFrequency(routeDetails, departureStationId, station) {
+  function fromParsed(parsed) {
+    if (!parsed || parsed.tripCount < 0) return null;
+    // route_idは「どの事業者の便か」を引くための代表値（コミュニティバス判定等に使う）。
+    // 直行・乗換1回（同一事業者内）のどちらも1本目の区間のroute_idで代表させる
+    // （乗換1回は両区間が同一事業者のため、どちらのroute_idでも事業者判定は変わらない）。
+    const routeId = parsed.type === 'direct' ? parsed.route_id : parsed.legs[0].route_id;
+    return { tripCount: parsed.tripCount, dayCode: parsed.dayCode, demandCount: parsed.demandCount, routeId };
+  }
+
+  if (station.reachBy === 'transfer' && station.transferAt) {
+    const [op1, op2] = station.legOperators;
+    const leg1 = fromParsed(parseRouteEntry(lookupRouteEntry(routeDetails, departureStationId, station.transferAt, op1)));
+    const leg2 = fromParsed(parseRouteEntry(lookupRouteEntry(routeDetails, station.transferAt, station.station_id, op2)));
+    if (!leg1 || !leg2) return null;
+    return leg1.tripCount <= leg2.tripCount ? leg1 : leg2;
+  }
+  return fromParsed(parseRouteEntry(lookupRouteEntry(routeDetails, departureStationId, station.station_id, station.viaOperator)));
 }
 
 /** 表示用：乗車時間のみの合計（待ち時間は含めない） */
@@ -3339,18 +3475,22 @@ class RouteFormatter {
     }
 
     if (parsed.type === 'direct') {
-      return `<div class="route-info">${this.renderLegLine(parsed.route_id, departureName, destName, parsed.duration_min, fare)}${roundTripNote}</div>`;
+      return `<div class="route-info">${this.renderLegLine(parsed.route_id, departureName, destName, parsed.duration_min, fare, this.frequencyOf(parsed))}${roundTripNote}</div>`;
     }
 
     // 運賃表上は「直接到達」だが、実際には同一事業者内で乗換が必要な区間。
     // 運賃はゾーン制の通し運賃のため、区間ごとには分割せず合計を1回だけ表示する。
+    // 便数は区間ごとではなくエントリ単位（2区間のボトルネック）で1つだけ保持しているため、
+    // 同じ値を両方の区間行に表示する（同一事業者内の乗換のため、どちらの区間も
+    // 同じ事業者の便であることに変わりはない）。
     const viaName = this.displayName(parsed.via);
     const totalMinutes = this.totalMinutes(parsed);
+    const freq = this.frequencyOf(parsed);
     return `
       <div class="route-info">
-        ${this.renderLegLine(parsed.legs[0].route_id, departureName, viaName, parsed.legs[0].duration_min, null)}
+        ${this.renderLegLine(parsed.legs[0].route_id, departureName, viaName, parsed.legs[0].duration_min, null, freq)}
         <div class="route-transfer-note">↓ ${viaName}で乗換</div>
-        ${this.renderLegLine(parsed.legs[1].route_id, viaName, destName, parsed.legs[1].duration_min, null)}
+        ${this.renderLegLine(parsed.legs[1].route_id, viaName, destName, parsed.legs[1].duration_min, null, freq)}
         <div class="route-total">合計（片道） ¥${fare}（通し運賃）・約${totalMinutes}分</div>
         <p class="route-disclaimer">※乗り換えの待ち時間は、運行本数から見積もった目安です</p>
         ${roundTripNote}
@@ -3411,23 +3551,40 @@ class RouteFormatter {
     if (!parsed) {
       return `<p class="route-unresolved">${originName} → ${destName}（経路情報を確定できませんでした）</p>`;
     }
+    const freq = this.frequencyOf(parsed);
     if (parsed.type === 'direct') {
-      return this.renderLegLine(parsed.route_id, originName, destName, parsed.duration_min, fare);
+      return this.renderLegLine(parsed.route_id, originName, destName, parsed.duration_min, fare, freq);
     }
     const viaName = this.displayName(parsed.via);
     return `
-      ${this.renderLegLine(parsed.legs[0].route_id, originName, viaName, parsed.legs[0].duration_min, null)}
+      ${this.renderLegLine(parsed.legs[0].route_id, originName, viaName, parsed.legs[0].duration_min, null, freq)}
       <div class="route-transfer-note">↓ ${viaName}で乗換</div>
-      ${this.renderLegLine(parsed.legs[1].route_id, viaName, destName, parsed.legs[1].duration_min, fare)}
+      ${this.renderLegLine(parsed.legs[1].route_id, viaName, destName, parsed.legs[1].duration_min, fare, freq)}
     `;
   }
 
-  renderLegLine(routeId, originName, destName, durationMin, fare) {
+  /** parseRouteEntry()の戻り値から便数情報を取り出す（tripCount<0＝未解決はnull扱い） */
+  frequencyOf(parsed) {
+    if (!parsed || parsed.tripCount === undefined || parsed.tripCount < 0) return null;
+    return { tripCount: parsed.tripCount, dayCode: parsed.dayCode, demandCount: parsed.demandCount };
+  }
+
+  /** 便数情報を区間行に添える文言（例："・平日1日4便"、予約制があれば"・要予約"も） */
+  renderFrequencyNote(freq) {
+    if (!freq) return '';
+    const dayLabel = formatDayLabel(freq.dayCode);
+    let text = `${dayLabel}1日${freq.tripCount}便`;
+    if (freq.demandCount > 0) text += '・要予約';
+    return `<span class="route-leg-frequency">${text}</span>`;
+  }
+
+  renderLegLine(routeId, originName, destName, durationMin, fare, frequency) {
     const label = this.routeLabel(routeId);
     const mode = this.routeMode(routeId);
     const icon = mode === 'bus' ? '🚌' : '🚃';
     const farePart = fare !== null && fare !== undefined ? `¥${fare}・` : '';
-    return `<p class="route-leg route-leg-${mode}">${icon} ${label}　${originName} → ${destName}（${farePart}約${durationMin}分）</p>`;
+    const freqNote = this.renderFrequencyNote(frequency);
+    return `<p class="route-leg route-leg-${mode}">${icon} ${label}　${originName} → ${destName}（${farePart}約${durationMin}分）${freqNote ? `<br>${freqNote}` : ''}</p>`;
   }
 
   renderUnresolved(spot) {
@@ -3894,12 +4051,20 @@ function parseListParam(value) {
 }
 
 /**
- * 共有テキストを組み立てる（2026-10-08時点の1本目では便数・市町村名は含めない。
- * Minamiさんの判断：2本目でデータを作る段階からまとめて追加する）。
+ * 共有テキストを組み立てる。
+ * 「スポット名（市町村）／出発地からバスで往復¥X、約Y分。／平日1日◯便の路線です。／URL」
+ * （2026-10-10、2本目で市町村名・便数を追加。市町村が無いときは括弧ごと省く。
+ * 便数が解決できない場合はfrequencyTextをnull/undefinedのまま渡す＝その行ごと省く。
+ * 呼び出し側の都合でmunicipality/frequencyTextを渡せない場合も、両方省略すれば
+ * 1本目までと同じ文面になる＝後方互換）。
+ * @param {string|null} [municipality]
+ * @param {string|null} [frequencyText] - 例: "平日1日4便の路線です。"（main.jsのbuildFrequencyDisplay由来）
  */
-function buildSpotShareText(spotName, departureName, roundTripFare, durationMin, url) {
+function buildSpotShareText(spotName, departureName, roundTripFare, durationMin, url, municipality, frequencyText) {
   const durationPart = typeof durationMin === 'number' ? `、約${durationMin}分` : '';
-  return `${spotName}／${departureName}からバスで往復¥${roundTripFare}${durationPart}。／${url}`;
+  const namePart = municipality ? `${spotName}（${municipality}）` : spotName;
+  const freqPart = frequencyText ? `／${frequencyText}` : '';
+  return `${namePart}／${departureName}からバスで往復¥${roundTripFare}${durationPart}。${freqPart}／${url}`;
 }
 
 /**
@@ -3939,6 +4104,7 @@ async function shareOrCopy(text, url) {
 
 
 
+
 // 予算の帯の幅（¥）。表示するのは「予算−BAND_WIDTHより高く、予算以下」の場所だけ
 // （2026-10-06、Minamiさんの判断により「予算以下すべて」から変更）。
 const BAND_WIDTH = 200;
@@ -3959,6 +4125,13 @@ function formatBandLabel(budget) {
 const STAR_OUTLINE_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
 const STAR_FILLED_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
 const SHARE_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v13"/><path d="m8 6 4-4 4 4"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-7"/></svg>';
+// 応援マーク（塗りのハート）。押せるボタンに見えないよう、cursor:defaultなどは
+// CSS側（.support-badge）で担保する（2026-10-10、2本目「便の少ない路線を応援」）。
+const HEART_FILLED_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 21s-6.7-4.3-9.3-8.1C.8 10.1 1.4 6.6 4.3 5 6.4 3.8 9 4.3 12 7.1 15 4.3 17.6 3.8 19.7 5c2.9 1.6 3.5 5.1 1.6 7.9C18.7 16.7 12 21 12 21z"/></svg>';
+// 応援マークの線（1日何便以下で付けるか）。config/support-badge.jsonから読む
+// （フロントにはビルド時にdocs/data/national/support-badge.jsonとしてコピーされる）。
+// 取得前・取得失敗時のフォールバック値は、config/support-badge.jsonの初期値と揃えてある。
+const DEFAULT_SUPPORT_BADGE_MAX_TRIPS = 3;
 
 /** ☆アイコンのspan（未保存=線だけ、保存済み=黄色の塗り）を組み立てる */
 function starIconHtml(active) {
@@ -4568,12 +4741,16 @@ class ReverseTravel {
       stationId: this.currentDepartureStationId,
       departureName: this.currentDepartureStationName,
     });
+    const freqInfo = this.buildFrequencyDisplay(spot);
+    const frequencyText = freqInfo ? `${freqInfo.dayLabel}1日${freqInfo.tripCount}便の${freqInfo.word}です。` : null;
     const text = buildSpotShareText(
       spot.name,
       this.currentDepartureStationName,
       spot.source_round_trip_fare,
       typeof spot.source_ride_duration_min === 'number' ? spot.source_ride_duration_min : null,
-      url
+      url,
+      spot.municipality,
+      frequencyText
     );
     const result = await shareOrCopy(text, url);
     if (result === 'copied') this.showToast('コピーしました');
@@ -5238,6 +5415,71 @@ class ReverseTravel {
   }
 
   /**
+   * config/support-badge.jsonから読んだ応援マークの閾値（1日◯便以下）。
+   * 取得前・取得失敗時はDEFAULT_SUPPORT_BADGE_MAX_TRIPSにフォールバックする
+   * （spot-finder.jsのsitelinks閾値フォールバックと同じ考え方）。
+   */
+  getSupportBadgeMaxTrips() {
+    const value = window.EMBEDDED_SUPPORT_BADGE_CONFIG?.max_trips_per_day;
+    return typeof value === 'number' ? value : DEFAULT_SUPPORT_BADGE_MAX_TRIPS;
+  }
+
+  /**
+   * スポットのアクセス区間の便数情報を解決する（route-details.jsonに
+   * ビルド時に埋め込み済みの値を引くだけ）。spotのsource_*フィールドから
+   * fare-calculator.jsのcalculateReachable()が返す「駅」相当の形へ組み立て直す。
+   * @returns {{tripCount:number, dayCode:number, demandCount:number, routeId:string}|null}
+   */
+  getSpotFrequency(spot) {
+    if (!this.data?.routeDetails || !this.currentDepartureStationId) return null;
+    const stationLike = {
+      reachBy: spot.source_reach_by,
+      transferAt: spot.source_transfer_at,
+      viaOperator: spot.source_via_operator,
+      legOperators: spot.source_leg_operators,
+      station_id: spot.source_station_id,
+    };
+    return estimateTripFrequency(this.data.routeDetails, this.currentDepartureStationId, stationLike);
+  }
+
+  /**
+   * カード・詳細画面・共有文で共通して使う、便数まわりの表示情報一式を組み立てる。
+   * 便数が解決できない場合（経路未確定等）はnullを返し、呼び出し側は便数関連の
+   * 表示を一切出さない（無言で0件等の誤った数字を出さないため）。
+   */
+  buildFrequencyDisplay(spot) {
+    const freq = this.getSpotFrequency(spot);
+    if (!freq) return null;
+    const maxTrips = this.getSupportBadgeMaxTrips();
+    const dayLabel = formatDayLabel(freq.dayCode);
+    const word = operatorLabelWord(this.data.routeInfo, freq.routeId);
+    return {
+      tripCount: freq.tripCount,
+      dayLabel,
+      word,
+      isBadgeEligible: freq.tripCount <= maxTrips,
+      hasDemand: freq.demandCount > 0,
+    };
+  }
+
+  /** カードの応援マーク＋説明枠（バッジ対象のときだけ） */
+  renderSupportBadge(info) {
+    if (!info || !info.isBadgeEligible) return '';
+    return `
+      <div class="support-badge" aria-hidden="false">
+        <span class="support-badge-heart">${HEART_FILLED_SVG}この路線を応援</span>
+      </div>
+      <p class="support-badge-note">${info.dayLabel}1日${info.tripCount}便の${info.word}で行けます。あなたが乗ることが、この路線を支える力になります。${info.hasDemand ? '要予約の便があります。' : ''}</p>
+    `;
+  }
+
+  /** バッジ対象でないカードにも小さく出す便数（例："平日1日12便"） */
+  renderSmallFrequencyNote(info) {
+    if (!info || info.isBadgeEligible) return '';
+    return `<p class="spot-frequency-note">${info.dayLabel}1日${info.tripCount}便${info.hasDemand ? '・要予約の便あり' : ''}</p>`;
+  }
+
+  /**
    * 一覧部分のみを再描画する。並び替え時は表示対象スポットの集合が
    * 変わらないため地図は呼び出し元で再描画しない。
    * カードのクリック／ホバーは initUI で一覧全体に委譲済みのため、
@@ -5256,8 +5498,9 @@ class ReverseTravel {
     const html = spots
       .map(spot => {
         const fav = isFavorite(spot.id);
+        const freqInfo = this.buildFrequencyDisplay(spot);
         return `
-        <div class="spot-card" data-spot-id="${spot.id}">
+        <div class="spot-card${freqInfo?.isBadgeEligible ? ' spot-card-supported' : ''}" data-spot-id="${spot.id}">
           <div class="spot-card-actions">
             <button type="button" class="favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}" aria-label="${fav ? 'マイリストから外す' : 'マイリストに保存'}">${starIconHtml(fav)}</button>
             <button type="button" class="share-btn" data-spot-id="${spot.id}" aria-label="共有">${shareIconHtml()}</button>
@@ -5268,6 +5511,8 @@ class ReverseTravel {
           <h3>${spot.name}</h3>
           <p class="spot-description">${this.formatDescription(spot)}</p>
           <p class="spot-summary">${this.formatSpotSummary(spot)}</p>
+          ${this.renderSupportBadge(freqInfo)}
+          ${this.renderSmallFrequencyNote(freqInfo)}
           <button class="detail-btn" data-spot-id="${spot.id}">詳細を見る</button>
         </div>
       `;
