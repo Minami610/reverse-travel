@@ -105,6 +105,7 @@ export function generateSiteDataForPrefecture(prefCode, outRoot = DOCS_DATA_ROOT
     'route-info.json',
     'spots-by-station.json',
     'data-sources.json',
+    'route-sequences.json', // 3本目「この先へ」機能（同じ路線の先の判定用）
   ];
   for (const file of plainCopyFiles) {
     const srcPath = path.join(srcDir, file);

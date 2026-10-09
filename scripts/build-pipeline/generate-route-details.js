@@ -81,6 +81,7 @@ import { parse } from 'csv-parse/sync';
 import { fileURLToPath } from 'url';
 import { namespacedId } from './gtfs-id.js';
 import { augmentRouteDetailsWithFrequency } from './compute-service-frequency.js';
+import { computeRouteSequences } from './compute-route-sequences.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -431,6 +432,14 @@ export async function generateRouteDetails(options = {}) {
   fs.writeFileSync(path.join(derivedDir, 'route-details.json'), JSON.stringify(frequencyResult.routeDetails));
   const fileSize = fs.statSync(path.join(derivedDir, 'route-details.json')).size;
   console.log(`\n✅ route-details.json (${(fileSize / 1024).toFixed(1)} KB, ${directCount + transferCount}件の経路情報)`);
+
+  // 路線×方向ごとの停車順（3本目「この先へ」機能、同じ路線の先の判定用）
+  console.log('\n【路線×方向の停車順】route-sequences.jsonを生成');
+  const routeSequences = computeRouteSequences(operators, rawGtfsDir, stopIdToStationId);
+  fs.writeFileSync(path.join(derivedDir, 'route-sequences.json'), JSON.stringify(routeSequences));
+  const seqFileSize = fs.statSync(path.join(derivedDir, 'route-sequences.json')).size;
+  const routeCount = Object.keys(routeSequences).length;
+  console.log(`✅ route-sequences.json (${(seqFileSize / 1024).toFixed(1)} KB, ${routeCount}路線)`);
 
   return { directCount, transferCount, unresolvedCount, total: odTriples.size };
 }
