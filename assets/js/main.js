@@ -29,6 +29,11 @@ function formatBandLabel(budget) {
   return `¥${budget - BAND_WIDTH + 1}〜¥${budget}`;
 }
 
+/** 数字を3桁区切りにする（例: 1740 → "1,740"。「この先へ」の運賃表記用） */
+function formatThousands(n) {
+  return n.toLocaleString('ja-JP');
+}
+
 // ☆（マイリスト）・共有ボタンの線画アイコン（2026-10-09、文字"★"/"☆"/"⇧"から
 // SVGに変更。Minamiさんの指示：カード・詳細画面・マイリストの3か所とも揃える）。
 // 色はアイコンを包む<span>自身のcolorで決める（fill="currentColor"がボタンの
@@ -206,15 +211,16 @@ class ReverseTravel {
 
     this.updateBudgetUI();
 
+    // 【2026-10-10追記】スマホ本体の戻る操作（ジェスチャー・物理ボタン）と
+    // 画面上の「← 戻る」ボタンを同じ動きにするため、ボタン側はhistory.back()を
+    // 呼ぶだけにし、実際の画面切り替えはpopstateハンドラ（goBackInDetail()）に
+    // 一本化する。共有リンクのURLパラメータと干渉しないよう、pushState/
+    // replaceStateはURLを変えず（第3引数を省略）状態オブジェクトだけを積む。
     this.elements.backBtn.addEventListener('click', () => {
-      // 「この先へ」で辿った履歴があれば直前のスポット詳細に戻す（1タップで1つ前に戻る）。
-      // 履歴が無ければ、これまでどおり一覧に戻す。
-      if (this.detailHistory.length > 0) {
-        const previousSpot = this.detailHistory.pop();
-        this.showSpotDetail(previousSpot);
-      } else {
-        this.showResultsList();
-      }
+      history.back();
+    });
+    window.addEventListener('popstate', () => {
+      this.goBackInDetail();
     });
 
     this.elements.sortSelect.addEventListener('change', (e) => {
@@ -970,6 +976,7 @@ class ReverseTravel {
 
       this.displayResults(bandSpots, stationId, prefCode, reachableCount, alignedBudget, hasCheaperSpots);
       this.detailHistory = []; // 共有リンク・マイリストからの新規の詳細表示なので履歴をリセットする
+      history.pushState({}, ''); // スマホの戻る操作で一覧に戻れるよう、履歴を1つ積む（URLは変えない）
       this.showSpotDetail(spotForDetail);
       return true;
     } catch (error) {
@@ -1511,7 +1518,22 @@ class ReverseTravel {
     const spot = this.currentSpots.find((s) => s.id === spotId);
     if (spot) {
       this.detailHistory = []; // 一覧からの新規の詳細表示なので「この先へ」の履歴をリセットする
+      history.pushState({}, ''); // スマホの戻る操作で一覧に戻れるよう、履歴を1つ積む
       this.showSpotDetail(spot);
+    }
+  }
+
+  /**
+   * 戻る操作（画面上の「← 戻る」ボタン・スマホ本体の戻る操作のどちらからも呼ばれる）。
+   * 「この先へ」で辿った履歴があれば直前のスポット詳細に戻す（1回で1つ前に戻る）。
+   * 履歴が無ければ一覧に戻す。
+   */
+  goBackInDetail() {
+    if (this.detailHistory.length > 0) {
+      const previousSpot = this.detailHistory.pop();
+      this.showSpotDetail(previousSpot);
+    } else {
+      this.showResultsList();
     }
   }
 
@@ -1535,43 +1557,68 @@ class ReverseTravel {
   }
 
   /**
-   * 「この先へ」カード用の短い一言（説明文の先頭30文字、句点があればそこで切る）。
-   * カードが小さいため、カード一覧の100文字截断よりさらに短くする。
+   * 「この先へ」カードの運賃表記：「往復¥1,740（+¥120）」。差が0のときは
+   * 「往復¥980（追加なし）」（Minami指示：「+¥0」という表記をやめる）。
+   * スマホ幅では運賃欄の横幅が限られるため2行で折り返すが、金額と差額をそれぞれ
+   * nowrapのspanに分けることで「（追加な」「し）」のような文字の途中での
+   * 折り返しを防ぐ（2026-10-10、375px幅のスクリーンショット確認で発覚）。
    */
-  formatOnwardBlurb(spot) {
-    if (!spot.description) return '';
-    const period = spot.description.indexOf('。');
-    if (period !== -1 && period <= 30) return spot.description.slice(0, period + 1);
-    return spot.description.length > 30 ? `${spot.description.slice(0, 30)}...` : spot.description;
+  formatOnwardFare(cand) {
+    const fareText = `往復¥${formatThousands(cand.spot.source_round_trip_fare)}`;
+    const diffText = cand.extraFare === 0 ? '追加なし' : `+¥${formatThousands(cand.extraFare)}`;
+    return `<span class="onward-fare-amount">${fareText}</span><span class="onward-fare-diff">（${diffText}）</span>`;
   }
 
   /**
-   * 「この先へ」セクションのHTML（3本目機能）。暗い枠に3件、それぞれ
-   * 写真・名前・一言・「+¥◯」。応援マーク対象の候補には小さいハートだけ添える
-   * （2本目のオレンジ説明枠はここでは出さない。タップ後の詳細画面で確認できる）。
+   * 「この先へ」カードの一言。種類ごとに文言を変える（Minami指示）。
+   * - 同じ路線の先：「同じバスで約◯分先」（今の停留所→候補の停留所の所要時間。
+   *   出せなければ「同じバスでその先」）
+   * - すぐ近く：「ここから歩いて約◯分」（直線距離÷時速4km。座標が無ければ空）
+   * - 少し足せば：「ここから約◯km」
+   */
+  formatOnwardBlurb(cand) {
+    if (cand.type === 'same-route') {
+      return cand.sameRouteMinutes != null
+        ? `同じバスで約${Math.round(cand.sameRouteMinutes)}分先`
+        : '同じバスでその先';
+    }
+    if (cand.type === 'nearby') {
+      return cand.walkMinutes != null ? `ここから歩いて約${Math.round(cand.walkMinutes)}分` : '';
+    }
+    if (cand.type === 'stretch') {
+      return cand.straightKm != null ? `ここから約${cand.straightKm.toFixed(1)}km` : '';
+    }
+    return '';
+  }
+
+  /**
+   * 「この先へ」セクションのHTML（3本目機能）。暗い枠に、1件を横長1行にして3件
+   * （デザイン③）：左に56px四方の小さい写真、中央に名前・一言、右に運賃。
+   * 応援マーク対象の候補には小さいハートを名前の横に添える（2本目のオレンジ説明枠は
+   * ここでは出さない。タップ後の詳細画面で確認できる）。
    * 候補が1件も無いとき（計算失敗・出発駅未確定時含む）はセクションごと省く。
    */
   renderOnwardSection(candidates) {
     if (!candidates || candidates.length === 0) return '';
-    const cards = candidates.map(({ spot: cand, extraFare }) => {
-      const freqInfo = this.buildFrequencyDisplay(cand);
+    const cards = candidates.map((cand) => {
+      const freqInfo = this.buildFrequencyDisplay(cand.spot);
       const heart = freqInfo?.isBadgeEligible ? `<span class="onward-heart">${HEART_FILLED_SVG}</span>` : '';
-      const fareLabel = extraFare === 0 ? '+¥0' : `+¥${extraFare}`;
       return `
-        <div class="onward-card" data-spot-id="${cand.id}" role="button" tabindex="0">
-          ${cand.image
-            ? `<img src="${cand.image}" alt="${cand.name}" class="onward-image">`
+        <div class="onward-card" data-spot-id="${cand.spot.id}" role="button" tabindex="0">
+          ${cand.spot.image
+            ? `<img src="${cand.spot.image}" alt="${cand.spot.name}" class="onward-image">`
             : `<div class="onward-image spot-image-placeholder" aria-hidden="true">🏞️</div>`}
-          <div class="onward-name">${heart}${cand.name}</div>
-          <p class="onward-blurb">${this.formatOnwardBlurb(cand)}</p>
-          <p class="onward-fare">${fareLabel}</p>
+          <div class="onward-body">
+            <div class="onward-name">${heart}${cand.spot.name}</div>
+            <p class="onward-blurb">${this.formatOnwardBlurb(cand)}</p>
+          </div>
+          <p class="onward-fare">${this.formatOnwardFare(cand)}</p>
         </div>
       `;
     }).join('');
     return `
       <div class="onward-section">
         <h3 class="onward-title">この先へ</h3>
-        <p class="onward-note">+¥は出発駅からの往復運賃の差です</p>
         <div class="onward-cards">${cards}</div>
       </div>
     `;
@@ -1661,6 +1708,7 @@ class ReverseTravel {
       const candidate = allSpots.find((s) => s.id === candidateId);
       if (!candidate) return;
       if (this._currentDetailSpot) this.detailHistory.push(this._currentDetailSpot);
+      history.pushState({}, ''); // スマホの戻る操作で1つ前の詳細に戻れるよう、履歴を1つ積む
       this.showSpotDetail(candidate);
     } catch (error) {
       console.error('「この先へ」候補の表示に失敗:', error);

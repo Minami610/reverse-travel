@@ -1050,60 +1050,51 @@ header p {
   background-color: var(--color-accent-deep);
 }
 
-/* 「この先へ」（3本目、feature/kono-saki）。暗い色の枠に3件、
-   それぞれ写真・名前・一言・「+¥◯」。 */
+/* 「この先へ」（3本目、feature/kono-saki）。暗い色の枠に3件、1件を横長の1行で
+   表示する（デザイン③）：左に56px四方の小さい写真、中央に名前・一言、右に運賃。
+   3件で縦が260px前後に収まることを確認済み（verify-layoutのスクリーンショット参照）。 */
 .onward-section {
   margin-top: 1.5rem;
-  padding: 1rem;
+  padding: 0.75rem 0.75rem 0.9rem;
   background-color: var(--color-text);
   border-radius: 8px;
   color: white;
 }
 
 .onward-title {
-  margin: 0 0 0.2rem;
+  margin: 0 0 0.5rem;
   font-size: 1.05rem;
   color: white;
 }
 
-.onward-note {
-  margin: 0 0 0.8rem;
-  font-size: 0.72rem;
-  color: #D1D5DB;
-}
-
 .onward-cards {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 0.6rem;
-}
-
-@media (max-width: 759px) {
-  .onward-cards {
-    grid-template-columns: 1fr;
-  }
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
 }
 
 .onward-card {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
   background-color: white;
   border-radius: 6px;
-  overflow: hidden;
+  padding: 0.3rem;
   cursor: pointer;
   transition: transform 0.15s;
 }
 
 .onward-card:hover,
 .onward-card:focus-visible {
-  transform: translateY(-2px);
+  transform: translateY(-1px);
   outline: 2px solid var(--color-hover);
   outline-offset: -2px;
 }
 
 .onward-image {
-  width: 100%;
-  height: 90px;
+  width: 56px;
+  height: 56px;
+  border-radius: 6px;
   object-fit: cover;
   flex-shrink: 0;
 }
@@ -1113,17 +1104,24 @@ header p {
   align-items: center;
   justify-content: center;
   background-color: var(--color-main-light, #e8f5d0);
-  font-size: 1.5rem;
+  font-size: 1.3rem;
+}
+
+.onward-body {
+  flex: 1 1 auto;
+  min-width: 0; /* 子要素のテキスト省略(ellipsis)のため */
 }
 
 .onward-name {
   display: flex;
   align-items: center;
   gap: 0.25rem;
-  padding: 0.4rem 0.5rem 0;
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .onward-heart {
@@ -1138,19 +1136,32 @@ header p {
 }
 
 .onward-blurb {
-  margin: 0.2rem 0 0;
-  padding: 0 0.5rem;
+  margin: 0.1rem 0 0;
   font-size: 0.72rem;
   color: var(--color-text-sub);
-  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .onward-fare {
-  margin: 0.3rem 0 0;
-  padding: 0 0.5rem 0.5rem;
-  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex-shrink: 0;
+  margin: 0;
+  font-size: 0.78rem;
   font-weight: 700;
   color: var(--color-main-deep);
+  text-align: right;
+}
+
+/* 金額・差額を別行のspanに分け、それぞれ1行に収める（スマホ幅で名前・一言の省略を
+   防ぐため運賃側は2行を許容するが、「（追加な」「し）」のような文字の途中で
+   折り返させない） */
+.onward-fare-amount,
+.onward-fare-diff {
+  white-space: nowrap;
 }
 
 /* ========================================
