@@ -44,6 +44,13 @@ import { checkFeedHasFareData } from './build-pipeline/fare-feed-check.js';
 import { computeSpotDiff, logSpotDiff } from './build-pipeline/spot-diff-report.js';
 import { computeGtfsDiff, logGtfsDiff } from './build-pipeline/gtfs-diff-report.js';
 import { checkOperatorReachability } from './build-pipeline/operator-reachability-check.js';
+import { buildMunicipalityPolygonFinder } from './build-pipeline/municipality-polygon-lookup.js';
+import { PREFECTURE_ADJACENCY } from './build-pipeline/generate-site-data.js';
+import { isCommunityBusOperator } from './build-pipeline/operator-classification.js';
+
+// スポットの市町村名タグ付けで「ポリゴンに入らない場合に採用する」最大距離(km)。
+// 海・河口・橋の上などの座標を想定（2026-10-09の調査でMinami承認）。
+const MUNICIPALITY_FALLBACK_MAX_KM = 1;
 
 // 前回件数に対する削除率がこれを超えたら--accept-diffなしでは失敗にする
 const SPOT_REMOVAL_RATIO_THRESHOLD = 0.03;
@@ -78,6 +85,7 @@ function readFeedInfo(operatorId) {
     feedVersion: row?.feed_version || null,
     feedStartDate: row?.feed_start_date || null,
     feedEndDate: row?.feed_end_date || null,
+    feedPublisherName: row?.feed_publisher_name || null,
   };
 }
 
@@ -250,6 +258,20 @@ async function buildOnePrefecture(code, { force, acceptDiff }) {
   logGtfsDiff(gtfsDiff, prefName);
   fs.writeFileSync(path.join(outputDir, 'gtfs-diff-report.json'), JSON.stringify(gtfsDiff, null, 2));
 
+  // 【ステップ2a】route-info.jsonの各路線に「コミュニティバスの語を使ってよい事業者か」を
+  // 付与する（2026-10-10、2本目「便の少ない路線を応援」マーク機能のカード文言用）。
+  console.log('\n【ステップ2a】路線にコミュニティバス事業者フラグを付与');
+  const routeInfoForClassification = JSON.parse(fs.readFileSync(path.join(outputDir, 'route-info.json'), 'utf-8'));
+  const feedPublisherByOperator = new Map(operators.map((op) => [op.id, readFeedInfo(op.id).feedPublisherName]));
+  let communityOperatorRouteCount = 0;
+  for (const route of Object.values(routeInfoForClassification)) {
+    const isCommunity = isCommunityBusOperator(feedPublisherByOperator.get(route.operator_id));
+    route.is_community_operator = isCommunity;
+    if (isCommunity) communityOperatorRouteCount += 1;
+  }
+  fs.writeFileSync(path.join(outputDir, 'route-info.json'), JSON.stringify(routeInfoForClassification));
+  console.log(`  - コミュニティバス扱いの路線: ${communityOperatorRouteCount}/${Object.keys(routeInfoForClassification).length}件`);
+
   console.log('\n【ステップ2b】経路（路線・所要時間）情報を生成');
   const routeStats = await generateRouteDetails({ operators, rawGtfsDir, outputDir });
   if (routeStats.directCount + routeStats.transferCount === 0) {
@@ -309,6 +331,27 @@ async function buildOnePrefecture(code, { force, acceptDiff }) {
   if (spotDiff.hasPrevious && spotDiff.removalRatio > SPOT_REMOVAL_RATIO_THRESHOLD && acceptDiff) {
     console.warn(`⚠️  削除率が閾値を超えていますが --accept-diff が指定されているため続行します`);
   }
+
+  // 【ステップ3b】スポットに市町村名を付ける（2026-10-10、2本目「便の少ない路線を
+  // 応援」マーク機能。共有文・カードでの表示に使う）。隣接県にまたがるスポット
+  // （世界遺産バスの白川郷＝岐阜県、金沢市内のスポット等）もあるため、駅表示名の
+  // 曖昧さ回避と違い、出発地の県＋地理的に隣接するすべての県のポリゴンを読む。
+  // ポリゴンに入らない場合（海・河口・橋の上等）は、最寄りのポリゴンが
+  // MUNICIPALITY_FALLBACK_MAX_KM以内ならそれを採用し、それも無ければ付けない
+  // （誤った市町村名を推測で埋めるよりは、付けない方を選ぶ）。
+  console.log('\n【ステップ3b】スポットに市町村名を付与（国土数値情報N03）');
+  const municipalityPrefCodes = [code, ...(PREFECTURE_ADJACENCY[codeStr] || [])];
+  const findMunicipality = await buildMunicipalityPolygonFinder(municipalityPrefCodes, { fallbackMaxKm: MUNICIPALITY_FALLBACK_MAX_KM });
+  let municipalityResolvedCount = 0;
+  for (const spot of normalizedOutput.spots) {
+    if (spot.latitude === null || spot.latitude === undefined || spot.longitude === null || spot.longitude === undefined) continue;
+    const municipality = findMunicipality(spot.latitude, spot.longitude);
+    if (municipality) {
+      spot.municipality = municipality;
+      municipalityResolvedCount += 1;
+    }
+  }
+  console.log(`  - 市町村名を解決: ${municipalityResolvedCount}/${normalizedOutput.spots.length}件`);
 
   fs.writeFileSync(spotsPath, JSON.stringify(normalizedOutput));
   console.log(`✅ spots-by-station.json (${normalizedOutput.spotsIndex.length}件のユニークスポット)`);

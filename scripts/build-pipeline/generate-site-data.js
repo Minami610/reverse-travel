@@ -75,14 +75,14 @@ function indexRouteIds(routeDetails) {
     for (const [destId, byOperator] of Object.entries(destMap)) {
       data[originId][destId] = {};
       for (const [operatorId, entry] of Object.entries(byOperator)) {
-        // 2026-10-06: RouteEntryからwait_minを削除した（期待待ち時間は
-        // route-info.json側のroute_id→expected_wait_minへ一本化）ため、
-        // 直行は長さ2、乗換1回は長さ5になった（旧: 3/7）。
-        if (entry.length === 2) {
-          data[originId][destId][operatorId] = [indexOf(entry[0]), entry[1]];
+        // 2026-10-10: 便数情報（compute-service-frequency.js）が末尾3要素として
+        // 常に付くようになったため、直行は長さ5、乗換1回は長さ8になった（旧: 2/5）。
+        if (entry.length === 5) {
+          data[originId][destId][operatorId] = [indexOf(entry[0]), entry[1], entry[2], entry[3], entry[4]];
         } else {
           data[originId][destId][operatorId] = [
             entry[0], indexOf(entry[1]), entry[2], indexOf(entry[3]), entry[4],
+            entry[5], entry[6], entry[7],
           ];
         }
       }
@@ -239,6 +239,22 @@ export function copySpotRankingConfig(outRoot = DOCS_DATA_ROOT) {
   fs.mkdirSync(outDir, { recursive: true });
   const parsed = JSON.parse(fs.readFileSync(srcPath, 'utf-8'));
   const outPath = path.join(outDir, 'spot-ranking-config.json');
+  fs.writeFileSync(outPath, JSON.stringify(parsed));
+  console.log(`✅ ${path.relative(rootDir, outPath)} を生成`);
+}
+
+/**
+ * config/support-badge.json を docs/data/national/ にコピーする
+ * （2026-10-10、2本目「便の少ない路線を応援」マーク機能。応援マークの閾値
+ * （max_trips_per_day）はコードに直書きせず、このファイルから読む。
+ * spot-ranking-config.jsonと同じく都道府県に依存しないためnational配下に置く）。
+ */
+export function copySupportBadgeConfig(outRoot = DOCS_DATA_ROOT) {
+  const srcPath = path.join(rootDir, 'config/support-badge.json');
+  const outDir = path.join(outRoot, 'national');
+  fs.mkdirSync(outDir, { recursive: true });
+  const parsed = JSON.parse(fs.readFileSync(srcPath, 'utf-8'));
+  const outPath = path.join(outDir, 'support-badge.json');
   fs.writeFileSync(outPath, JSON.stringify(parsed));
   console.log(`✅ ${path.relative(rootDir, outPath)} を生成`);
 }
@@ -480,6 +496,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   generateStationIndex(prefCodes, outRoot);
   copySpotRankingConfig(outRoot);
+  copySupportBadgeConfig(outRoot);
   generateNationalDataSources(prefCodes, outRoot);
   writePublishedPrefecturesList(prefCodes, outRoot);
 

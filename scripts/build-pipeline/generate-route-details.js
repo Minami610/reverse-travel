@@ -80,6 +80,7 @@ import path from 'path';
 import { parse } from 'csv-parse/sync';
 import { fileURLToPath } from 'url';
 import { namespacedId } from './gtfs-id.js';
+import { augmentRouteDetailsWithFrequency } from './compute-service-frequency.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -419,8 +420,15 @@ export async function generateRouteDetails(options = {}) {
     );
   }
 
+  // 便数（区間単位、route_idをまたいで集計）を各エントリへ付与する
+  // （2026-10-10、2本目「便の少ない路線を応援」マーク機能。詳細はcompute-service-frequency.js参照）
+  console.log('\n【便数付与】route-details.jsonの各経路に便数情報を追加');
+  const frequencyResult = augmentRouteDetailsWithFrequency(routeDetails, rawGtfsDir, stopIdToStationId);
+  console.log(`  - 便数を解決できたエントリ: ${frequencyResult.resolvedCount}件`);
+  console.log(`  - 解決できなかったエントリ（元のまま便数情報なし）: ${frequencyResult.unresolvedCount}件`);
+
   // サイズ抑制のためcompact出力（pretty-printしない）
-  fs.writeFileSync(path.join(derivedDir, 'route-details.json'), JSON.stringify(routeDetails));
+  fs.writeFileSync(path.join(derivedDir, 'route-details.json'), JSON.stringify(frequencyResult.routeDetails));
   const fileSize = fs.statSync(path.join(derivedDir, 'route-details.json')).size;
   console.log(`\n✅ route-details.json (${(fileSize / 1024).toFixed(1)} KB, ${directCount + transferCount}件の経路情報)`);
 

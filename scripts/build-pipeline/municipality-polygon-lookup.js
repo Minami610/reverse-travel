@@ -98,28 +98,122 @@ async function downloadAndExtract(prefCode) {
   return { shpPath: path.join(prefDir, shpFile), dbfPath: path.join(prefDir, dbfFile) };
 }
 
+function municipalityNameOf(feature) {
+  // N03_004が市区町村名。政令指定都市の区はN03_004が市名、N03_005が区名
+  // （例：N03_004="新潟市"、N03_005="中央区"）。区がある場合は
+  // 「市名区名」を連結した表示名にする（例：「新潟市中央区」）。
+  const city = feature.properties.N03_004 || '';
+  const ward = feature.properties.N03_005 || '';
+  return `${city}${ward}`.trim();
+}
+
+// --- 点ー線分の最短距離（局所平面近似、km単位。fallbackMaxKm指定時のみ使う） ---
+// 1km級の精度には十分なため、@turf/point-to-polygon-distance等の追加npm依存は増やさない
+// （2026-10-10、スポットの市町村名タグ付けの海・河口・橋フォールバック調査で採用した方式）。
+function toLocalXY(lon, lat, refLat) {
+  const kmPerDegLon = 111.32 * Math.cos((refLat * Math.PI) / 180);
+  const kmPerDegLat = 111.32;
+  return { x: lon * kmPerDegLon, y: lat * kmPerDegLat };
+}
+
+function pointToSegmentDistanceKm(px, py, ax, ay, bx, by) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  let t = lenSq === 0 ? 0 : ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  const cx = ax + t * dx;
+  const cy = ay + t * dy;
+  return Math.hypot(px - cx, py - cy);
+}
+
+function getRings(geometry) {
+  if (geometry.type === 'Polygon') return geometry.coordinates;
+  if (geometry.type === 'MultiPolygon') return geometry.coordinates.flat();
+  return [];
+}
+
+function featureBBox(feature) {
+  if (feature._bbox) return feature._bbox;
+  let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+  for (const ring of getRings(feature.geometry)) {
+    for (const [lon, lat] of ring) {
+      if (lon < minLon) minLon = lon;
+      if (lon > maxLon) maxLon = lon;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+    }
+  }
+  feature._bbox = [minLon, minLat, maxLon, maxLat];
+  return feature._bbox;
+}
+
+/** 点から最も近いポリゴンまでの距離(km)以内にある市町村名を返す（bboxで粗く絞ってから厳密計算） */
+function findNearestMunicipalityWithinKm(lat, lon, features, maxKm) {
+  const margin = 1.3; // bboxの粗い事前絞り込みに使う安全マージン
+  const degLat = (maxKm * margin) / 111.32;
+  const degLon = (maxKm * margin) / (111.32 * Math.cos((lat * Math.PI) / 180));
+
+  let best = null;
+  let bestDist = Infinity;
+  for (const feature of features) {
+    if (!feature.geometry) continue;
+    const [minLon, minLat, maxLon, maxLat] = featureBBox(feature);
+    if (lon < minLon - degLon || lon > maxLon + degLon || lat < minLat - degLat || lat > maxLat + degLat) continue;
+
+    const p = toLocalXY(lon, lat, lat);
+    for (const ring of getRings(feature.geometry)) {
+      for (let i = 0; i < ring.length - 1; i++) {
+        const a = toLocalXY(ring[i][0], ring[i][1], lat);
+        const b = toLocalXY(ring[i + 1][0], ring[i + 1][1], lat);
+        const d = pointToSegmentDistanceKm(p.x, p.y, a.x, a.y, b.x, b.y);
+        if (d < bestDist) { bestDist = d; best = feature; }
+      }
+    }
+  }
+  if (best && bestDist <= maxKm) return municipalityNameOf(best);
+  return null;
+}
+
 /**
  * 指定した都道府県コードのN03ポリゴンを読み込み、点がどの市区町村に属するかを
  * 判定する関数を返す。
  * @param {Array<number|string>} prefCodes - 対象の都道府県コード（複数可。県境付近の
- *   停留所が隣県のポリゴンに入ることがあるため、建築中の県＋隣接県を渡すことを想定）
+ *   停留所・スポットが隣県のポリゴンに入ることがあるため、建築中の県＋隣接県を渡すことを想定）
+ * @param {{fallbackMaxKm?: number}} [options] - fallbackMaxKmを指定すると、どのポリゴンにも
+ *   入らない点（海・河口・橋の上など）について、最も近いポリゴンがその距離(km)以内なら
+ *   その市区町村を採用する（2026-10-10、スポットの市町村名タグ付けで追加。駅表示名の
+ *   曖昧さ回避（parse-and-transform.js）は従来どおり完全一致のみを使うため、このオプションを
+ *   省略した場合の挙動は変えていない）。
  * @returns {Promise<(lon:number, lat:number)=>string|null>} 市区町村名（例：「富山市」）を返す関数。
- *   どのポリゴンにも入らなければnull
+ *   どのポリゴンにも入らず、フォールバックでも解決できなければnull
  */
-export async function buildMunicipalityPolygonFinder(prefCodes) {
+export async function buildMunicipalityPolygonFinder(prefCodes, options = {}) {
+  const { fallbackMaxKm } = options;
   const features = [];
+  let loadedCount = 0;
   for (const prefCode of prefCodes) {
-    const { shpPath, dbfPath } = await downloadAndExtract(prefCode);
-    // N03のdbf属性ファイルはShift-JIS（CP932）でエンコードされている
-    // （日本の行政データに多い）。utf-8指定だと文字化けする（実測で発見）。
-    const source = await shapefile.open(shpPath, dbfPath, { encoding: 'shift-jis' });
-    let result = await source.read();
-    while (!result.done) {
-      features.push(result.value);
-      result = await source.read();
+    try {
+      const { shpPath, dbfPath } = await downloadAndExtract(prefCode);
+      // N03のdbf属性ファイルはShift-JIS（CP932）でエンコードされている
+      // （日本の行政データに多い）。utf-8指定だと文字化けする（実測で発見）。
+      const source = await shapefile.open(shpPath, dbfPath, { encoding: 'shift-jis' });
+      let result = await source.read();
+      while (!result.done) {
+        features.push(result.value);
+        result = await source.read();
+      }
+      loadedCount += 1;
+    } catch (error) {
+      // 【2026-10-10追記】隣接県まで含めて読む呼び出し（スポットの市町村名タグ付け）では、
+      // 1県分のダウンロード失敗（ネットワーク不調等）でビルド全体を失敗させたくない。
+      // 建築中の県自身（prefCodes[0]）の失敗は呼び出し側がそのまま気づけるよう警告に留め、
+      // 読み込めたポリゴンだけで判定を続行する（隣接県が足りない分は未判定が増えるだけで、
+      // 誤判定にはならない）。
+      console.warn(`  ⚠️  N03ポリゴン（都道府県コード${String(prefCode).padStart(2, '0')}）の読み込みに失敗: ${error.message}`);
     }
   }
-  console.log(`   → N03ポリゴン読み込み完了: ${features.length}件（${prefCodes.length}都道府県分）`);
+  console.log(`   → N03ポリゴン読み込み完了: ${features.length}件（指定${prefCodes.length}都道府県中${loadedCount}県分）`);
 
   return function findMunicipality(lat, lon) {
     const point = { type: 'Point', coordinates: [lon, lat] };
@@ -127,17 +221,15 @@ export async function buildMunicipalityPolygonFinder(prefCodes) {
       if (!feature.geometry) continue;
       try {
         if (booleanPointInPolygon(point, feature)) {
-          // N03_004が市区町村名。政令指定都市の区はN03_004が市名、N03_005が区名
-          // （例：N03_004="新潟市"、N03_005="中央区"）。区がある場合は
-          // 「市名区名」を連結した表示名にする（例：「新潟市中央区」）。
-          const city = feature.properties.N03_004 || '';
-          const ward = feature.properties.N03_005 || '';
-          const name = `${city}${ward}`.trim();
+          const name = municipalityNameOf(feature);
           if (name) return name;
         }
       } catch {
         continue; // 不正なジオメトリはスキップ（判定失敗として扱う）
       }
+    }
+    if (fallbackMaxKm !== undefined) {
+      return findNearestMunicipalityWithinKm(lat, lon, features, fallbackMaxKm);
     }
     return null;
   };
