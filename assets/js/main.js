@@ -8,6 +8,7 @@ import { FareCalculator } from './fare-calculator.js';
 import { SpotFinder } from './spot-finder.js';
 import { RouteFormatter } from './route-formatter.js';
 import { estimateTripFrequency, formatDayLabel, operatorLabelWord } from './route-duration.js';
+import { buildOnwardCandidates } from './onward-candidates.js';
 import { MapView } from './map-view.js';
 import { LayoutController } from './layout-controller.js';
 import {
@@ -70,6 +71,10 @@ class ReverseTravel {
     this.currentDepartureStationName = null;
     this.currentDeparturePrefCode = null; // お気に入り保存・共有URL組み立てに使う（prefCodeそのものは検索結果に含まれないため別途保持）
     this.currentSpots = []; // 検索結果（おすすめ順、地図のピンもこの集合のまま）
+    this.detailHistory = []; // 「この先へ」で辿った詳細画面の履歴（スポットオブジェクトのスタック）。
+    // 戻るボタンは、これが空でなければ直前のスポット詳細に戻し、空なら一覧に戻す
+    // （3本目「この先へ」機能。openSpotDetailById/openSharedSpotForStationなど、
+    // 一覧・共有リンクから新規に詳細を開く経路ではこのスタックをリセットする）。
     this.currentReachableCount = 0; // 帯内の到達駅数（デバッグ・将来利用のため保持。表示の分岐には使わない）
     this.currentBudget = null; // 帯の見出し・0件時のボタン計算に使う直近の検索予算
     this.currentHasCheaperSpots = false; // 帯は0件だが、予算以下にはスポットがあるか（0件案内文の出し分けに使う）
@@ -202,7 +207,14 @@ class ReverseTravel {
     this.updateBudgetUI();
 
     this.elements.backBtn.addEventListener('click', () => {
-      this.showResultsList();
+      // 「この先へ」で辿った履歴があれば直前のスポット詳細に戻す（1タップで1つ前に戻る）。
+      // 履歴が無ければ、これまでどおり一覧に戻す。
+      if (this.detailHistory.length > 0) {
+        const previousSpot = this.detailHistory.pop();
+        this.showSpotDetail(previousSpot);
+      } else {
+        this.showResultsList();
+      }
     });
 
     this.elements.sortSelect.addEventListener('change', (e) => {
@@ -957,6 +969,7 @@ class ReverseTravel {
       this.updateSearchButtonState();
 
       this.displayResults(bandSpots, stationId, prefCode, reachableCount, alignedBudget, hasCheaperSpots);
+      this.detailHistory = []; // 共有リンク・マイリストからの新規の詳細表示なので履歴をリセットする
       this.showSpotDetail(spotForDetail);
       return true;
     } catch (error) {
@@ -1496,7 +1509,10 @@ class ReverseTravel {
   /** spotIdからスポット詳細画面を開く（地図ポップアップの「詳細を見る」ボタン用） */
   openSpotDetailById(spotId) {
     const spot = this.currentSpots.find((s) => s.id === spotId);
-    if (spot) this.showSpotDetail(spot);
+    if (spot) {
+      this.detailHistory = []; // 一覧からの新規の詳細表示なので「この先へ」の履歴をリセットする
+      this.showSpotDetail(spot);
+    }
   }
 
   /**
@@ -1518,12 +1534,74 @@ class ReverseTravel {
     this.elements.appLayout.setAttribute('data-view', 'results');
   }
 
-  showSpotDetail(spot) {
+  /**
+   * 「この先へ」カード用の短い一言（説明文の先頭30文字、句点があればそこで切る）。
+   * カードが小さいため、カード一覧の100文字截断よりさらに短くする。
+   */
+  formatOnwardBlurb(spot) {
+    if (!spot.description) return '';
+    const period = spot.description.indexOf('。');
+    if (period !== -1 && period <= 30) return spot.description.slice(0, period + 1);
+    return spot.description.length > 30 ? `${spot.description.slice(0, 30)}...` : spot.description;
+  }
+
+  /**
+   * 「この先へ」セクションのHTML（3本目機能）。暗い枠に3件、それぞれ
+   * 写真・名前・一言・「+¥◯」。応援マーク対象の候補には小さいハートだけ添える
+   * （2本目のオレンジ説明枠はここでは出さない。タップ後の詳細画面で確認できる）。
+   * 候補が1件も無いとき（計算失敗・出発駅未確定時含む）はセクションごと省く。
+   */
+  renderOnwardSection(candidates) {
+    if (!candidates || candidates.length === 0) return '';
+    const cards = candidates.map(({ spot: cand, extraFare }) => {
+      const freqInfo = this.buildFrequencyDisplay(cand);
+      const heart = freqInfo?.isBadgeEligible ? `<span class="onward-heart">${HEART_FILLED_SVG}</span>` : '';
+      const fareLabel = extraFare === 0 ? '+¥0' : `+¥${extraFare}`;
+      return `
+        <div class="onward-card" data-spot-id="${cand.id}" role="button" tabindex="0">
+          ${cand.image
+            ? `<img src="${cand.image}" alt="${cand.name}" class="onward-image">`
+            : `<div class="onward-image spot-image-placeholder" aria-hidden="true">🏞️</div>`}
+          <div class="onward-name">${heart}${cand.name}</div>
+          <p class="onward-blurb">${this.formatOnwardBlurb(cand)}</p>
+          <p class="onward-fare">${fareLabel}</p>
+        </div>
+      `;
+    }).join('');
+    return `
+      <div class="onward-section">
+        <h3 class="onward-title">この先へ</h3>
+        <p class="onward-note">+¥は出発駅からの往復運賃の差です</p>
+        <div class="onward-cards">${cards}</div>
+      </div>
+    `;
+  }
+
+  async showSpotDetail(spot) {
     this._currentDetailSpot = spot; // 詳細画面の☆・共有ボタンから参照する
     const routeInfoHtml = this.routeFormatter && this.currentDepartureStationId
       ? this.routeFormatter.format(this.currentDepartureStationId, spot)
       : '';
     const fav = isFavorite(spot.id);
+
+    // 「この先へ」候補（3本目機能）。allSpots自体は検索時に計算済み・キャッシュ済みのため、
+    // ここでの追加計算はルート・駅名等の軽量JSONを読むだけで済む（GTFS生データは読まない）。
+    let onwardHtml = '';
+    if (this.currentDepartureStationId && this.data?.routeDetails) {
+      try {
+        const { allSpots } = await this.computeSearchResult(this.currentDepartureStationId, MAX_BUDGET);
+        const candidates = buildOnwardCandidates({
+          routeDetails: this.data.routeDetails,
+          routeSequences: this.data.routeSequences,
+          departureStationId: this.currentDepartureStationId,
+          allSpots,
+          maxBudget: MAX_BUDGET,
+        }, spot);
+        onwardHtml = this.renderOnwardSection(candidates);
+      } catch (error) {
+        console.error('「この先へ」候補の計算に失敗:', error);
+      }
+    }
 
     const html = `
       <h2>${spot.name}</h2>
@@ -1540,6 +1618,7 @@ class ReverseTravel {
       ${routeInfoHtml}
       ${spot.wikidata_url ? `<a href="${spot.wikidata_url}" target="_blank">Wikidataで見る</a>` : ''}
       ${spot.wikipedia_url ? `<a href="${spot.wikipedia_url}" target="_blank">Wikipediaで見る</a>` : ''}
+      ${onwardHtml}
     `;
 
     this.elements.detailContent.innerHTML = html;
@@ -1554,6 +1633,38 @@ class ReverseTravel {
     this.elements.detailContent.querySelector('.detail-share-btn')?.addEventListener('click', () => {
       this.shareSpot(spot);
     });
+
+    // 「この先へ」カードのタップ：今のスポットを履歴に積んでから、候補の詳細へ移る
+    // （戻るボタンでこのスポットの詳細に1タップで戻れるようにするため）。
+    this.elements.detailContent.querySelectorAll('.onward-card').forEach((card) => {
+      card.addEventListener('click', () => {
+        const candidateId = card.getAttribute('data-spot-id');
+        this.openOnwardCandidate(candidateId);
+      });
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          this.openOnwardCandidate(card.getAttribute('data-spot-id'));
+        }
+      });
+    });
+  }
+
+  /**
+   * 「この先へ」カードのタップ時に、候補スポットの詳細画面へ移る。
+   * 今表示中のスポットを履歴に積んでから、allSpots（計算済み）からQIDで探して開く。
+   */
+  async openOnwardCandidate(candidateId) {
+    if (!candidateId || !this.currentDepartureStationId) return;
+    try {
+      const { allSpots } = await this.computeSearchResult(this.currentDepartureStationId, MAX_BUDGET);
+      const candidate = allSpots.find((s) => s.id === candidateId);
+      if (!candidate) return;
+      if (this._currentDetailSpot) this.detailHistory.push(this._currentDetailSpot);
+      this.showSpotDetail(candidate);
+    } catch (error) {
+      console.error('「この先へ」候補の表示に失敗:', error);
+    }
   }
 }
 

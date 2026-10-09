@@ -98,6 +98,7 @@ export class GTFSLoader {
     this.stopsMetadata = null;
     this.routeInfo = null;
     this.routeDetails = null; // 出発駅ID → {到着駅ID: {事業者ID: RouteEntry}}（経路・所要時間、詳細はgenerate-route-details.js）
+    this.routeSequences = null; // route_id → {direction_id: [station_id, ...]}（3本目「この先へ」機能、同じ路線の先の判定用）
     this.stations = null; // 駅ID → {display_name, stop_lat, stop_lon, stops: [{stop_id, operator_id, mode}]}
     this.spots = null; // QID → スポット詳細の辞書
     this.spotsByStation = null; // stop_id → [{qid, distance}, ...] の参照配列
@@ -172,7 +173,7 @@ export class GTFSLoader {
       codesToFetch.map(async (codeStr) => {
         try {
           const base = `data/pref/${codeStr}/`;
-          const [fareData, stopsMetadata, stations, routeInfo, routeDetailsIndexed, spotsData] =
+          const [fareData, stopsMetadata, stations, routeInfo, routeDetailsIndexed, spotsData, routeSequences] =
             await Promise.all([
               this.fetchJson(`${base}fare-lookup-tables.json`),
               this.fetchJson(`${base}stops-metadata.json`),
@@ -180,11 +181,12 @@ export class GTFSLoader {
               this.fetchJson(`${base}route-info.json`),
               this.fetchJson(`${base}route-details.json`),
               this.fetchJson(`${base}spots-by-station.json`),
+              this.fetchJson(`${base}route-sequences.json`),
             ]);
           return {
             codeStr, fareData, stopsMetadata, stations,
             routeInfo, routeDetails: decodeRouteDetails(routeDetailsIndexed),
-            spotsData,
+            spotsData, routeSequences,
           };
         } catch (error) {
           console.warn(`⚠️ 都道府県コード${codeStr}のデータ取得に失敗しました（${error.message}）。この県はスキップします`);
@@ -198,13 +200,14 @@ export class GTFSLoader {
     this.stopsMetadata = this.stopsMetadata || [];
     this.routeInfo = this.routeInfo || {};
     this.routeDetails = this.routeDetails || {};
+    this.routeSequences = this.routeSequences || {};
     this.stations = this.stations || {};
     const spotRegions = [];
     if (this._loadedSpotRegions) spotRegions.push(...this._loadedSpotRegions);
 
     for (const result of results) {
       if (!result) continue;
-      const { codeStr, fareData, stopsMetadata, stations, routeInfo, routeDetails, spotsData } = result;
+      const { codeStr, fareData, stopsMetadata, stations, routeInfo, routeDetails, spotsData, routeSequences } = result;
       this.loadedPrefCodes.add(codeStr);
 
       // 県内通し番号→station_idの復元に使う（resolveStationId参照）。
@@ -216,6 +219,7 @@ export class GTFSLoader {
       this.stopsMetadata.push(...stopsMetadata);
       Object.assign(this.routeInfo, routeInfo);
       Object.assign(this.routeDetails, routeDetails);
+      Object.assign(this.routeSequences, routeSequences);
       Object.assign(this.stations, stations);
       spotRegions.push(spotsData);
     }
@@ -237,6 +241,7 @@ export class GTFSLoader {
       stopsMetadata: this.stopsMetadata,
       routeInfo: this.routeInfo,
       routeDetails: this.routeDetails,
+      routeSequences: this.routeSequences,
       stations: this.stations,
       spots: this.spots,
       spotsByStation: this.spotsByStation,

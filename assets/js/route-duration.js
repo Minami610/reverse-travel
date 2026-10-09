@@ -188,3 +188,27 @@ export function estimateSelectionMinutes(routeDetails, departureStationId, stati
   const parsed = parseRouteEntry(lookupRouteEntry(routeDetails, departureStationId, station.station_id, station.viaOperator));
   return routeEntryMinutesWithWait(parsed, routeInfo);
 }
+
+/**
+ * 到達駅への「最後の区間」の事業者・route_id・乗車駅・降車駅を解決する
+ * （3本目「この先へ」機能、assets/js/onward-candidates.jsの「2) 同じ路線の先」判定用）。
+ * reachBy='transfer'（事業者をまたぐ乗換）のときは2本目のレッグ（乗換地点→到達駅）を、
+ * reachBy='direct'のエントリが同一事業者内の隠れた乗換（長さ8のRouteEntry）のときは
+ * その2本目のレッグ（via→到達駅）を「最後の区間」とする。
+ * @returns {{operatorId:string, routeId:string, legOriginId:string, legDestId:string}|null}
+ */
+export function resolveLastLeg(routeDetails, departureStationId, station) {
+  function fromEntry(fromId, toId, operatorId) {
+    const parsed = parseRouteEntry(lookupRouteEntry(routeDetails, fromId, toId, operatorId));
+    if (!parsed) return null;
+    if (parsed.type === 'direct') {
+      return { operatorId, routeId: parsed.route_id, legOriginId: fromId, legDestId: toId };
+    }
+    return { operatorId, routeId: parsed.legs[1].route_id, legOriginId: parsed.via, legDestId: toId };
+  }
+  if (station.reachBy === 'transfer' && station.transferAt) {
+    const [, op2] = station.legOperators;
+    return fromEntry(station.transferAt, station.station_id, op2);
+  }
+  return fromEntry(departureStationId, station.station_id, station.viaOperator);
+}
