@@ -207,6 +207,24 @@ header p {
   font-size: 0.95rem;
 }
 
+/* 予算スライダー（2026-10-10、4本目③。¥200〜¥2000・100円刻み） */
+#budget-slider {
+  display: block;
+  width: 100%;
+  margin: 0.3rem 0 0.5rem;
+  accent-color: var(--color-main);
+  cursor: pointer;
+}
+
+/* スライダー操作中に帯の件数をその場で出す（Minami指示）。
+   検索前（データが無い）は非表示（hidden属性）のまま。 */
+.budget-band-preview {
+  margin: 0.3rem 0 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-main-deep);
+}
+
 /* 予算ステッパー */
 .budget-stepper {
   display: flex;
@@ -607,6 +625,21 @@ header p {
   color: white;
 }
 
+/* 3D準備中インジケータ（4本目②）。2Dの地図は消さず、これを右下に小さく重ねるだけ */
+#terrain-loading-indicator {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 1000;
+  margin: 0;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  background-color: rgba(0, 0, 0, 0.72);
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
 .map-pin-wrapper {
   background: none;
   border: none;
@@ -626,6 +659,23 @@ header p {
   border: 1.5px solid white;
   border-radius: 50%;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+/* 予算スライダーの塗り分け（2026-10-10、4本目③）。帯に入る点＝明るいオレンジ・
+   白い縁・少し光らせる（box-shadowのglow）。それより安い点＝薄く小さく残す。
+   予算を超える点はJS側でel.style.display='none'にするため、ここではCSSを
+   用意しない。hover/selectedは後ろに置いて優先させる（下のコメント参照）。 */
+.map-pin-spot-in-band {
+  background-color: var(--color-accent);
+  border-color: white;
+  box-shadow: 0 0 6px 2px rgba(255, 107, 43, 0.7), 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.map-pin-spot-cheaper {
+  width: 9px;
+  height: 9px;
+  margin: 2px 0 0 2px;
+  opacity: 0.55;
 }
 
 /* ホバーと選択は独立した状態として扱う（色・サイズ両方で段階を付け、

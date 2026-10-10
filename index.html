@@ -38,9 +38,18 @@
             </div>
 
             <div class="form-group form-group-budget">
-              <label for="budget-input">
+              <label for="budget-slider">
                 予算（往復）：<span id="budget-display">¥500</span>
               </label>
+              <input
+                type="range"
+                id="budget-slider"
+                min="200"
+                max="2000"
+                step="100"
+                value="500"
+                aria-label="予算（往復）をスライダーで変更"
+              >
               <div class="budget-stepper">
                 <button type="button" id="budget-decrement" aria-label="予算を100円減らす">−</button>
                 <input
@@ -54,6 +63,7 @@
                 >
                 <button type="button" id="budget-increment" aria-label="予算を100円増やす">＋</button>
               </div>
+              <p id="budget-band-preview" class="budget-band-preview" hidden></p>
             </div>
           </div>
 
@@ -108,6 +118,9 @@
       <div id="spots-map"></div>
       <div id="spots-map-3d"></div>
       <button type="button" id="map-dimension-toggle" aria-pressed="false">3D表示</button>
+      <!-- 3D切替中だけ表示。2Dの地図は消さずに裏で残したまま、準備ができたら
+           #map-area.mode-3dが付いて3Dに切り替わる（4本目②、Minami指示）。 -->
+      <p id="terrain-loading-indicator" hidden>3D地図を準備しています…</p>
     </div>
   </div>
 

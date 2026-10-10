@@ -10,7 +10,7 @@ import { RouteFormatter } from './route-formatter.js';
 import { estimateTripFrequency, formatDayLabel, operatorLabelWord, sameRouteWord } from './route-duration.js';
 import { buildOnwardCandidates } from './onward-candidates.js';
 import { MapView } from './map-view.js';
-import { TerrainMapView } from './terrain-map-view.js';
+import { isWebglLikelySupported, loadTerrainModule, preloadTerrainModuleWhenIdle } from './terrain-loader.js';
 import { LayoutController } from './layout-controller.js';
 import {
   loadFavorites, isFavorite, toggleFavorite, removeFavorite, upsertFavorite,
@@ -89,8 +89,11 @@ class ReverseTravel {
     this.mapView = new MapView('spots-map');
     this.mapView.onDetailRequest = (spotId) => this.openSpotDetailById(spotId);
     this.mapView.onSelectionChange = (spotId) => this.highlightCard(spotId);
-    this.terrainMapView = new TerrainMapView('spots-map-3d');
-    this.terrainMapView.onDetailRequest = (spotId) => this.openSpotDetailById(spotId);
+    // 3D地図のインスタンスは3D切替が実際に行われるまで作らない（4本目②：
+    // terrain-map-view.jsはMapLibre本体と同じく遅延読込のため、クラス自体が
+    // まだ存在しない。activateTerrainMap()がloadTerrainModule()経由で
+    // 初めて生成する）。
+    this.terrainMapView = null;
     this.mapMode = loadMapModePreference(); // '2d' | '3d'（4本目①、localStorage）
     this.data = null;
     this.dataLoadFailed = false;
@@ -127,10 +130,13 @@ class ReverseTravel {
     this.elements = {
       searchForm: document.getElementById('search-form'),
       mapDimensionToggle: document.getElementById('map-dimension-toggle'),
+      terrainLoadingIndicator: document.getElementById('terrain-loading-indicator'),
       departureInput: document.getElementById('departure-input'),
       departureSuggestions: document.getElementById('departure-suggestions'),
       budgetInput: document.getElementById('budget-input'),
+      budgetSlider: document.getElementById('budget-slider'),
       budgetDisplay: document.getElementById('budget-display'),
+      budgetBandPreview: document.getElementById('budget-band-preview'),
       budgetDecrement: document.getElementById('budget-decrement'),
       budgetIncrement: document.getElementById('budget-increment'),
       searchBtn: document.getElementById('search-btn'),
@@ -203,6 +209,9 @@ class ReverseTravel {
     // 無いため3Dを開始できない。起動時に前回3Dだった場合の自動復元は、
     // 最初の検索結果が出た直後（renderSearchResults）で行う。
     this.elements.mapDimensionToggle?.addEventListener('click', () => this.toggleMapDimension());
+    // 【4本目②】前回3Dを選んだ端末でだけ、ページの読み込みが落ち着いたあと
+    // MapLibre一式を先読みする（2Dの人には一切先読みしない。Minami指示）。
+    if (this.mapMode === '3d') preloadTerrainModuleWhenIdle();
 
     // イベントリスナー設定
     this.elements.searchForm.addEventListener('submit', (e) => {
@@ -239,6 +248,19 @@ class ReverseTravel {
 
     this.elements.budgetIncrement.addEventListener('click', () => {
       this.stepBudget(100);
+    });
+
+    // 予算スライダー（4本目③）。'input'はドラッグ中に連続発火＝地図の塗り替えのみ
+    // （カメラは動かさない、Minami指示）。'change'は指を離した時に1回だけ発火＝
+    // そのタイミングでカメラをなめらかに合わせる。
+    this.elements.budgetSlider.addEventListener('input', () => {
+      const value = parseInt(this.elements.budgetSlider.value, 10);
+      this.elements.budgetInput.value = value;
+      this.updateBudgetUI();
+      this.updateMapBudgetLive(value);
+    });
+    this.elements.budgetSlider.addEventListener('change', () => {
+      this.commitMapBudgetFit(parseInt(this.elements.budgetSlider.value, 10));
     });
 
     this.updateBudgetUI();
@@ -487,6 +509,10 @@ class ReverseTravel {
 
     input.value = next;
     this.updateBudgetUI();
+    // ボタンは離散操作（ドラッグのような連続変化が無い）なので、スライダーの
+    // 「動かしている間」には当たらない。塗り替えとカメラ合わせを両方すぐ行う。
+    this.updateMapBudgetLive(next);
+    this.commitMapBudgetFit(next);
   }
 
   updateBudgetUI() {
@@ -496,9 +522,44 @@ class ReverseTravel {
     const value = parseInt(input.value, 10);
 
     this.elements.budgetDisplay.textContent = `¥${value}`;
+    this.elements.budgetSlider.value = value; // ±ボタン・共有リンク復元等どの経路で変わっても表示を揃える
     this.elements.budgetDecrement.disabled = value <= min;
     this.elements.budgetIncrement.disabled = value >= max;
     this.updateSearchButtonState();
+  }
+
+  /**
+   * 予算スライダーの1コマ分（4本目③）。地図（2D・3D）の点をデータ再取得
+   * なしで塗り替え、帯の件数をその場で出す。まだ検索していない（this.currentAllSpots
+   * が空）ときは件数プレビューを出さない（Minami指示：点が無いので光らない）。
+   * カメラは動かさない（Minami指示：動かしている間はカクつき防止で固定）。
+   */
+  updateMapBudgetLive(budget) {
+    if (!this.currentAllSpots || this.currentAllSpots.length === 0) {
+      this.elements.budgetBandPreview.hidden = true;
+      return;
+    }
+    const count2d = this.mapView.applyBudget(budget);
+    this.terrainMapView?.applyBudget(budget);
+    this.updateBudgetBandPreview(budget, count2d);
+  }
+
+  /** スライダーを離した・±ボタンを押した直後に呼ぶ。帯＋それより安い点が収まるようカメラを合わせる。 */
+  commitMapBudgetFit(budget) {
+    if (!this.currentAllSpots || this.currentAllSpots.length === 0) return;
+    this.mapView.fitToBudget(budget);
+    this.terrainMapView?.fitToBudget(budget);
+  }
+
+  updateBudgetBandPreview(budget, count) {
+    const el = this.elements.budgetBandPreview;
+    if (!el) return;
+    if (!this.currentAllSpots || this.currentAllSpots.length === 0) {
+      el.hidden = true;
+      return;
+    }
+    el.hidden = false;
+    el.textContent = `往復¥${formatThousands(budget - BAND_WIDTH + 1)}〜¥${formatThousands(budget)}で行ける場所 ${count}件`;
   }
 
   /**
@@ -839,12 +900,28 @@ class ReverseTravel {
     }
 
     try {
-      const result = await this.computeSearchResult(stationId, budget);
-      this.displayResults(result.bandSpots, stationId, prefCode, result.reachableCount, budget, result.hasCheaperSpots);
+      // 【4本目③】予算スライダーがデータ再取得なしで動かせるよう、検索は常に
+      // MAX_BUDGET(¥2000)で行い、帯（一覧用）はallSpotsから同期的に絞り込む
+      // （Minami指示：計算は¥2000で一度出したallSpotsから帯で絞るだけで足りる）。
+      const { allSpots, reachableCount } = await this.computeSearchResult(stationId, MAX_BUDGET);
+      const { bandSpots, hasCheaperSpots } = this.filterBandFromAllSpots(allSpots, budget);
+      this.displayResults(bandSpots, stationId, prefCode, reachableCount, budget, hasCheaperSpots, allSpots);
     } catch (error) {
       console.error('検索失敗:', error);
       alert('検索中にエラーが発生しました');
     }
+  }
+
+  /**
+   * MAX_BUDGETで取得済みのallSpotsから、指定予算の帯・帯外の安い点の有無を
+   * 同期的に計算する（4本目③）。computeSearchResult()内部の帯判定（2026-10-07
+   * 修正：スポット単位で最安運賃を決めてから帯判定する）と同じ規則を踏襲する。
+   */
+  filterBandFromAllSpots(allSpots, budget) {
+    const withinBudget = allSpots.filter((s) => s.source_round_trip_fare <= budget);
+    const bandSpots = withinBudget.filter((s) => s.source_round_trip_fare > budget - BAND_WIDTH);
+    const hasCheaperSpots = withinBudget.length > bandSpots.length;
+    return { bandSpots, hasCheaperSpots };
   }
 
   /**
@@ -891,11 +968,20 @@ class ReverseTravel {
     return result;
   }
 
-  displayResults(spots, departureStationId, prefCode, reachableCount, budget, hasCheaperSpots) {
+  /**
+   * @param {Array} spots - 帯（budget-200〜budget）内のスポット。一覧・「この先へ」等、
+   *   既存の帯ベースのロジックはすべてこれ（this.currentSpots）を見る。
+   * @param {Array} [allSpots] - 予算MAX_BUDGET(2000)で取得した全スポット。地図
+   *   （2D/3D）はこちらを受け取り、予算スライダーの操作をデータ再取得なしで
+   *   反映できるようにする（4本目③）。省略時はspotsで代用する（呼び出し元が
+   *   まだ対応していない場合の後方互換）。
+   */
+  displayResults(spots, departureStationId, prefCode, reachableCount, budget, hasCheaperSpots, allSpots) {
     this.currentDepartureStationId = departureStationId;
     this.currentDeparturePrefCode = prefCode ? String(prefCode).padStart(2, '0') : null;
     this.currentDepartureStationName = this.data.stations?.[departureStationId]?.display_name || departureStationId;
     this.currentSpots = spots;
+    this.currentAllSpots = allSpots || spots;
     this.currentReachableCount = reachableCount;
     this.currentBudget = budget;
     this.currentHasCheaperSpots = !!hasCheaperSpots;
@@ -916,13 +1002,18 @@ class ReverseTravel {
     }
 
     const departureStation = this.data.stations?.[departureStationId];
-    this.mapView.render(departureStation, spots);
-    this.terrainMapView.render(departureStation, spots); // 3D未初期化時は座標だけ保持（TerrainMapView.render参照）
+    this.mapView.render(departureStation, this.currentAllSpots, budget);
+    // 3D地図は3D切替が一度も行われるまでインスタンス自体が無い（遅延読込、4本目②）。
+    // 作成済みならrender()を呼ぶ（未初期化でも座標だけ保持する設計のため、
+    // activateTerrainMap()が後から呼ばれたときに自動で反映される）。
+    if (this.terrainMapView) this.terrainMapView.render(departureStation, this.currentAllSpots, budget);
+
+    this.updateBudgetBandPreview(budget, spots.length);
 
     // 起動時点では出発駅が無く3Dを開始できなかったため、最初の検索結果が
     // 出たこのタイミングで「前回3Dだった」場合の自動復元を行う
     // （4本目①、Minami指示：3Dを一度選んだ端末では次回も3D）。
-    if (this.mapMode === '3d' && !this.terrainMapView.map) {
+    if (this.mapMode === '3d' && (!this.terrainMapView || !this.terrainMapView.map)) {
       this.activateTerrainMap();
     }
 
@@ -946,8 +1037,10 @@ class ReverseTravel {
 
   /**
    * 3D地図を有効化する。出発駅が未確定（検索前）のときは中心座標が無いため
-   * 何もしない。ライブラリ読み込み・WebGL対応チェック・地図初期化のいずれかに
+   * 何もしない。WebGL対応チェック・ライブラリ読み込み・地図初期化のいずれかに
    * 失敗した場合も、例外を握りつぶして2Dのまま据え置く（エラー文言なし）。
+   * 2Dの地図は消さず、読み込み中は「3D地図を準備しています」を小さく出す
+   * （4本目②、Minami指示）。
    * @returns {Promise<boolean>} 3D化に成功したか
    */
   async activateTerrainMap() {
@@ -955,19 +1048,40 @@ class ReverseTravel {
     if (!station || typeof station.stop_lat !== 'number' || typeof station.stop_lon !== 'number') {
       return false;
     }
+    if (!isWebglLikelySupported()) return false; // ライブラリすら読み込まない
+
+    this.setTerrainLoadingIndicator(true);
     try {
+      if (!this.terrainMapView) {
+        const { TerrainMapView } = await loadTerrainModule();
+        this.terrainMapView = new TerrainMapView('spots-map-3d');
+        this.terrainMapView.onDetailRequest = (spotId) => this.openSpotDetailById(spotId);
+        this.layoutController.terrainMapView = this.terrainMapView; // 遅延生成のため後から差し替える
+      }
       await this.terrainMapView.ensureMap({ lat: station.stop_lat, lon: station.stop_lon });
+      // ensureMap()内部のバックフィルは「3D生成前にrender()が一度でも呼ばれていた」
+      // 場合にしか効かない（TerrainMapView自体がここで初めて生成されるこの経路では
+      // 効かない）。検索済みなら、今の帯・allSpotsをここで明示的に反映する。
+      if (this.currentDepartureStationId) {
+        this.terrainMapView.render(station, this.currentAllSpots, this.currentBudget);
+      }
       this.mapMode = '3d';
       saveMapModePreference('3d');
       this.applyMapMode();
       return true;
     } catch (e) {
       console.warn('3D地図の有効化に失敗したため2Dのまま継続します:', e);
-      this.terrainMapView.destroy(); // 中途半端に生成されたWebGLコンテキストを解放する
+      this.terrainMapView?.destroy(); // 中途半端に生成されたWebGLコンテキストを解放する
       this.mapMode = '2d';
       saveMapModePreference('2d');
       return false;
+    } finally {
+      this.setTerrainLoadingIndicator(false);
     }
+  }
+
+  setTerrainLoadingIndicator(visible) {
+    this.elements.terrainLoadingIndicator?.toggleAttribute('hidden', !visible);
   }
 
   applyMapMode() {
@@ -979,7 +1093,7 @@ class ReverseTravel {
     }
     // 直前までdisplay:noneだった側が実寸を持つよう、表示反映後にリサイズする
     requestAnimationFrame(() => {
-      if (this.mapMode === '3d') this.terrainMapView.resize();
+      if (this.mapMode === '3d') this.terrainMapView?.resize();
       else if (this.mapView.map) this.mapView.map.invalidateSize();
     });
   }
@@ -1047,7 +1161,7 @@ class ReverseTravel {
    */
   async openSharedSpotForStation(qid, stationId, prefCode) {
     try {
-      const { allSpots } = await this.computeSearchResult(stationId, MAX_BUDGET);
+      const { allSpots, reachableCount } = await this.computeSearchResult(stationId, MAX_BUDGET);
       const spot = allSpots.find((s) => s.id === qid);
       if (!spot) return false;
 
@@ -1055,7 +1169,10 @@ class ReverseTravel {
         MAX_BUDGET,
         Math.max(MIN_BUDGET, Math.ceil(spot.source_round_trip_fare / BUDGET_STEP) * BUDGET_STEP)
       );
-      const { bandSpots, reachableCount, hasCheaperSpots } = await this.computeSearchResult(stationId, alignedBudget);
+      // 【4本目③】既に取得済みのallSpots（MAX_BUDGET）から同期的に帯を絞り込む
+      // （computeSearchResultをalignedBudgetで呼び直さない。地図に渡すallSpots自体も
+      // このMAX_BUDGET版をそのまま使う）。
+      const { bandSpots, hasCheaperSpots } = this.filterBandFromAllSpots(allSpots, alignedBudget);
       // bandSpots側の同一QIDのオブジェクトを使う（this.currentSpots＝displayResults()が
       // 設定する集合と、詳細画面に渡すオブジェクトの参照を一致させるため）。
       // 内容自体はallSpots側と同じになるはずだが、念のためbandSpotsに無ければ
@@ -1069,7 +1186,7 @@ class ReverseTravel {
       this.lastSearchedBudget = alignedBudget;
       this.updateSearchButtonState();
 
-      this.displayResults(bandSpots, stationId, prefCode, reachableCount, alignedBudget, hasCheaperSpots);
+      this.displayResults(bandSpots, stationId, prefCode, reachableCount, alignedBudget, hasCheaperSpots, allSpots);
       this.detailHistory = []; // 共有リンク・マイリストからの新規の詳細表示なので履歴をリセットする
       history.pushState({}, ''); // スマホの戻る操作で一覧に戻れるよう、履歴を1つ積む（URLは変えない）
       this.showSpotDetail(spotForDetail);

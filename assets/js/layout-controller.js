@@ -83,15 +83,20 @@ export class LayoutController {
     // 確定していないことがあるため、次フレームでサイズ再計算＋
     // fitBoundsのやり直し（非表示中に描画されて範囲がずれている場合の補正）を行う。
     // 2D・3Dのどちらが実際に表示中かはCSS（#map-area.mode-3d）に任せており
-    // ここでは判定しない。3Dが未初期化（this.map===null）のときはresize()を
-    // 呼ばない（TerrainMapView.resize()自体もnullガード済みだが、無駄な
-    // 空振り呼び出し自体を避ける）。
+    // ここでは判定しない。3Dが未初期化（this.terrainMapViewがnull、または
+    // 生成済みでもthis.map===null）のときはresize()を呼ばない
+    // （TerrainMapView自体は3D切替が一度も行われるまで生成されない。4本目②の
+    // 遅延読込。main.jsが生成後にthis.terrainMapViewを差し替える）。
     requestAnimationFrame(() => {
       if (this.mapView.map) {
         this.mapView.map.invalidateSize();
         this.mapView.refitBounds();
+        // コンテナが0×0の間にスライダーが動かされ、マーカーの塗り替えを
+        // 保留していた場合（MapView.applyBudget参照）、実寸を得たここで
+        // 改めて反映する。
+        if (this.mapView.lastBudget != null) this.mapView.applyBudget(this.mapView.lastBudget);
       }
-      if (this.terrainMapView.map) {
+      if (this.terrainMapView?.map) {
         this.terrainMapView.resize();
       }
     });
