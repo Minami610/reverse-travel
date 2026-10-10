@@ -746,6 +746,9 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
     record('スクリーンショット撮影用の3D化に成功', became3d);
 
     if (became3d) {
+      // 地形の読み込みを待ってから撮る（Minami指示4本目④）
+      await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(20000));
+      await page.waitForTimeout(300);
       for (const budget of [400, 1000, 2000]) {
         await page.evaluate((v) => {
           const el = document.getElementById('budget-slider');
@@ -808,16 +811,40 @@ async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
     if (pageErrors.length > 0) record(`[${label}] 3D化中にページエラーが発生していない`, false, pageErrors.join('; '));
 
     if (became3d) {
-      await page.waitForTimeout(1200);
+      // 【2026-10-10、4本目④】固定時間の待機だけでは標高タイルの変換が
+      // 終わる前にスクリーンショットを撮ってしまい、平らな地図にかすみが
+      // かかったようにしか見えない不具合をMinamiがスクリーンショットで発見。
+      // isSourceLoaded基準で実際に地形タイルの読み込みを待つ。
+      const terrainLoaded1 = await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(20000));
+      record(`[${label}] 地形（標高タイル）の読み込みが完了する`, terrainLoaded1);
+      await page.waitForTimeout(300);
       const initialPath = path.join(screenshotDir, `terrain-3d-initial-${label}.png`);
       await page.locator('#map-area').screenshot({ path: initialPath });
       savedPaths.push(initialPath);
 
-      // 立山連峰が見える向き（Minami指示：市街地〜山地の中間、pitch高め）
-      await page.evaluate(() => {
-        window.__terrainMapForDebug.jumpTo({ center: [137.40, 36.63], zoom: 10.6, pitch: 75, bearing: 220 });
+      // 出典（compact attribution）と「2D表示」ボタンが重なっていないか
+      // （Minami指示2番）。それぞれの画面内矩形を比較する。
+      const overlapInfo = await page.evaluate(() => {
+        const toggle = document.getElementById('map-dimension-toggle').getBoundingClientRect();
+        const attrib = document.querySelector('#map-area .maplibregl-ctrl-attrib')?.getBoundingClientRect();
+        if (!attrib) return { attribFound: false };
+        const overlap = !(toggle.right < attrib.left || toggle.left > attrib.right || toggle.bottom < attrib.top || toggle.top > attrib.bottom);
+        return { attribFound: true, overlap, toggle, attrib };
       });
-      await page.waitForTimeout(1500);
+      record(
+        `[${label}] 出典（compact）と「2D表示」ボタンが重ならない`,
+        overlapInfo.attribFound && !overlapInfo.overlap,
+        JSON.stringify(overlapInfo)
+      );
+
+      // 立山連峰が見える向き（Minami指示：pitch70前後・ズーム10前後。市街地〜
+      // 山地の中間を中心にすると稜線がはっきり見えることを調査で確認済み）
+      await page.evaluate(() => {
+        window.__terrainMapForDebug.jumpTo({ center: [137.40, 36.63], pitch: 72, zoom: 10.4, bearing: 220 });
+      });
+      const terrainLoaded2 = await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(20000));
+      record(`[${label}] 立山方向への移動後も地形の読み込みが完了する`, terrainLoaded2);
+      await page.waitForTimeout(300);
       const tateyamaPath = path.join(screenshotDir, `terrain-3d-tateyama-${label}.png`);
       await page.locator('#map-area').screenshot({ path: tateyamaPath });
       savedPaths.push(tateyamaPath);
@@ -826,7 +853,8 @@ async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
       await page.evaluate(() => {
         window.__terrainMapForDebug.jumpTo({ center: [137.15, 36.95], zoom: 10, pitch: 50, bearing: 0 });
       });
-      await page.waitForTimeout(1500);
+      await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(20000));
+      await page.waitForTimeout(300);
       const bayPath = path.join(screenshotDir, `terrain-3d-bay-${label}.png`);
       await page.locator('#map-area').screenshot({ path: bayPath });
       savedPaths.push(bayPath);
