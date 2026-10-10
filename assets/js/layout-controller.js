@@ -1,11 +1,14 @@
 /**
  * layout-controller.js - PC二段組（sticky）⇔ スマホタブ切替のレイアウト制御
  *
- * #spots-map（Leaflet地図の実体）は単一のDOMノードとして保持し、
- * 画面幅に応じてPC用スロット（左カラム内、sticky）とスマホ用スロット
- * （「地図」タブパネル内）の間で付け替える。地図インスタンスは
- * 再生成せず、ノードを移動してから invalidateSize() でサイズ再計算するだけ
- * にすることで、マーカーや選択状態を保持したまま切り替えられる。
+ * #map-area（2D用#spots-mapと3D用#spots-map-3dを重ねて持つラッパー）は
+ * 単一のDOMノードとして保持し、画面幅に応じてPC用スロット（左カラム内、
+ * sticky）とスマホ用スロット（「地図」タブパネル内）の間で付け替える。
+ * 地図インスタンスは再生成せず、ノードを移動してから invalidateSize()
+ * （3Dはresize()）でサイズ再計算するだけにすることで、マーカーや選択状態を
+ * 保持したまま切り替えられる（2026-10-10、4本目①で#spots-map単体から
+ * #map-areaラッパーに変更。2D/3Dどちらも同じラッパーごと移動するため、
+ * このファイル自体の付け替えロジックに変更はない）。
  *
  * ブレークポイントは assets/css/style.css の `@media (min-width: 760px)` と
  * 必ず一致させること（ズレるとCSSとJSで二段組/タブ切替の判定が食い違う）。
@@ -14,13 +17,17 @@
 const DESKTOP_QUERY = '(min-width: 760px)';
 
 export class LayoutController {
-  constructor({ mapEl, desktopSlot, mobileSlot, tabButtons, tabPanels, mapView, onListTabActivated }) {
+  constructor({ mapEl, desktopSlot, mobileSlot, tabButtons, tabPanels, mapView, terrainMapView, onListTabActivated }) {
     this.mapEl = mapEl;
     this.desktopSlot = desktopSlot;
     this.mobileSlot = mobileSlot;
     this.tabButtons = Array.from(tabButtons || []);
     this.tabPanels = Array.from(tabPanels || []);
     this.mapView = mapView;
+    // 3DのMapLibreインスタンス自体は3D切替が実際に行われるまで生成されない
+    // （TerrainMapViewオブジェクトは常に存在するが、中のthis.mapはnullのまま）。
+    // invalidateMapSize()側でmapの有無を見て無視するため、ここでは常に受け取る。
+    this.terrainMapView = terrainMapView;
     this.onListTabActivated = onListTabActivated || null;
     this.mediaQuery = window.matchMedia(DESKTOP_QUERY);
     this.currentTab = 'list';
@@ -74,11 +81,19 @@ export class LayoutController {
   invalidateMapSize() {
     // display:none から表示に切り替わった直後はコンテナ寸法が
     // 確定していないことがあるため、次フレームでサイズ再計算＋
-    // fitBoundsのやり直し（非表示中に描画されて範囲がずれている場合の補正）を行う
+    // fitBoundsのやり直し（非表示中に描画されて範囲がずれている場合の補正）を行う。
+    // 2D・3Dのどちらが実際に表示中かはCSS（#map-area.mode-3d）に任せており
+    // ここでは判定しない。3Dが未初期化（this.map===null）のときはresize()を
+    // 呼ばない（TerrainMapView.resize()自体もnullガード済みだが、無駄な
+    // 空振り呼び出し自体を避ける）。
     requestAnimationFrame(() => {
-      if (!this.mapView.map) return;
-      this.mapView.map.invalidateSize();
-      this.mapView.refitBounds();
+      if (this.mapView.map) {
+        this.mapView.map.invalidateSize();
+        this.mapView.refitBounds();
+      }
+      if (this.terrainMapView.map) {
+        this.terrainMapView.resize();
+      }
     });
   }
 }

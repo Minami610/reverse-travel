@@ -100,8 +100,15 @@
       </div>
     </div>
 
-    <!-- 地図本体（PC/スマホどちらのスロットに入るかはJSが画面幅に応じて切り替える） -->
-    <div id="spots-map"></div>
+    <!-- 地図本体（PC/スマホどちらのスロットに入るかはJSが画面幅に応じて切り替える）。
+         2D(#spots-map)と3D(#spots-map-3d)は同じ#map-area内に重ねて置き、
+         どちらか一方だけをCSS（#map-area.mode-3d）で出し分ける。
+         2D/3D切替ボタンは#map-area基準の絶対配置（デザイン①：左下）。 -->
+    <div id="map-area">
+      <div id="spots-map"></div>
+      <div id="spots-map-3d"></div>
+      <button type="button" id="map-dimension-toggle" aria-pressed="false">3D表示</button>
+    </div>
   </div>
 
   <!-- 応募条件で必須の表示3点（出典／正確性の非保証／問い合わせ先）。
@@ -178,7 +185,8 @@
         <ul id="about-excluded-feed-list"></ul>
       </div>
       <p>
-        地図には<strong>国土地理院</strong>の地理院タイル（標準地図）を使用しています。<br>
+        地図には<strong>国土地理院</strong>の地理院タイル（標準地図）を使用しています。
+        3D表示では、地理院タイル（標高タイル）を<strong>加工して立体の地形として表示</strong>しています。<br>
         観光地の説明・画像・座標は <strong>Wikipedia 日本語版</strong>および <strong>Wikidata</strong>
         （<a href="https://creativecommons.org/licenses/by-sa/4.0/deed.ja" target="_blank" rel="noopener">CC BY-SA 4.0</a>）に基づきます。
       </p>

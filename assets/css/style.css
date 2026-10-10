@@ -552,13 +552,59 @@ header p {
   cursor: pointer;
 }
 
-/* 結果一覧の地図（#spots-map自体はスロットいっぱいに広がる） */
-#spots-map {
+/* 結果一覧の地図エリア（#map-area自体はスロットいっぱいに広がる）。
+   2D(#spots-map)と3D(#spots-map-3d)を同じ領域に重ねて置き、
+   #map-area.mode-3dの有無でどちらか一方だけを表示する
+   （2026-10-10、4本目①「3D地図の土台」）。 */
+#map-area {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+#spots-map,
+#spots-map-3d {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   border-radius: 8px;
   overflow: hidden;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+#spots-map-3d {
+  display: none;
+}
+
+#map-area.mode-3d #spots-map {
+  display: none;
+}
+
+#map-area.mode-3d #spots-map-3d {
+  display: block;
+}
+
+/* 2D/3D切替ボタン（デザイン①：地図エリア左下に重ねて配置） */
+#map-dimension-toggle {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 1000;
+  padding: 0.4rem 0.75rem;
+  border: none;
+  border-radius: 999px;
+  background-color: rgba(255, 255, 255, 0.92);
+  color: var(--color-text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+}
+
+#map-area.mode-3d #map-dimension-toggle {
+  background-color: var(--color-main);
+  color: white;
 }
 
 .map-pin-wrapper {

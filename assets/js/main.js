@@ -10,6 +10,7 @@ import { RouteFormatter } from './route-formatter.js';
 import { estimateTripFrequency, formatDayLabel, operatorLabelWord, sameRouteWord } from './route-duration.js';
 import { buildOnwardCandidates } from './onward-candidates.js';
 import { MapView } from './map-view.js';
+import { TerrainMapView } from './terrain-map-view.js';
 import { LayoutController } from './layout-controller.js';
 import {
   loadFavorites, isFavorite, toggleFavorite, removeFavorite, upsertFavorite,
@@ -32,6 +33,25 @@ function formatBandLabel(budget) {
 /** 数字を3桁区切りにする（例: 1740 → "1,740"。「この先へ」の運賃表記用） */
 function formatThousands(n) {
   return n.toLocaleString('ja-JP');
+}
+
+const MAP_MODE_STORAGE_KEY = 'reverse-travel-map-mode';
+
+/** 3Dを一度選んだ端末では次回も3Dにする（4本目①、Minami指示）。読み書きはtry/catch。 */
+function loadMapModePreference() {
+  try {
+    return localStorage.getItem(MAP_MODE_STORAGE_KEY) === '3d' ? '3d' : '2d';
+  } catch {
+    return '2d';
+  }
+}
+
+function saveMapModePreference(mode) {
+  try {
+    localStorage.setItem(MAP_MODE_STORAGE_KEY, mode);
+  } catch {
+    // プライベートブラウジング等でlocalStorageが例外を投げても無視する
+  }
 }
 
 // ☆（マイリスト）・共有ボタンの線画アイコン（2026-10-09、文字"★"/"☆"/"⇧"から
@@ -69,6 +89,9 @@ class ReverseTravel {
     this.mapView = new MapView('spots-map');
     this.mapView.onDetailRequest = (spotId) => this.openSpotDetailById(spotId);
     this.mapView.onSelectionChange = (spotId) => this.highlightCard(spotId);
+    this.terrainMapView = new TerrainMapView('spots-map-3d');
+    this.terrainMapView.onDetailRequest = (spotId) => this.openSpotDetailById(spotId);
+    this.mapMode = loadMapModePreference(); // '2d' | '3d'（4本目①、localStorage）
     this.data = null;
     this.dataLoadFailed = false;
     this.cache = new Map(); // 検索結果のメモリキャッシュ（駅ID×予算）
@@ -103,6 +126,7 @@ class ReverseTravel {
     // DOM 要素取得
     this.elements = {
       searchForm: document.getElementById('search-form'),
+      mapDimensionToggle: document.getElementById('map-dimension-toggle'),
       departureInput: document.getElementById('departure-input'),
       departureSuggestions: document.getElementById('departure-suggestions'),
       budgetInput: document.getElementById('budget-input'),
@@ -160,17 +184,25 @@ class ReverseTravel {
     this.elements.departureInput.placeholder = '駅の一覧を読み込んでいます…';
 
     this.layoutController = new LayoutController({
-      mapEl: document.getElementById('spots-map'),
+      mapEl: document.getElementById('map-area'),
       desktopSlot: document.getElementById('map-slot-desktop'),
       mobileSlot: document.getElementById('map-slot-mobile'),
       tabButtons: document.querySelectorAll('.tab-btn'),
       tabPanels: document.querySelectorAll('.tab-panel'),
       mapView: this.mapView,
+      terrainMapView: this.terrainMapView,
       // スマホで地図タブ→一覧タブに切り替えたとき、選択中のカードが
       // 見える位置に来るようにする（地図タブ表示中はパネルがdisplay:noneで
       // 位置計算ができないため、タブが有効化された時点で改めて実行する）
       onListTabActivated: () => this.scrollSelectedCardIntoView(),
     });
+
+    // 2D/3D切替（4本目①「3D地図の土台」、feature/3d-mapブランチ）。
+    // 失敗時（WebGL非対応・ライブラリ/タイル取得失敗）はエラー文言を出さず、
+    // 2Dのまま据え置く（Minami指示）。出発駅が決まる前（検索前）は中心座標が
+    // 無いため3Dを開始できない。起動時に前回3Dだった場合の自動復元は、
+    // 最初の検索結果が出た直後（renderSearchResults）で行う。
+    this.elements.mapDimensionToggle?.addEventListener('click', () => this.toggleMapDimension());
 
     // イベントリスナー設定
     this.elements.searchForm.addEventListener('submit', (e) => {
@@ -885,8 +917,71 @@ class ReverseTravel {
 
     const departureStation = this.data.stations?.[departureStationId];
     this.mapView.render(departureStation, spots);
+    this.terrainMapView.render(departureStation, spots); // 3D未初期化時は座標だけ保持（TerrainMapView.render参照）
+
+    // 起動時点では出発駅が無く3Dを開始できなかったため、最初の検索結果が
+    // 出たこのタイミングで「前回3Dだった」場合の自動復元を行う
+    // （4本目①、Minami指示：3Dを一度選んだ端末では次回も3D）。
+    if (this.mapMode === '3d' && !this.terrainMapView.map) {
+      this.activateTerrainMap();
+    }
 
     this.renderResultsList();
+  }
+
+  /**
+   * 2D/3D切替ボタンのクリックハンドラ（4本目①「3D地図の土台」）。
+   * 3Dへの切替に失敗した場合はエラー文言を出さず、2Dのまま何も起きない
+   * （Minami指示）。
+   */
+  async toggleMapDimension() {
+    if (this.mapMode === '3d') {
+      this.mapMode = '2d';
+      saveMapModePreference('2d');
+      this.applyMapMode();
+      return;
+    }
+    await this.activateTerrainMap();
+  }
+
+  /**
+   * 3D地図を有効化する。出発駅が未確定（検索前）のときは中心座標が無いため
+   * 何もしない。ライブラリ読み込み・WebGL対応チェック・地図初期化のいずれかに
+   * 失敗した場合も、例外を握りつぶして2Dのまま据え置く（エラー文言なし）。
+   * @returns {Promise<boolean>} 3D化に成功したか
+   */
+  async activateTerrainMap() {
+    const station = this.data?.stations?.[this.currentDepartureStationId];
+    if (!station || typeof station.stop_lat !== 'number' || typeof station.stop_lon !== 'number') {
+      return false;
+    }
+    try {
+      await this.terrainMapView.ensureMap({ lat: station.stop_lat, lon: station.stop_lon });
+      this.mapMode = '3d';
+      saveMapModePreference('3d');
+      this.applyMapMode();
+      return true;
+    } catch (e) {
+      console.warn('3D地図の有効化に失敗したため2Dのまま継続します:', e);
+      this.terrainMapView.destroy(); // 中途半端に生成されたWebGLコンテキストを解放する
+      this.mapMode = '2d';
+      saveMapModePreference('2d');
+      return false;
+    }
+  }
+
+  applyMapMode() {
+    const mapArea = document.getElementById('map-area');
+    if (mapArea) mapArea.classList.toggle('mode-3d', this.mapMode === '3d');
+    if (this.elements.mapDimensionToggle) {
+      this.elements.mapDimensionToggle.textContent = this.mapMode === '3d' ? '2D表示' : '3D表示';
+      this.elements.mapDimensionToggle.setAttribute('aria-pressed', String(this.mapMode === '3d'));
+    }
+    // 直前までdisplay:noneだった側が実寸を持つよう、表示反映後にリサイズする
+    requestAnimationFrame(() => {
+      if (this.mapMode === '3d') this.terrainMapView.resize();
+      else if (this.mapView.map) this.mapView.map.invalidateSize();
+    });
   }
 
   // ========================================
