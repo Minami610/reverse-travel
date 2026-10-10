@@ -37,6 +37,8 @@ const JS_FILES = [
   'spot-finder.js',
   'route-formatter.js',
   'map-view.js',
+  'gsi-dem-protocol.js',
+  'terrain-map-view.js',
   'layout-controller.js',
   'favorites.js',
   'onward-candidates.js',
@@ -79,6 +81,43 @@ export function assertBundleFresh(callerLabel) {
       `先に npm run bundle を実行してから再実行してください。`
     );
     process.exit(1);
+  }
+}
+
+/**
+ * dist/vendor/maplibre/・docs/vendor/maplibre/（bundle-html.jsがコピーした
+ * MapLibre GL JS本体。インライン化せず別ファイルとして遅延読込するため、
+ * dist/index.html自体の鮮度チェックでは検出できない）が、コピー元の
+ * assets/vendor/maplibre/ より古くないかを確認する（4本目①で追加）。
+ * コピー先が存在しない（npm run bundleを一度も実行していない）場合は
+ * assertBundleFreshの「dist/index.htmlが無い」で先に止まるため、ここでは
+ * 存在するのに古い場合だけを見る。
+ */
+export function assertMaplibreVendorFresh(callerLabel) {
+  const srcDir = path.join(rootDir, 'assets/vendor/maplibre');
+  if (!fs.existsSync(srcDir)) return;
+
+  // 【注意】2ファイル全体の最新mtime（旧実装）ではなく、ファイルごとに対応する
+  // コピー元と比較すること。fs.copyFileSyncはコピー元ごとの個別のmtimeを
+  // そのまま引き継ぐため、maplibre-gl.jsとmaplibre-gl.cssの取得時刻が
+  // わずかでもずれていると（curlで順に取得した場合など）、片方のコピーが
+  // 「もう片方の取得時刻」より古いというだけで誤って「古い」と判定してしまう
+  // 不具合が実際にあった（2026-10-10、ビルド直後のverify-layoutで発覚）。
+  for (const outRoot of ['dist', 'docs']) {
+    const outDir = path.join(rootDir, outRoot, 'vendor/maplibre');
+    for (const file of ['maplibre-gl.js', 'maplibre-gl.css']) {
+      const srcPath = path.join(srcDir, file);
+      if (!fs.existsSync(srcPath)) continue;
+      const srcMtime = fs.statSync(srcPath).mtimeMs;
+      const outPath = path.join(outDir, file);
+      if (!fs.existsSync(outPath) || fs.statSync(outPath).mtimeMs < srcMtime) {
+        console.error(
+          `❌ ${callerLabel}: ${outRoot}/vendor/maplibre/${file} が無いか古い可能性があります。` +
+          `先に npm run bundle を実行してから再実行してください。`
+        );
+        process.exit(1);
+      }
+    }
   }
 }
 

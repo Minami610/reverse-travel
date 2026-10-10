@@ -35,6 +35,7 @@ const cssPath = path.join(rootDir, 'assets/css/style.css');
 const jsDir = path.join(rootDir, 'assets/js');
 const leafletCssPath = path.join(rootDir, 'assets/vendor/leaflet/leaflet.css');
 const leafletJsPath = path.join(rootDir, 'assets/vendor/leaflet/leaflet.js');
+const maplibreVendorDir = path.join(rootDir, 'assets/vendor/maplibre');
 const distDir = path.join(rootDir, 'dist');
 const distIndexPath = path.join(distDir, 'index.html');
 const docsDir = path.join(rootDir, 'docs');
@@ -110,6 +111,19 @@ async function bundleHTML() {
     fs.copyFileSync(distIndexPath, docsIndexPath);
     console.log(`✅ docs/index.html にコピー完了（GitHub Pages 配信用）`);
 
+    // 10. MapLibre GL JS（4本目①「3D地図の土台」）はLeafletと違いインライン化せず、
+    //    3D切替時だけ別の<script>/<link>として動的読み込みする（遅延読込、
+    //    3Dを使わない利用者のバンドルサイズを増やさないため）。そのため
+    //    dist/・docs/の両方にvendor/maplibre/としてそのままコピーする。
+    const maplibreOutDirs = [path.join(distDir, 'vendor/maplibre'), path.join(docsDir, 'vendor/maplibre')];
+    for (const outDir of maplibreOutDirs) {
+      fs.mkdirSync(outDir, { recursive: true });
+      for (const file of ['maplibre-gl.js', 'maplibre-gl.css']) {
+        fs.copyFileSync(path.join(maplibreVendorDir, file), path.join(outDir, file));
+      }
+    }
+    console.log(`✅ MapLibre GL JS を dist/・docs/ の vendor/maplibre/ にコピー完了（インライン化はしない）`);
+
     console.log(
       `\n📤 デプロイ準備完了:`
     );
@@ -137,6 +151,8 @@ async function generateInlineJSScript(jsDir) {
     'spot-finder.js',
     'route-formatter.js',
     'map-view.js',
+    'gsi-dem-protocol.js',
+    'terrain-map-view.js',
     'layout-controller.js',
     'favorites.js',
     'onward-candidates.js',
