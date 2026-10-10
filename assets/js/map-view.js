@@ -156,7 +156,7 @@ export class MapView {
   }
 }
 
-function isFiniteNumber(value) {
+export function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
@@ -179,7 +179,7 @@ function createPinIcon(kind) {
   });
 }
 
-function buildSpotPopupHtml(spot) {
+export function buildSpotPopupHtml(spot) {
   const shortDescription = spot.description
     ? spot.description.length > 60
       ? `${spot.description.substring(0, 60)}...`
