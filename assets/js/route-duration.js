@@ -91,6 +91,23 @@ export function operatorLabelWord(routeInfo, routeId) {
 }
 
 /**
+ * 「この先へ」の一言「同じ○○で」用の呼び方（2026-10-10、Minami指摘）。
+ * GTFSのroute_typeで言い分ける：0=路面電車・1=地下鉄・2=鉄道→「電車」、
+ * 3=バス→「バス」、それ以外（4=フェリー等、route_type不明含む）→「便」。
+ * is_community_operatorはここでは見ない（「同じ便」という呼び方自体の
+ * 区別が目的で、コミュニティバスかどうかは関係ないため）。
+ * @param {object} routeInfo - route-info.json
+ * @param {string|undefined} routeId
+ * @returns {string} "電車" | "バス" | "便"
+ */
+export function sameRouteWord(routeInfo, routeId) {
+  const routeType = parseInt(routeInfo?.[routeId]?.route_type, 10);
+  if (routeType === 0 || routeType === 1 || routeType === 2) return '電車';
+  if (routeType === 3) return 'バス';
+  return '便';
+}
+
+/**
  * 出発駅ID→到達駅IDの便数情報（行き・帰りの小さい方。ビルド時に確定済みの値を
  * そのまま引くだけ）を解決する。estimateRideMinutes/estimateSelectionMinutesと
  * 同じ、reachBy='direct'|'transfer'の分岐構造を踏襲する。

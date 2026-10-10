@@ -63,6 +63,11 @@ function stationLikeFromSpot(spot) {
  * 前後どちらの駅も拾ってしまう（双方向が同じroute_idを使う鉄道路線で、手前の駅を
  * 「先」と誤判定するバグが調査で見つかった）ため、必ずlegOriginId→legDestIdの順で
  * 先に出てくるパターンを選ぶこと。
+ * 【2026-10-10追記、Minami指摘】循環線（最初と最後の停留所が同じ、または1つの
+ * パターンの中で同じ停留所を2回通る）では、乗車駅・降車駅のどちらかにパターンが
+ * 再び戻ってくる地点（＝一周してきた場合の再訪問）より先は「後ろ」に含めない。
+ * そうしないと、一周後に再登場する乗車駅自身（＝利用者が実際に乗った場所）が
+ * 「先にある場所」として誤って案内されてしまう。
  */
 function stationsAfter(routeSequences, routeId, legOriginId, legDestId) {
   const patterns = routeSequences?.[routeId];
@@ -71,9 +76,13 @@ function stationsAfter(routeSequences, routeId, legOriginId, legDestId) {
   for (const seq of patterns) {
     const originIdx = seq.indexOf(legOriginId);
     const destIdx = seq.indexOf(legDestId);
-    if (originIdx !== -1 && destIdx !== -1 && originIdx < destIdx) {
-      for (const stationId of seq.slice(destIdx + 1)) after.add(stationId);
-    }
+    if (originIdx === -1 || destIdx === -1 || originIdx >= destIdx) continue;
+    let endIdx = seq.length;
+    const nextOriginIdx = seq.indexOf(legOriginId, destIdx + 1);
+    const nextDestIdx = seq.indexOf(legDestId, destIdx + 1);
+    if (nextOriginIdx !== -1) endIdx = Math.min(endIdx, nextOriginIdx);
+    if (nextDestIdx !== -1) endIdx = Math.min(endIdx, nextDestIdx);
+    for (const stationId of seq.slice(destIdx + 1, endIdx)) after.add(stationId);
   }
   return after;
 }
@@ -93,7 +102,9 @@ function sameRouteMinutes(routeDetails, operatorId, fromStationId, toStationId) 
  * @param {object} context - {routeDetails, routeSequences, departureStationId, allSpots, maxBudget}
  * @param {object} currentSpot - 今見ている詳細画面のスポット（allSpots由来のオブジェクト）
  * @returns {Array<{spot:object, type:'same-route'|'nearby'|'stretch', extraFare:number,
- *   sameRouteMinutes?:number, walkMinutes?:number, straightKm?:number}>} 最大ONWARD_COUNT件
+ *   sameRouteMinutes?:number, walkMinutes?:number, straightKm?:number, routeId?:string}>}
+ *   最大ONWARD_COUNT件。routeId（type='same-route'のみ）は一言「同じ電車/バス/便で」の
+ *   呼び分け（route-duration.jsのsameRouteWord()）にroute-info.jsonを引くための路線ID。
  */
 export function buildOnwardCandidates(context, currentSpot) {
   const { routeDetails, routeSequences, departureStationId, allSpots, maxBudget = ONWARD_MAX_FARE } = context;
@@ -127,6 +138,7 @@ export function buildOnwardCandidates(context, currentSpot) {
         .map((s) => ({
           spot: s,
           sameRouteMinutes: sameRouteMinutes(routeDetails, lastLeg.operatorId, lastLeg.legDestId, s.source_station_id),
+          routeId: lastLeg.routeId,
         }));
     }
   }
@@ -154,6 +166,7 @@ export function buildOnwardCandidates(context, currentSpot) {
         sameRouteMinutes: entry.sameRouteMinutes,
         walkMinutes: entry.walkMinutes,
         straightKm: entry.straightKm,
+        routeId: entry.routeId,
       });
     }
   };

@@ -7,7 +7,7 @@ import { GTFSLoader } from './gtfs-loader.js';
 import { FareCalculator } from './fare-calculator.js';
 import { SpotFinder } from './spot-finder.js';
 import { RouteFormatter } from './route-formatter.js';
-import { estimateTripFrequency, formatDayLabel, operatorLabelWord } from './route-duration.js';
+import { estimateTripFrequency, formatDayLabel, operatorLabelWord, sameRouteWord } from './route-duration.js';
 import { buildOnwardCandidates } from './onward-candidates.js';
 import { MapView } from './map-view.js';
 import { LayoutController } from './layout-controller.js';
@@ -1571,16 +1571,20 @@ class ReverseTravel {
 
   /**
    * 「この先へ」カードの一言。種類ごとに文言を変える（Minami指示）。
-   * - 同じ路線の先：「同じバスで約◯分先」（今の停留所→候補の停留所の所要時間。
-   *   出せなければ「同じバスでその先」）
+   * - 同じ路線の先：「同じ電車/バス/便で約◯分先」（今の停留所→候補の停留所の所要時間。
+   *   出せなければ「同じ電車/バス/便でその先」）。呼び方はGTFSのroute_typeで言い分ける
+   *   （route-duration.jsのsameRouteWord()。0・1・2=電車、3=バス、それ以外=便）。
+   *   【2026-10-10修正】ことでん志度線（route_type=2、鉄道）の候補が「同じバスで」と
+   *   表示されていたのをMinamiが指摘、事業者名ではなくroute_typeで判定するよう修正。
    * - すぐ近く：「ここから歩いて約◯分」（直線距離÷時速4km。座標が無ければ空）
    * - 少し足せば：「ここから約◯km」
    */
   formatOnwardBlurb(cand) {
     if (cand.type === 'same-route') {
+      const word = sameRouteWord(this.data.routeInfo, cand.routeId);
       return cand.sameRouteMinutes != null
-        ? `同じバスで約${Math.round(cand.sameRouteMinutes)}分先`
-        : '同じバスでその先';
+        ? `同じ${word}で約${Math.round(cand.sameRouteMinutes)}分先`
+        : `同じ${word}でその先`;
     }
     if (cand.type === 'nearby') {
       return cand.walkMinutes != null ? `ここから歩いて約${Math.round(cand.walkMinutes)}分` : '';
