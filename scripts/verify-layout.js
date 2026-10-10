@@ -161,7 +161,7 @@ async function checkNoHorizontalOverflow(page, label) {
 async function checkDepartureBudgetGap(page, viewportLabel) {
   const GAP_THRESHOLD_PX = 40;
   const inputBox = await page.locator('#departure-input').boundingBox();
-  const budgetLabelBox = await page.locator('label[for="budget-input"]').boundingBox();
+  const budgetLabelBox = await page.locator('label[for="budget-slider"]').boundingBox();
   if (!inputBox || !budgetLabelBox) {
     record(`[${viewportLabel}] 出発駅欄と予算見出しの間隔: 要素が見つかる`, false);
     return;
@@ -640,6 +640,144 @@ async function captureOnwardBackScreen(page, viewportLabel) {
  * スクリーンショットはsp・pcの両方で、初期画面・立山方向・富山湾上空・2D復帰の
  * 4種類を撮る（Minami指示：スマホ375px・PC）。
  */
+/**
+ * 予算スライダー（4本目③「予算スライダー連動」）を検証する（Minami指示4番）。
+ * - スライダーの値と帯の件数が、検索で出る件数と一致する（富山駅前・高松築港、
+ *   ¥400・¥1000・¥2000）
+ * - 動かしている間（'input'）は一覧が変わらない
+ * - 「この条件で検索」を押すと一覧が変わる
+ * - スクリーンショット：富山駅前で3D・予算¥400/¥1000/¥2000の3枚と、2Dで¥1000の1枚
+ */
+async function checkBudgetSlider(browser, baseUrl, savedPaths) {
+  console.log('\n=== 予算スライダーの検証 ===');
+
+  // --- 1) スライダーの値と帯の件数が検索結果と一致する ---
+  for (const station of ['富山駅前', '高松築港']) {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+
+    // 最初に適当な予算（¥1000）で検索し、以降はスライダーだけで値を変える
+    // （allSpotsは¥2000で一度だけ取得され、以降の帯はスライダー側で絞り込むだけ
+    // になる設計のため、ここで一覧を作り直す必要はない）。
+    await searchAt(page, station, 1000);
+
+    for (const budget of [400, 1000, 2000]) {
+      // 実際の検索結果（別タブ相当。同じページで予算を変えて検索し直し、正解の件数を得る）
+      await searchAt(page, station, budget);
+      const actualCount = await page.locator('.spot-card').count();
+
+      // スライダー経由（1000に一度戻してから対象の予算へ動かす＝再取得なしの経路を通す）
+      await searchAt(page, station, 1000);
+      await page.evaluate((v) => {
+        const el = document.getElementById('budget-slider');
+        el.value = v;
+        el.dispatchEvent(new Event('input'));
+      }, budget);
+      await page.waitForTimeout(150);
+      const previewText = await page.locator('#budget-band-preview').textContent();
+      const sliderCountMatch = previewText.match(/(\d+)件$/);
+      const sliderCount = sliderCountMatch ? parseInt(sliderCountMatch[1], 10) : null;
+
+      record(
+        `[${station} ¥${budget}] スライダーの帯件数(${sliderCount})と検索結果のカード数(${actualCount})が一致する`,
+        sliderCount === actualCount,
+        previewText
+      );
+    }
+    await context.close();
+  }
+
+  // --- 2) 動かしている間は一覧が変わらない／3) 「この条件で検索」で一覧が変わる ---
+  {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '富山駅前', 1000);
+
+    const cardsBefore = await page.locator('.spot-card h3').allTextContents();
+    await page.evaluate(() => {
+      const el = document.getElementById('budget-slider');
+      el.value = 2000;
+      el.dispatchEvent(new Event('input'));
+    });
+    await page.waitForTimeout(200);
+    const cardsDuringDrag = await page.locator('.spot-card h3').allTextContents();
+    record(
+      'スライダーを動かしている間（input）は一覧が変わらない',
+      JSON.stringify(cardsBefore) === JSON.stringify(cardsDuringDrag),
+      `変更前${cardsBefore.length}件 → ドラッグ中${cardsDuringDrag.length}件`
+    );
+
+    const pendingClass = await page.evaluate(() => document.getElementById('search-btn').classList.contains('search-btn-pending'));
+    record('スライダー操作後、「この条件で検索」ボタンが強調表示になる', pendingClass);
+
+    await page.click('#search-btn');
+    await page.waitForSelector('.spot-card, .no-results', { timeout: 15000 });
+    await page.waitForTimeout(200);
+    const cardsAfterSearch = await page.locator('.spot-card h3').allTextContents();
+    record(
+      '「この条件で検索」を押すと一覧が変わる（¥1000→¥2000の帯に変化）',
+      JSON.stringify(cardsAfterSearch) !== JSON.stringify(cardsBefore)
+    );
+
+    await context.close();
+  }
+
+  // --- 4) スクリーンショット：富山駅前・3D・¥400/¥1000/¥2000、2D・¥1000 ---
+  {
+    const context = await browser.newContext({ viewport: { width: 375, height: 667 } });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '富山駅前', 1000);
+    await page.click('.tab-btn[data-tab="map"]');
+    await page.waitForTimeout(200);
+    await page.click('#map-dimension-toggle');
+    const became3d = await page.waitForFunction(
+      () => document.getElementById('map-area').classList.contains('mode-3d'),
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
+    record('スクリーンショット撮影用の3D化に成功', became3d);
+
+    if (became3d) {
+      for (const budget of [400, 1000, 2000]) {
+        await page.evaluate((v) => {
+          const el = document.getElementById('budget-slider');
+          el.value = v;
+          el.dispatchEvent(new Event('input'));
+        }, budget);
+        await page.waitForTimeout(600);
+        const shotPath = path.join(screenshotDir, `budget-slider-3d-${budget}.png`);
+        await page.locator('#map-area').screenshot({ path: shotPath });
+        savedPaths.push(shotPath);
+        console.log(`  保存: budget-slider-3d-${budget}.png`);
+      }
+
+      // 2Dで¥1000の1枚
+      await page.click('#map-dimension-toggle');
+      await page.waitForTimeout(300);
+      await page.evaluate(() => {
+        const el = document.getElementById('budget-slider');
+        el.value = 1000;
+        el.dispatchEvent(new Event('input'));
+      });
+      await page.waitForTimeout(400);
+      const shot2dPath = path.join(screenshotDir, 'budget-slider-2d-1000.png');
+      await page.locator('#map-area').screenshot({ path: shot2dPath });
+      savedPaths.push(shot2dPath);
+      console.log('  保存: budget-slider-2d-1000.png');
+    }
+
+    await context.close();
+  }
+}
+
 async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
   console.log('\n=== 2D/3D切替（3D地図の土台）の検証 ===');
 
@@ -810,6 +948,7 @@ async function main() {
     }
 
     await checkTerrainMapToggle(browser, baseUrl, savedPaths);
+    await checkBudgetSlider(browser, baseUrl, savedPaths);
   } finally {
     await browser.close();
     server.close();
