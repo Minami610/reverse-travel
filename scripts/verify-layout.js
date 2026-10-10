@@ -20,7 +20,7 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { assertBundleFresh, assertSiteDataFresh } from './check-bundle-freshness.js';
+import { assertBundleFresh, assertSiteDataFresh, assertMaplibreVendorFresh } from './check-bundle-freshness.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, '..');
@@ -634,9 +634,128 @@ async function captureOnwardBackScreen(page, viewportLabel) {
   return screenshotPath;
 }
 
+/**
+ * 2D/3D切替（4本目①「3D地図の土台」）の3シナリオを検証する（Minami指示3番）。
+ * 実WebGLが要るためPlaywright（本ファイル）で行う。それぞれ独立したcontextを使う。
+ * スクリーンショットはsp・pcの両方で、初期画面・立山方向・富山湾上空・2D復帰の
+ * 4種類を撮る（Minami指示：スマホ375px・PC）。
+ */
+async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
+  console.log('\n=== 2D/3D切替（3D地図の土台）の検証 ===');
+
+  for (const [label, viewport] of Object.entries(VIEWPORTS)) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '富山駅前', 1600);
+    if (label === 'sp') {
+      await page.click('.tab-btn[data-tab="map"]');
+      await page.waitForTimeout(200);
+    }
+
+    await page.click('#map-dimension-toggle');
+    const became3d = await page.waitForFunction(
+      () => document.getElementById('map-area').classList.contains('mode-3d'),
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
+    record(`[${label}] 切替ボタンで3Dになる`, became3d);
+
+    const markerCount = await page.locator('.maplibregl-marker').count();
+    record(`[${label}] 3D地図上に検索結果のマーカーが出る`, markerCount > 0, `${markerCount}件`);
+
+    if (pageErrors.length > 0) record(`[${label}] 3D化中にページエラーが発生していない`, false, pageErrors.join('; '));
+
+    if (became3d) {
+      await page.waitForTimeout(1200);
+      const initialPath = path.join(screenshotDir, `terrain-3d-initial-${label}.png`);
+      await page.locator('#map-area').screenshot({ path: initialPath });
+      savedPaths.push(initialPath);
+
+      // 立山連峰が見える向き（Minami指示：市街地〜山地の中間、pitch高め）
+      await page.evaluate(() => {
+        window.__terrainMapForDebug.jumpTo({ center: [137.40, 36.63], zoom: 10.6, pitch: 75, bearing: 220 });
+      });
+      await page.waitForTimeout(1500);
+      const tateyamaPath = path.join(screenshotDir, `terrain-3d-tateyama-${label}.png`);
+      await page.locator('#map-area').screenshot({ path: tateyamaPath });
+      savedPaths.push(tateyamaPath);
+
+      // 富山湾の上空（海に柱が立っていないことの目視確認用）
+      await page.evaluate(() => {
+        window.__terrainMapForDebug.jumpTo({ center: [137.15, 36.95], zoom: 10, pitch: 50, bearing: 0 });
+      });
+      await page.waitForTimeout(1500);
+      const bayPath = path.join(screenshotDir, `terrain-3d-bay-${label}.png`);
+      await page.locator('#map-area').screenshot({ path: bayPath });
+      savedPaths.push(bayPath);
+
+      // 海上（富山湾の沖、データなし域を含む）で異常な標高（柱）が出ていないことを
+      // 自動検証する（2026-10-10、地理院標高タイルのデータなし値(x=2^23)を誇張して
+      // 解釈すると海上に標高830km級の柱が立つ不具合があった。将来の回帰を防ぐ）。
+      const bayElevation = await page.evaluate(() => window.__terrainMapForDebug.queryTerrainElevation([137.15, 36.95]));
+      record(
+        `[${label}] 海上で異常な標高（柱）が出ていない`,
+        bayElevation === null || Math.abs(bayElevation) < 100,
+        `富山湾の沖の標高: ${bayElevation}`
+      );
+    }
+
+    // 2Dに戻せる
+    await page.click('#map-dimension-toggle');
+    await page.waitForTimeout(400);
+    const backTo2d = await page.evaluate(() => !document.getElementById('map-area').classList.contains('mode-3d'));
+    const leafletVisible = await page.evaluate(() => getComputedStyle(document.getElementById('spots-map')).display !== 'none');
+    record(`[${label}] 2Dに戻せる`, backTo2d && leafletVisible);
+    if (backTo2d) {
+      const afterTogglePath = path.join(screenshotDir, `terrain-3d-back-to-2d-${label}.png`);
+      await page.locator('#map-area').screenshot({ path: afterTogglePath });
+      savedPaths.push(afterTogglePath);
+    }
+
+    await context.close();
+  }
+
+  // WebGLが無い環境では切替ボタンを押しても2Dのまま・エラー文言が出ない
+  {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    // canvas.getContext('webgl'/'webgl2')を常にnullにして、WebGL非対応環境を模す
+    await context.addInitScript(() => {
+      const orig = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (type, ...args) {
+        if (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl') return null;
+        return orig.call(this, type, ...args);
+      };
+    });
+    const page = await context.newPage();
+    const dialogMessages = [];
+    page.on('dialog', async (d) => { dialogMessages.push(d.message()); await d.dismiss(); });
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '富山駅前', 1600);
+    await page.click('.tab-btn[data-tab="map"]');
+    await page.waitForTimeout(200);
+
+    await page.click('#map-dimension-toggle');
+    await page.waitForTimeout(1500);
+    const stayed2d = await page.evaluate(() => !document.getElementById('map-area').classList.contains('mode-3d'));
+    const errorElements = await page.evaluate(() => document.querySelectorAll('.error-message, [role="alert"]').length);
+    record('WebGL非対応環境では切替ボタンを押しても2Dのまま', stayed2d);
+    record('WebGL非対応環境でエラー文言（alert・画面上の表示）が出ない', dialogMessages.length === 0 && errorElements === 0,
+      `alert=${dialogMessages.length}件, 画面表示=${errorElements}件`);
+
+    await context.close();
+  }
+}
+
 async function main() {
   assertBundleFresh('verify-layout');
   assertSiteDataFresh('verify-layout');
+  assertMaplibreVendorFresh('verify-layout');
   fs.mkdirSync(screenshotDir, { recursive: true });
 
   const server = await startServer();
@@ -689,6 +808,8 @@ async function main() {
 
       await context.close();
     }
+
+    await checkTerrainMapToggle(browser, baseUrl, savedPaths);
   } finally {
     await browser.close();
     server.close();

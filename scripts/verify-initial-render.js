@@ -32,7 +32,7 @@ import fs from 'fs';
 import path from 'path';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { fileURLToPath, pathToFileURL } from 'url';
-import { assertBundleFresh, assertSiteDataFresh } from './check-bundle-freshness.js';
+import { assertBundleFresh, assertSiteDataFresh, assertMaplibreVendorFresh } from './check-bundle-freshness.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, '..');
@@ -2099,6 +2099,61 @@ async function checkOperatorClassification() {
  *   maxBudgetを渡しても、ここで明示的に上限を適用すること）
  * - 「すぐ近く」は徒歩20分以内のみであること
  */
+/**
+ * 地理院標高タイルのデコード・terrarium再エンコード（gsi-dem-protocol.js）を
+ * 合成データで検証する（2026-10-10、4本目①「3D地図の土台」。最重要項目）。
+ * ブラウザ・WebGL不要の純粋関数テストのため、ネットワーク・GPUが無い環境でも
+ * 実行できる（verify-layout.js側のPlaywrightテストとは独立した二重の安全網）。
+ */
+async function checkGsiDemProtocolMath() {
+  console.log('\n=== 地理院標高タイルのデコード・terrarium再エンコード（合成データ）の検証 ===');
+  const { decodeGsiElevation, encodeTerrariumElevation } = await import(toEngineModuleUrl('assets/js/gsi-dem-protocol.js'));
+  let ok = true;
+
+  // 1) データなし（R=128,G=0,B=0、x=2^23）は0mとして扱う
+  const nodataOk = decodeGsiElevation(128, 0, 0) === 0;
+  ok = ok && nodataOk;
+  console.log(nodataOk ? '✅ データなし(R=128,G=0,B=0)は0mとして扱われる' : `❌ データなしの扱いに失敗（結果=${decodeGsiElevation(128, 0, 0)}）`);
+
+  // 2) 代表的な標高の符号化→復号の往復チェック（0m・正の標高・負の標高・3003m級）
+  const encodeGsi = (h) => {
+    const x = h >= 0 ? Math.round(h / 0.01) : Math.round(h / 0.01) + 16777216;
+    return [Math.floor(x / 65536), Math.floor((x % 65536) / 256), x % 256];
+  };
+  const roundTripCases = [0, 10, 100, -5, -0.01, 3003];
+  const roundTripOk = roundTripCases.every((h) => {
+    const [r, g, b] = encodeGsi(h);
+    const decoded = decodeGsiElevation(r, g, b);
+    return Math.abs(decoded - h) < 0.01;
+  });
+  ok = ok && roundTripOk;
+  console.log(roundTripOk
+    ? `✅ 地理院符号化の往復チェックが一致する（${roundTripCases.join('m, ')}m）`
+    : '❌ 地理院符号化の往復チェックに失敗した組み合わせがある');
+
+  // 3) 負の標高が「2^23を境にした折り返し」で正しく復元できる（旧実装のバグ：
+  //    223/224という桁の並びを閾値と誤認しており、この折り返し自体が無かった）
+  const negativeOk = Math.abs(decodeGsiElevation(255, 254, 12) - -5) < 0.01;
+  ok = ok && negativeOk;
+  console.log(negativeOk
+    ? '✅ 負の標高（海面下）が2^23を境にした折り返しで正しく復元される'
+    : `❌ 負の標高の復元に失敗（結果=${decodeGsiElevation(255, 254, 12)}、期待値=-5）`);
+
+  // 4) terrarium再エンコードの往復チェック（MapLibreのencoding:'terrarium'が
+  //    復号する式 h=R*256+G+B/256-32768 の逆関数として正しいか）
+  const terrariumOk = [0, 10, -5, 3003, -0.01].every((h) => {
+    const [r, g, b] = encodeTerrariumElevation(h);
+    const back = (r * 256 + g + b / 256) - 32768;
+    return Math.abs(back - h) < 0.01;
+  });
+  ok = ok && terrariumOk;
+  console.log(terrariumOk
+    ? '✅ terrarium再エンコードの往復チェックが一致する'
+    : '❌ terrarium再エンコードの往復チェックに失敗した組み合わせがある');
+
+  return ok;
+}
+
 async function checkOnwardCandidateSynthetic() {
   console.log('\n=== 「この先へ」候補選定ロジック（onward-candidates.js）の合成データ検証 ===');
   const { buildOnwardCandidates } = await import(toEngineModuleUrl('assets/js/onward-candidates.js'));
@@ -2388,6 +2443,7 @@ async function main() {
   }
   assertBundleFresh('verify-render');
   assertSiteDataFresh('verify-render');
+  assertMaplibreVendorFresh('verify-render');
   const publishedOk = checkPublishedPrefecturesConsistency();
   const html = fs.readFileSync(distIndexPath, 'utf-8');
 
@@ -2413,6 +2469,7 @@ async function main() {
   const operatorClassificationOk = await checkOperatorClassification();
   const onwardCandidateSyntheticOk = await checkOnwardCandidateSynthetic();
   const onwardNavigationOk = await checkOnwardNavigation(html);
+  const gsiDemProtocolMathOk = await checkGsiDemProtocolMath();
 
   if (
     publishedOk && desktopOk && mobileOk && cardsOk && loadingStateOk && transferDisplayOk &&
@@ -2420,7 +2477,7 @@ async function main() {
     searchButtonStateOk && favoritesStorageOk && favoriteCardToggleOk && sharedSpotBandBypassOk &&
     sharedSpotSidMismatchOk && sharedSpotAmbiguousNameOk && sharedListMixedDepartureOk &&
     serviceFrequencyComputationOk && frequencyDisplayLogicOk && shareTextMunicipalityOk &&
-    operatorClassificationOk && onwardCandidateSyntheticOk && onwardNavigationOk
+    operatorClassificationOk && onwardCandidateSyntheticOk && onwardNavigationOk && gsiDemProtocolMathOk
   ) {
     console.log('\n✅ 検証成功: 初期表示・検索結果カードともに想定通りです');
   } else {
