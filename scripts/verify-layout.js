@@ -532,6 +532,9 @@ async function captureReservationScreen(page, viewportLabel) {
  * 高松築港・往復¥1000の帯内1件目の詳細画面には、同じ路線の先が無い実データのため
  * 「すぐ近く」3件が表示される（実データで確認済み）。暗い枠・3件・新運賃表記・
  * カードをクリックすると候補の詳細へ切り替わることを確認する。
+ * 【2026-10-10追記】この同じ画面の1件目（志度寺、ことでん志度線=route_type 2）は
+ * 「同じ電車で約2分先」になる（route_typeによる呼び分けの実例。Minami指示）ため、
+ * ここで「電車」の文言も確認し、このスクリーンショットを電車の例としても扱う。
  */
 async function captureOnwardSectionScreen(page, viewportLabel) {
   await searchAt(page, '高松築港', 1000);
@@ -550,6 +553,9 @@ async function captureOnwardSectionScreen(page, viewportLabel) {
 
   const fareText = await page.locator('.onward-fare').first().textContent();
   record(`[${viewportLabel}] この先へ: 運賃が「往復¥...（+¥... または 追加なし）」の形式`, /^往復¥[\d,]+（(追加なし|\+¥[\d,]+)）$/.test(fareText), fareText);
+
+  const firstBlurbText = await page.locator('.onward-blurb').first().textContent();
+  record(`[${viewportLabel}] この先へ: 鉄道（ことでん志度線）の候補は「同じ電車で」と表示される（電車の例）`, firstBlurbText.includes('同じ電車で'), firstBlurbText);
 
   const firstHeading = await page.locator('#detail-content h2').textContent();
   await page.locator('.onward-card').first().click();

@@ -2173,6 +2173,57 @@ async function checkOnwardCandidateSynthetic() {
     ? '✅ 双方向路線（同じroute_idを両方向が使う）でも、手前の駅を「先」と誤判定しません'
     : `❌ 双方向路線での方向判定に失敗（候補=${JSON.stringify(bidirIds)}）`);
 
+  // --- 1c) 循環線（2026-10-10、Minami指摘で追加）：1つの停車パターンの中で
+  //     「最初と最後の停留所が同じ」または「同じ停留所を2回通る」場合でも、
+  //     一周して再登場する手前の停留所（＝利用者が実際に乗った場所）を
+  //     「先」と誤判定しないこと ---
+  // L1) 最初と最後の停留所が同じ（L1→L2→L3→L4→L1、1周して出発地に戻る）
+  const routeSequencesLoopClosed = { 'loop:A': [['loop:L1', 'loop:L2', 'loop:L3', 'loop:L4', 'loop:L1']] };
+  const routeDetailsLoopClosed = {
+    'loop:L1': {
+      'loop:L2': { op: ['loop:A', 10, 5, 31, 0] },
+      'loop:L3': { op: ['loop:A', 20, 5, 31, 0] },
+      'loop:L4': { op: ['loop:A', 30, 5, 31, 0] },
+    },
+  };
+  const curLoopClosed = { id: 'cur-loop-closed', name: 'x', source_station_id: 'loop:L2', source_round_trip_fare: 400, source_reach_by: 'direct', source_via_operator: 'op', latitude: 34.0, longitude: 134.0 };
+  const aheadL3 = mkSpot('ahead-l3', 'loop:L3', 35.0, 135.0);
+  const aheadL4 = mkSpot('ahead-l4', 'loop:L4', 35.1, 135.1);
+  const behindL1 = mkSpot('behind-l1', 'loop:L1', 30.0, 130.0); // 一周後に再登場する出発地。遠方・同額にしてnearby/stretchにも入らないようにする
+  const loopClosedCandidates = buildOnwardCandidates(
+    { routeDetails: routeDetailsLoopClosed, routeSequences: routeSequencesLoopClosed, departureStationId: 'loop:L1', allSpots: [curLoopClosed, aheadL3, aheadL4, behindL1], maxBudget: 2000 },
+    curLoopClosed
+  );
+  const loopClosedIds = loopClosedCandidates.map((c) => c.spot.id);
+  const loopClosedOk = loopClosedIds.includes('ahead-l3') && loopClosedIds.includes('ahead-l4') && !loopClosedIds.includes('behind-l1');
+  ok = ok && loopClosedOk;
+  console.log(loopClosedOk
+    ? '✅ 循環線（最初と最後の停留所が同じ）でも、一周後に再登場する出発地を「先」と誤判定しません'
+    : `❌ 循環線（始点=終点）での方向判定に失敗（候補=${JSON.stringify(loopClosedIds)}）`);
+
+  // L2) 同じ停留所を2回通る（最初と最後は別の停留所。K1→K2→K3→K1→K4で、
+  //     K1が経路の途中で再登場し、その先のK4は「一周後」なので対象外とする）
+  const routeSequencesLoopRevisit = { 'loop:B': [['loop:K1', 'loop:K2', 'loop:K3', 'loop:K1', 'loop:K4']] };
+  const routeDetailsLoopRevisit = {
+    'loop:K1': {
+      'loop:K2': { op: ['loop:B', 10, 5, 31, 0] },
+      'loop:K3': { op: ['loop:B', 20, 5, 31, 0] },
+    },
+  };
+  const curLoopRevisit = { id: 'cur-loop-revisit', name: 'x', source_station_id: 'loop:K2', source_round_trip_fare: 400, source_reach_by: 'direct', source_via_operator: 'op', latitude: 34.0, longitude: 134.0 };
+  const aheadK3 = mkSpot('ahead-k3', 'loop:K3', 35.0, 135.0);
+  const behindK1 = mkSpot('behind-k1', 'loop:K1', 30.0, 130.0); // 経路の途中で再登場する手前の停留所
+  const loopRevisitCandidates = buildOnwardCandidates(
+    { routeDetails: routeDetailsLoopRevisit, routeSequences: routeSequencesLoopRevisit, departureStationId: 'loop:K1', allSpots: [curLoopRevisit, aheadK3, behindK1], maxBudget: 2000 },
+    curLoopRevisit
+  );
+  const loopRevisitIds = loopRevisitCandidates.map((c) => c.spot.id);
+  const loopRevisitOk = loopRevisitIds.includes('ahead-k3') && !loopRevisitIds.includes('behind-k1');
+  ok = ok && loopRevisitOk;
+  console.log(loopRevisitOk
+    ? '✅ 循環線（同じ停留所を2回通る）でも、手前の停留所を「先」と誤判定しません'
+    : `❌ 循環線（同一停留所を2回通る）での方向判定に失敗（候補=${JSON.stringify(loopRevisitIds)}）`);
+
   // --- 2) 合計運賃は常に¥2000以下（呼び出し元がより大きいmaxBudgetを渡しても） ---
   const currentSpotBudget = mkSpot('cur-b', 'op:X', 34.0, 134.0, 400);
   const overBudgetSpot = mkSpot('over-budget', 'op:X', 34.0001, 134.0001, 2500); // 同駅・徒歩圏内だが運賃超過
@@ -2280,7 +2331,8 @@ async function checkOnwardNavigation(html) {
   // 一言：種類ごとの文言（同じバスで約◯分先／ここから歩いて約◯分／ここから約◯km）が
   // 空でないこと（Minami指示：先頭30文字の説明文をやめ、種類別の一言にする。2026-10-10）
   const blurbTexts = onwardCards.map((c) => c.querySelector('.onward-blurb')?.textContent || '');
-  const blurbFormatOk = blurbTexts.every((t) => /^(同じバスで(約\d+分先|その先)|ここから歩いて約\d+分|ここから約[\d.]+km)$/.test(t));
+  // 「同じ電車/バス/便で」はroute_type（0・1・2=電車、3=バス、それ以外=便）で言い分ける
+  const blurbFormatOk = blurbTexts.every((t) => /^(同じ(電車|バス|便)で(約\d+分先|その先)|ここから歩いて約\d+分|ここから約[\d.]+km)$/.test(t));
   console.log(blurbFormatOk
     ? `✅ 各候補の一言が種類別の文言で表示されています（${blurbTexts.join(' / ')}）`
     : `❌ 一言の文言が想定外です（${blurbTexts.join(' / ')}）`);
@@ -2299,26 +2351,26 @@ async function checkOnwardNavigation(html) {
     ? `✅ 「この先へ」カードをクリックすると候補の詳細画面に切り替わりました（"${candidateHeading}"）`
     : `❌ 候補クリックでの詳細画面の切り替えに失敗しました（見出し="${candidateHeading}"）`);
 
-  // スマホ本体の戻る操作（popstate）1回目：UIの「← 戻る」ボタンには一切触れず、
-  // window.history.back()を直接呼んでOS/スマホの戻るジェスチャーを模す
-  // （Minami指示6-d）。一覧にではなく、元のスポットの詳細に戻るはず（履歴スタック）。
-  window.history.back();
+  // スマホ本体の戻る操作（popstate）だけで、「この先へ」で開いた候補の詳細 →
+  // 1つ前の詳細 → 一覧の順に戻れること（Minami指示：前回の指示で抜けていたテスト。
+  // UIの「← 戻る」ボタンには一切触れず、window.history.back()を直接呼んで
+  // OS/スマホの戻るジェスチャーを模す。ボタン自体の動作はcheckSharedSpotBandBypass等
+  // 別のテストで確認済み）。
+  window.history.back(); // 1回目：候補の詳細 → 元のスポットの詳細
   const backToOriginalDetail = await waitFor(() => {
     const view = doc.getElementById('app-layout')?.getAttribute('data-view');
     const h2 = doc.getElementById('detail-content')?.querySelector('h2')?.textContent;
     return view === 'detail' && h2 === originalSpotName;
   }, 3000);
   console.log(backToOriginalDetail
-    ? '✅ スマホ本体の戻る操作（popstate、ボタンには触れていない）で、一覧にではなく元のスポットの詳細画面に1回で戻りました（履歴スタック）'
-    : `❌ popstateでの戻る動作が想定と異なります（data-view="${doc.getElementById('app-layout')?.getAttribute('data-view')}", h2="${doc.getElementById('detail-content')?.querySelector('h2')?.textContent}"）`);
+    ? '✅ スマホ本体の戻る操作（popstate）1回目：候補の詳細から、一覧にではなく元のスポットの詳細画面に戻りました（履歴スタック）'
+    : `❌ popstateでの戻る動作（1回目）が想定と異なります（data-view="${doc.getElementById('app-layout')?.getAttribute('data-view')}", h2="${doc.getElementById('detail-content')?.querySelector('h2')?.textContent}"）`);
 
-  // 「← 戻る」ボタン：履歴が空になったので、通常どおり一覧に戻るはず
-  // （ボタンの実体もhistory.back()を呼ぶだけなので、UIボタンでも同じ結果になることを確認する）
-  doc.getElementById('back-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+  window.history.back(); // 2回目：元のスポットの詳細 → 一覧
   const backToList = await waitFor(() => doc.getElementById('app-layout')?.getAttribute('data-view') === 'results', 3000);
   console.log(backToList
-    ? '✅ 履歴が空になった後、「← 戻る」ボタンで通常どおり一覧に戻りました'
-    : `❌ 「← 戻る」ボタンで一覧に戻りませんでした（data-view="${doc.getElementById('app-layout')?.getAttribute('data-view')}"）`);
+    ? '✅ スマホ本体の戻る操作（popstate）2回目：履歴が空になった後、一覧に戻りました（候補の詳細→1つ前の詳細→一覧の順を確認）'
+    : `❌ popstateでの戻る動作（2回目）が想定と異なります（data-view="${doc.getElementById('app-layout')?.getAttribute('data-view')}"）`);
 
   if (errors.length > 0) {
     console.log('⚠️  ページ実行中に発生したエラー:');
