@@ -115,14 +115,24 @@ async function bundleHTML() {
     //    3D切替時だけ別の<script>/<link>として動的読み込みする（遅延読込、
     //    3Dを使わない利用者のバンドルサイズを増やさないため）。そのため
     //    dist/・docs/の両方にvendor/maplibre/としてそのままコピーする。
+    //    【2026-10-10、4本目②】gsi-dem-protocol.js・terrain-map-view.js・
+    //    gsi-dem-worker.jsも同様の理由（2Dの人のページを重くしない）で
+    //    インライン化をやめ、MapLibre本体と同じフォルダにそのままコピーする
+    //    （terrain-loader.jsがimport()で、gsi-dem-protocol.jsがWorker生成で、
+    //    それぞれ相対パスで参照するため同じフォルダに置く必要がある）。
+    //    この3ファイルは他のアプリJSと違い、importもexportも削除しない
+    //    （本物のESモジュールとしてそのまま動的importされるため）。
     const maplibreOutDirs = [path.join(distDir, 'vendor/maplibre'), path.join(docsDir, 'vendor/maplibre')];
     for (const outDir of maplibreOutDirs) {
       fs.mkdirSync(outDir, { recursive: true });
       for (const file of ['maplibre-gl.js', 'maplibre-gl.css']) {
         fs.copyFileSync(path.join(maplibreVendorDir, file), path.join(outDir, file));
       }
+      for (const file of ['gsi-dem-protocol.js', 'terrain-map-view.js', 'gsi-dem-worker.js']) {
+        fs.copyFileSync(path.join(jsDir, file), path.join(outDir, file));
+      }
     }
-    console.log(`✅ MapLibre GL JS を dist/・docs/ の vendor/maplibre/ にコピー完了（インライン化はしない）`);
+    console.log(`✅ MapLibre GL JS・3D地図の遅延読込モジュールを dist/・docs/ の vendor/maplibre/ にコピー完了（インライン化はしない）`);
 
     console.log(
       `\n📤 デプロイ準備完了:`
@@ -151,8 +161,7 @@ async function generateInlineJSScript(jsDir) {
     'spot-finder.js',
     'route-formatter.js',
     'map-view.js',
-    'gsi-dem-protocol.js',
-    'terrain-map-view.js',
+    'terrain-loader.js',
     'layout-controller.js',
     'favorites.js',
     'onward-candidates.js',
