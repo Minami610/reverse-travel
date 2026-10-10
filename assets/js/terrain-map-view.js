@@ -40,6 +40,14 @@ const DEM_MAXZOOM = 12; // Minami指示：DEM10Bの範囲に抑え、それ以�
 const BAND_WIDTH = 200; // 予算の帯の幅（既存の2D検索・一覧と同じ定義）
 const SPOTS_SOURCE_ID = 'spots';
 const SPOTS_LAYER_ID = 'spots-circle';
+const DEM_SOURCE_ID = 'gsi-dem';
+const HILLSHADE_LAYER_ID = 'hillshade-layer';
+
+// 帯に入る点＝明るいオレンジ＋光の輪、それより安い点＝緑がかった灰色の小さい点
+// （2026-10-10、Minami指摘：スクリーンショットで見分けづらかったため色を変更。
+// 2D(map-view.js)と揃える）。
+const COLOR_IN_BAND = '#FF6B2B';
+const COLOR_CHEAPER = '#8a9a86';
 
 let protocolRegistered = false; // addProtocolは多重登録を避ける（2回目以降は上書きになるだけだが、意図を明示するためフラグで一度だけに絞る）
 
@@ -106,6 +114,11 @@ export class TerrainMapView {
 
     this.map = new maplibregl.Map({
       container: this.containerId,
+      // 出典はMapLibre標準の右下attributionではなく、compact（iボタンで開く）に
+      // する（Minami指示：スマホで地図をふさいでいた）。位置は切替ボタン
+      // （左下）と重ならないよう明示的に右下へ固定し、自前のAttributionControlを
+      // 後から追加する（下のaddControl参照）。
+      attributionControl: false,
       style: {
         version: 8,
         sources: {
@@ -116,7 +129,7 @@ export class TerrainMapView {
             maxzoom: 18,
             attribution: GSI_STD_ATTRIBUTION,
           },
-          'gsi-dem': {
+          [DEM_SOURCE_ID]: {
             type: 'raster-dem',
             tiles: [GSI_DEM_PROTOCOL_TILE_URL],
             tileSize: 256,
@@ -131,6 +144,20 @@ export class TerrainMapView {
         },
         layers: [
           { id: 'gsi-std-layer', type: 'raster', source: 'gsi-std' },
+          // 起伏を見えやすくする陰影（Minami指示）。同じ標高データから計算するため
+          // 標高タイルの変換自体は1回で済む（追加のネットワーク取得は発生しない）。
+          // 控えめな濃さにして、下の標準地図の色を潰さないようにする。
+          {
+            id: HILLSHADE_LAYER_ID,
+            type: 'hillshade',
+            source: DEM_SOURCE_ID,
+            paint: {
+              'hillshade-exaggeration': 0.6,
+              'hillshade-illumination-direction': 315,
+              'hillshade-shadow-color': '#3a3a2a',
+              'hillshade-highlight-color': '#fff8e0',
+            },
+          },
           {
             id: SPOTS_LAYER_ID,
             type: 'circle',
@@ -145,6 +172,13 @@ export class TerrainMapView {
             },
           },
         ],
+        // 空と遠くの霞（控えめに）。Minami指示。MapLibre v5.6.1にはMapbox系の
+        // 独立した「fog」APIが無い（実装を確認して確定。sky-horizon-blendが
+        // 遠景を空の色へ溶け込ませる、霞に近い効果を持つ）。
+        sky: {
+          'sky-color': '#bcdcf2',
+          'sky-horizon-blend': 0.5,
+        },
         // 【Minami指示】地形は初期スタイルに含めない。平らな背景が表示し
         // 終わってからsetTerrain()で付け足す（下のmap.once('load', ...)参照）。
       },
@@ -155,9 +189,40 @@ export class TerrainMapView {
       maxPitch: 75,
     });
 
+    this.map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
+    // 【2026-10-10】MapLibreのcompact属性は、出典の文字列が変わるたび
+    // （'styledata'/'sourcedata'/'terrain'イベント。地図を生成した直後は
+    // 標高タイルがterrainとして使われ始める等で何度も変わる）に、
+    // ドラッグされるまで開いた状態（<details open>・maplibregl-compact-show
+    // クラス）へ戻す作りになっている（実装を確認して確定）。1回だけ畳んでも
+    // 次の属性変化で再び開いてしまうため、同じイベントで毎回畳み直す。
+    // ただしこれを無期限に続けると、ユーザーが(i)ボタンを押して自分で
+    // 開いた直後にもタイル読み込みイベントで強制的に畳んでしまい、
+    // 出典を読めなくなる。初期表示が落ち着く（標高タイル読み込み完了）までの
+    // 間だけ畳み直し、以降はユーザー操作に任せる。
+    const collapseAttribution = () => {
+      const attribEl = this.map.getContainer().querySelector('.maplibregl-ctrl-attrib');
+      if (attribEl) {
+        attribEl.removeAttribute('open');
+        attribEl.classList.remove('maplibregl-compact-show');
+      }
+    };
+    collapseAttribution();
+    this.map.on('styledata', collapseAttribution);
+    this.map.on('sourcedata', collapseAttribution);
+    this.map.on('terrain', collapseAttribution);
+    const stopCollapsing = () => {
+      this.map.off('styledata', collapseAttribution);
+      this.map.off('sourcedata', collapseAttribution);
+      this.map.off('terrain', collapseAttribution);
+    };
+    this.waitForTerrainLoaded().then(stopCollapsing);
+    setTimeout(stopCollapsing, 20000); // 読み込みが長引く・失敗する場合の保険
+
     // 検証用の参照（queryTerrainElevationでの標高確認・Playwrightでのカメラ操作など）。
     // アプリ自体はこれを使わない。本番でも害はないため条件分岐は入れていない。
     window.__terrainMapForDebug = this.map;
+    window.__terrainViewForDebug = this; // waitForTerrainLoaded()等、ラッパー側のメソッドの検証用
 
     this.popup = new maplibregl.Popup({ offset: 12, closeButton: true });
     this.map.on('click', SPOTS_LAYER_ID, (e) => {
@@ -177,9 +242,22 @@ export class TerrainMapView {
       });
     });
 
+    // 【2026-10-10修正】hillshadeレイヤーを追加したことで、初期表示の時点から
+    // 標高タイルも取得されるようになった。標高タイルは地点によって存在しない
+    // （海上・DEM10B未整備域）ことがあり、個々のタイルの取得失敗はMapLibreが
+    // 'error'イベントとして出すが、これは「そのタイルが描画されないだけ」で
+    // 地図全体の初期化失敗ではない。以前は'error'を1回受けただけで
+    // ensureMap()全体を失敗扱いにしており、実際に1枚でも圏外タイルがあると
+    // 3D化そのものが失敗する不具合があった（実機で発覚）。'load'イベント
+    // （スタイル・ソース自体の初期化完了）だけを待ち、個々のタイル失敗では
+    // 失敗させない。'load'が合理的な時間内に来ない場合だけタイムアウトで
+    // 失敗させる。
     await new Promise((resolve, reject) => {
-      this.map.once('load', resolve);
-      this.map.once('error', (e) => reject(e.error || new Error('3D地図の初期化に失敗しました')));
+      const timeout = setTimeout(() => reject(new Error('3D地図の初期化がタイムアウトしました')), 30000);
+      this.map.once('load', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
     });
 
     // 平らな地図の表示が終わった後に地形を付ける（Minami指示）。
@@ -231,32 +309,51 @@ export class TerrainMapView {
    * 予算スライダーの1コマ分。データの再取得は行わず、既存のGeoJSONソースに
    * setFilter/setPaintPropertyを適用するだけ（Minami指示：計算は¥2000で
    * 一度出したallSpotsから帯で絞るだけで足りる）。
-   * 帯（budget-200〜budget）の件数を返す（一覧の見出しと同じ数え方）。
+   * 帯（budget-200〜budget）の件数は毎回同期的に計算して返す（軽い配列操作のため
+   * 間引く必要はない）。実際の塗り替え（setFilter/setPaintProperty）はMinami指示で
+   * requestAnimationFrame 1コマに1回へ間引く（CPU4倍下で最大85msかかっていた
+   * スライダー1コマを50ms以内に収めるため）。
    * @param {number} budget
    * @returns {number} 帯内の件数
    */
   applyBudget(budget) {
     this._lastBudget = budget;
-    if (!this.map || !this.map.getLayer(SPOTS_LAYER_ID)) return 0;
-
-    const inBand = inBandExpr(budget);
-    this.map.setFilter(SPOTS_LAYER_ID, ['<=', ['get', 'fare'], budget]);
-    this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-radius', ['case', inBand, 9, 4]);
-    this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-color', ['case', inBand, '#FF6B2B', '#ffffff']);
-    this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-opacity', ['case', inBand, 0.95, 0.35]);
-    this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-stroke-width', ['case', inBand, 2, 0]);
-    this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-blur', ['case', inBand, 0.35, 0]);
-
     const count = (this._lastSpots || []).filter(
       (s) => s.source_round_trip_fare <= budget && s.source_round_trip_fare > budget - BAND_WIDTH
     ).length;
+
+    this._pendingPaintBudget = budget;
+    if (!this._paintScheduled) {
+      this._paintScheduled = true;
+      requestAnimationFrame(() => {
+        this._paintScheduled = false;
+        this._paintBudget(this._pendingPaintBudget);
+      });
+    }
     return count;
+  }
+
+  _paintBudget(budget) {
+    if (!this.map || !this.map.getLayer(SPOTS_LAYER_ID)) return;
+    const inBand = inBandExpr(budget);
+    this.map.setFilter(SPOTS_LAYER_ID, ['<=', ['get', 'fare'], budget]);
+    // 帯に入る点＝大きめ＋光の輪（ぼかし+白縁）、それより安い点＝緑がかった灰色の
+    // 小さい点（Minami指摘：見分けづらかったため色・形とも区別を強めた）。
+    this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-radius', ['case', inBand, 10, 4]);
+    this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-color', ['case', inBand, COLOR_IN_BAND, COLOR_CHEAPER]);
+    this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-opacity', ['case', inBand, 0.95, 0.55]);
+    this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-stroke-width', ['case', inBand, 3, 0]);
+    this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-stroke-color', '#ffffff');
+    this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-blur', ['case', inBand, 0.5, 0]);
   }
 
   /**
    * スライダーを指から離したときに呼ぶ。帯に入る点・安い点（=budget以下すべて）が
    * 画面に収まるよう、滑らかにカメラを引く/寄せる（Minami指示）。
    * ドラッグ中は呼ばない（カクつき防止）。
+   * 【2026-10-10修正】¥2000選択時に点が画面端からはみ出る不具合をMinamiが
+   * スクリーンショットで発見。paddingを48→96に広げた（pitchを付けた3D視点では
+   * 奥行き方向の圧縮で見かけ上の余白が足りなくなりやすいため、2Dより大きめに取る）。
    */
   fitToBudget(budget) {
     if (!this.map) return;
@@ -274,7 +371,35 @@ export class TerrainMapView {
       [Math.min(...lngs), Math.min(...lats)],
       [Math.max(...lngs), Math.max(...lats)],
     ];
-    this.map.fitBounds(bounds, { padding: 48, maxZoom: 13, duration: 600, pitch: DEFAULT_PITCH });
+    this.map.fitBounds(bounds, { padding: 96, maxZoom: 13, duration: 600, pitch: DEFAULT_PITCH });
+  }
+
+  /**
+   * 標高タイル（gsi-dem）の、現在の表示範囲に必要なタイルの読み込みが
+   * 完了するまで待つ（2026-10-10、Minami指摘：地形が立ち上がる前に
+   * スクリーンショットを撮ってしまい、平らなままかすみがかかったように
+   * 見えていた）。'idle'（全タイル・周辺余白まで含めて待つ）より直接的で
+   * 速く解決する、isSourceLoaded()＋'sourcedata'イベントを使う。
+   * @param {number} [timeoutMs]
+   * @returns {Promise<boolean>} 読み込み完了ならtrue、タイムアウトならfalse
+   */
+  waitForTerrainLoaded(timeoutMs = 20000) {
+    if (!this.map) return Promise.resolve(false);
+    if (this.map.isSourceLoaded(DEM_SOURCE_ID)) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const onData = (e) => {
+        if (e.sourceId !== DEM_SOURCE_ID) return;
+        if (!this.map.isSourceLoaded(DEM_SOURCE_ID)) return;
+        clearTimeout(timeout);
+        this.map.off('sourcedata', onData);
+        resolve(true);
+      };
+      const timeout = setTimeout(() => {
+        this.map.off('sourcedata', onData);
+        resolve(false);
+      }, timeoutMs);
+      this.map.on('sourcedata', onData);
+    });
   }
 
   resize() {
