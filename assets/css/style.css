@@ -628,8 +628,10 @@ header p {
 /* 3D準備中インジケータ（4本目②）。2Dの地図は消さず、これを右下に小さく重ねるだけ */
 #terrain-loading-indicator {
   position: absolute;
+  /* 【2026-10-10】右下はMapLibreの出典（attribution、compactでも小さいiアイコンが
+     そこに出る）と同じ角のため、右上に置いて重ならないようにする */
   right: 8px;
-  bottom: 8px;
+  top: 8px;
   z-index: 1000;
   margin: 0;
   padding: 0.35rem 0.7rem;
@@ -661,21 +663,28 @@ header p {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
 }
 
-/* 予算スライダーの塗り分け（2026-10-10、4本目③）。帯に入る点＝明るいオレンジ・
-   白い縁・少し光らせる（box-shadowのglow）。それより安い点＝薄く小さく残す。
+/* 予算スライダーの塗り分け（2026-10-10、4本目③。4本目④でMinami指摘：
+   見分けづらかったため色・形とも区別を強めた）。帯に入る点＝明るいオレンジ・
+   白い縁・少し大きく・光の輪（box-shadowの二重glow）。それより安い点＝
+   緑がかった灰色の小さい点（3D側のCOLOR_CHEAPER #8a9a86と同系色に揃える）。
    予算を超える点はJS側でel.style.display='none'にするため、ここではCSSを
    用意しない。hover/selectedは後ろに置いて優先させる（下のコメント参照）。 */
 .map-pin-spot-in-band {
+  width: 18px;
+  height: 18px;
+  margin: -2px 0 0 -2px;
   background-color: var(--color-accent);
   border-color: white;
-  box-shadow: 0 0 6px 2px rgba(255, 107, 43, 0.7), 0 1px 3px rgba(0, 0, 0, 0.5);
+  border-width: 2px;
+  box-shadow: 0 0 0 3px rgba(255, 107, 43, 0.35), 0 0 8px 3px rgba(255, 107, 43, 0.8), 0 1px 3px rgba(0, 0, 0, 0.5);
 }
 
 .map-pin-spot-cheaper {
   width: 9px;
   height: 9px;
   margin: 2px 0 0 2px;
-  opacity: 0.55;
+  background-color: #8a9a86;
+  opacity: 0.75;
 }
 
 /* ホバーと選択は独立した状態として扱う（色・サイズ両方で段階を付け、

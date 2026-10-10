@@ -180,7 +180,9 @@ export class MapView {
     // （applyBudget()と同じ理由。lastBoundsは保存済みのため、タブが開かれて
     // invalidateMapSize()のrefitBounds()が呼ばれた時点で正しく反映される）。
     if (this.map.getSize().x === 0 || this.map.getSize().y === 0) return;
-    const options = { padding: [36, 36], maxZoom: 16 };
+    // 【2026-10-10】¥2000選択時に点が画面端からはみ出る不具合をMinamiが
+    // スクリーンショットで発見（主に3D側だったが、余白は2Dも合わせて広げる）。
+    const options = { padding: [48, 48], maxZoom: 16 };
     if (animate) {
       this.map.flyToBounds(bounds, { ...options, duration: 0.6 });
     } else {
