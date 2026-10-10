@@ -25,9 +25,13 @@
  * ネイティブ対応する terrarium 符号化（h = R×256 + G + B/256 − 32768）に
  * 再エンコードして返す。データなし（海等）は0mとして扱う（Minami指示）。
  *
- * 性能：ピクセル単位のJSループだが、1タイルは256×256=65536ピクセルで、
- * 3D表示で同時に読み込むタイル数は数十枚程度（県全体俯瞰のズーム9前後）。
- * 実測はこの回の報告に記載。
+ * 【2026-10-10追記、4本目②】ピクセル変換（1タイル256×256=65536ピクセル）を
+ * Web Worker（gsi-dem-worker.js）に逃がし、メインスレッドをブロックしない
+ * ようにした。convertGsiDemTileToTerrarium自体はOffscreenCanvasが使えれば
+ * それを使う（メインスレッド・ワーカーどちらでも動く共通コードにするため）、
+ * 無ければdocument.createElementのcanvasにフォールバックする（メインスレッド
+ * 専用の経路）。ワーカーが使えない・失敗した環境では、このメインスレッド版の
+ * 変換に自動フォールバックする（registerGsiDemProtocol参照）。
  */
 
 const GSI_NODATA_X = 2 ** 23; // 8388608
@@ -53,17 +57,32 @@ export function encodeTerrariumElevation(heightMeters) {
   return [r, g, b];
 }
 
+/** OffscreenCanvasがあればそれを、無ければ（メインスレッドのみ）通常のcanvasを作る。 */
+function createCanvas(width, height) {
+  if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(width, height);
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+}
+
+function canvasToBlob(canvas) {
+  if (typeof canvas.convertToBlob === 'function') return canvas.convertToBlob({ type: 'image/png' });
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('canvas.toBlobに失敗しました'))), 'image/png');
+  });
+}
+
 /**
- * 1タイル分のPNG（ArrayBuffer/Blob）を地理院符号化→terrarium符号化に変換する。
- * ブラウザのcanvas APIのみを使う（PNGデコード/エンコードライブラリを追加しない）。
+ * 1タイル分のPNG（Blob）を地理院符号化→terrarium符号化に変換する。
+ * メインスレッド・Web Workerのどちらからも呼べる共通実装（PNGデコード/
+ * エンコードライブラリを追加せず、ブラウザのcanvas APIのみを使う）。
  * @param {Blob} pngBlob
  * @returns {Promise<ArrayBuffer>} 変換後PNGのArrayBuffer
  */
 export async function convertGsiDemTileToTerrarium(pngBlob) {
   const bitmap = await createImageBitmap(pngBlob);
-  const canvas = document.createElement('canvas');
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
+  const canvas = createCanvas(bitmap.width, bitmap.height);
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(bitmap, 0, 0);
   bitmap.close();
@@ -80,10 +99,77 @@ export async function convertGsiDemTileToTerrarium(pngBlob) {
   }
   ctx.putImageData(imageData, 0, 0);
 
-  const outBlob = await new Promise((resolve, reject) => {
-    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('canvas.toBlobに失敗しました'))), 'image/png');
-  });
+  const outBlob = await canvasToBlob(canvas);
   return outBlob.arrayBuffer();
+}
+
+const WORKER_URL = 'gsi-dem-worker.js'; // 同じvendor/maplibre/フォルダに同梱（相対import解決のため）
+const WORKER_COUNT = Math.min(4, (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2);
+
+let workerPool = null; // null=未初期化 or 無効化（フォールバック確定）
+let nextWorkerIndex = 0;
+let nextRequestId = 1;
+const pendingRequests = new Map();
+
+function initWorkerPool() {
+  if (workerPool !== null) return workerPool;
+  if (typeof Worker === 'undefined') {
+    workerPool = false;
+    return workerPool;
+  }
+  try {
+    const pool = [];
+    for (let i = 0; i < WORKER_COUNT; i++) {
+      const worker = new Worker(WORKER_URL, { type: 'module' });
+      worker.onmessage = (e) => {
+        const { id, buffer, error } = e.data;
+        const entry = pendingRequests.get(id);
+        if (!entry) return;
+        pendingRequests.delete(id);
+        if (error) entry.reject(new Error(error));
+        else entry.resolve(buffer);
+      };
+      worker.onerror = () => {
+        // このプール全体を無効化し、以降はメインスレッド変換にフォールバックする
+        // （個別タイル単位のエラーはworker.onmessage側のerrorフィールドで扱う。
+        // onerrorはworker自体が壊れた場合＝モジュール読み込み失敗等を想定）
+        workerPool = false;
+      };
+      pool.push(worker);
+    }
+    workerPool = pool;
+  } catch {
+    workerPool = false;
+  }
+  return workerPool;
+}
+
+function convertViaWorker(blob) {
+  const pool = initWorkerPool();
+  if (!pool) return null; // フォールバックを使う合図
+  const worker = pool[nextWorkerIndex];
+  nextWorkerIndex = (nextWorkerIndex + 1) % pool.length;
+  const id = nextRequestId++;
+  return new Promise((resolve, reject) => {
+    pendingRequests.set(id, { resolve, reject });
+    worker.postMessage({ id, blob });
+  });
+}
+
+/**
+ * Workerプールが使えればそちらで変換し、無ければ・失敗すればメインスレッドで
+ * 変換する（呼び出し元はどちらの経路かを意識しなくてよい）。
+ */
+async function convertGsiDemTileAuto(blob) {
+  const viaWorker = convertViaWorker(blob);
+  if (viaWorker) {
+    try {
+      return await viaWorker;
+    } catch {
+      // ワーカー経由の変換に失敗した場合はメインスレッドへフォールバックする
+    }
+  }
+  return convertGsiDemTileToTerrarium(blob);
 }
 
 /**
@@ -101,7 +187,7 @@ export function registerGsiDemProtocol(maplibregl, protocolName = 'gsidem') {
       throw new Error(`地理院標高タイルの取得に失敗しました（HTTP ${response.status}）: ${realUrl}`);
     }
     const blob = await response.blob();
-    const data = await convertGsiDemTileToTerrarium(blob);
+    const data = await convertGsiDemTileAuto(blob);
     return { data };
   });
 }
