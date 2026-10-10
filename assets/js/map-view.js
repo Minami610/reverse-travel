@@ -14,6 +14,10 @@
 const GSI_TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png';
 const GSI_ATTRIBUTION =
   '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院</a>';
+// 予算の帯の幅（既存の検索・一覧と同じ定義）。main.jsにも同名の定数があるが、
+// バンドル後は同じスクリプトスコープに連結されるため、名前が衝突しないよう
+// このファイルだけMAP_BAND_WIDTHという別名にしている。
+const MAP_BAND_WIDTH = 200;
 
 export class MapView {
   constructor(containerId) {
@@ -21,6 +25,8 @@ export class MapView {
     this.map = null;
     this.markersLayer = null;
     this.markersBySpotId = new Map();
+    this.fareBySpotId = new Map(); // 予算スライダーの塗り分け用（source_round_trip_fare）
+    this.spotsLatLngById = new Map(); // fitToBudget用
     this.selectedSpotId = null;
     this.lastBounds = [];
 
@@ -55,16 +61,19 @@ export class MapView {
 
   /**
    * @param {{display_name: string, stop_lat: number, stop_lon: number}} departureStation
-   * @param {Array} spots - latitude/longitude を持つスポット配列
+   * @param {Array} spots - latitude/longitude を持つスポット配列（¥2000で一度取得したallSpots全体。
+   *   予算の絞り込み・塗り分けはapplyBudget側で行うため、ここでは帯を絞らずそのまま渡す）
+   * @param {number} [budget] - 初期表示の予算。省略時は2000
    */
-  render(departureStation, spots) {
+  render(departureStation, spots, budget = 2000) {
     this.ensureMap();
     this.markersLayer.clearLayers();
     this.markersBySpotId.clear();
+    this.fareBySpotId.clear();
+    this.spotsLatLngById.clear();
     this.selectedSpotId = null;
 
-    const bounds = [];
-
+    this.departureLatLng = null;
     if (departureStation && isFiniteNumber(departureStation.stop_lat) && isFiniteNumber(departureStation.stop_lon)) {
       L.marker([departureStation.stop_lat, departureStation.stop_lon], {
         icon: createPinIcon('departure'),
@@ -78,7 +87,7 @@ export class MapView {
           className: 'map-departure-tooltip',
         })
         .bindPopup(`${departureStation.display_name}（出発駅）`);
-      bounds.push([departureStation.stop_lat, departureStation.stop_lon]);
+      this.departureLatLng = [departureStation.stop_lat, departureStation.stop_lon];
     }
 
     spots.forEach((spot) => {
@@ -93,13 +102,12 @@ export class MapView {
       marker.on('click', () => this.setSelected(spot.id));
 
       this.markersBySpotId.set(spot.id, marker);
-      bounds.push([spot.latitude, spot.longitude]);
+      this.fareBySpotId.set(spot.id, spot.source_round_trip_fare);
+      this.spotsLatLngById.set(spot.id, [spot.latitude, spot.longitude]);
     });
 
-    this.lastBounds = bounds;
-    if (bounds.length > 0) {
-      this.map.fitBounds(bounds, { padding: [36, 36], maxZoom: 16 });
-    }
+    this.applyBudget(budget);
+    this.fitToBudget(budget, { animate: false });
 
     // PC/スマホの切り替えやタブが非表示（display:none）のタイミングで
     // 呼ばれるとコンテナ寸法が0のままfitBoundsが不正確になるため、
@@ -108,6 +116,76 @@ export class MapView {
       if (this.map) this.map.invalidateSize();
       this.refitBounds();
     });
+  }
+
+  /**
+   * 予算スライダーの1コマ分。データの再取得・マーカーの作り直しは行わず、
+   * 既存マーカーのCSSクラス（帯内＝明るいオレンジ・それより安い＝薄く小さく・
+   * 予算超＝非表示）を塗り替えるだけ（Minami指示）。
+   * 帯（budget-200〜budget）の件数を返す。
+   * @param {number} budget
+   * @returns {number} 帯内の件数
+   */
+  applyBudget(budget) {
+    this.lastBudget = budget;
+    let bandCount = 0;
+    this.fareBySpotId.forEach((fare) => {
+      if (fare <= budget && fare > budget - MAP_BAND_WIDTH) bandCount++;
+    });
+
+    // 【2026-10-10】スマホで「地図」タブを一度も開いていない間（#spots-mapの
+    // コンテナが0×0）にマーカーのスタイルを書き換えると、Leafletが内部の
+    // ResizeObserverでコンテナの変化を検知し、まだ正しく初期化されていない
+    // 投影情報（fitBoundsを0サイズで呼んだ直後の状態）を使って再投影しようとして
+    // 「Invalid LatLng object: (NaN, NaN)」を投げる不具合を実機で確認した。
+    // 件数（bandCount）の計算・返却はコンテナサイズに関係なく常に行うが、
+    // マーカーの見た目の塗り替えはコンテナが実寸を持つまで保留する
+    // （タブが開かれてinvalidateMapSize()が呼ばれた時点で、呼び出し元が
+    // 改めてapplyBudget(this.lastBudget)を呼び直せば反映される）。
+    if (!this.map || this.map.getSize().x === 0 || this.map.getSize().y === 0) {
+      return bandCount;
+    }
+
+    this.markersBySpotId.forEach((marker, spotId) => {
+      const fare = this.fareBySpotId.get(spotId);
+      const el = marker.getElement();
+      const pin = el && el.querySelector('.map-pin');
+      if (!pin) return;
+      const overBudget = fare > budget;
+      const inBand = !overBudget && fare > budget - MAP_BAND_WIDTH;
+      el.style.display = overBudget ? 'none' : '';
+      pin.classList.toggle('map-pin-spot-in-band', inBand);
+      pin.classList.toggle('map-pin-spot-cheaper', !overBudget && !inBand);
+    });
+    return bandCount;
+  }
+
+  /**
+   * 予算以下（帯＋それより安い点）が全部入るよう、地図をなめらかに引く/寄せる。
+   * スライダーを指から離したときに呼ぶ想定（Minami指示：動かしている間は
+   * カメラを動かさない）。新規検索時（animate:false）は瞬時に合わせる。
+   * @param {number} budget
+   * @param {{animate?: boolean}} [opts]
+   */
+  fitToBudget(budget, { animate = true } = {}) {
+    if (!this.map) return;
+    const bounds = [];
+    if (this.departureLatLng) bounds.push(this.departureLatLng);
+    this.fareBySpotId.forEach((fare, spotId) => {
+      if (fare <= budget) bounds.push(this.spotsLatLngById.get(spotId));
+    });
+    this.lastBounds = bounds;
+    if (bounds.length === 0) return;
+    // コンテナが0×0（地図タブを一度も開いていないスマホ等）の間は呼ばない
+    // （applyBudget()と同じ理由。lastBoundsは保存済みのため、タブが開かれて
+    // invalidateMapSize()のrefitBounds()が呼ばれた時点で正しく反映される）。
+    if (this.map.getSize().x === 0 || this.map.getSize().y === 0) return;
+    const options = { padding: [36, 36], maxZoom: 16 };
+    if (animate) {
+      this.map.flyToBounds(bounds, { ...options, duration: 0.6 });
+    } else {
+      this.map.fitBounds(bounds, options);
+    }
   }
 
   /** 直近のbounds（出発駅＋スポット）に再フィットする。地図が非表示の間に
