@@ -1033,7 +1033,8 @@ header p {
 }
 
 .detail-actions .favorite-btn,
-.detail-actions .share-btn {
+.detail-actions .share-btn,
+.detail-actions .map-view-btn {
   width: auto;
   height: auto;
   min-height: 44px;
@@ -1046,6 +1047,19 @@ header p {
   background: var(--color-main-light);
   border: 1px solid transparent;
   box-shadow: none;
+}
+
+/* 【2026-10-11、5本目】「地図で見る」はスマホ幅専用（Minami指示）。PCは
+   地図が常に左に出ているため不要。レイアウト切替の基準（layout-controller.js
+   のDESKTOP_QUERY）と必ず一致させること。 */
+.detail-map-btn {
+  cursor: pointer;
+}
+
+@media (min-width: 760px) {
+  .detail-map-btn {
+    display: none;
+  }
 }
 
 /* 未保存＝目立つオレンジ塗り（保存を促すCTA）。2026-10-09、Minamiさんの指示で
@@ -1138,21 +1152,33 @@ header p {
   color: var(--color-text-sub);
 }
 
-/* リンク */
-#detail-content a {
+/* 【2026-10-11、5本目】Wikipedia・Wikidataのリンクをやめ、目立ち方を変えた
+   （Minami指示：オレンジの大きなボタン2つをやめる）。
+   Wikipediaは「控えめなボタン（枠線だけ）」、Wikidataは詳細の一番下に
+   「データの出典（Wikidata）」という小さな文字のリンクとして置く。 */
+.detail-wikipedia-btn {
   display: inline-block;
-  margin-right: 1rem;
   margin-top: 1rem;
   padding: 0.5rem 1rem;
-  background-color: var(--color-accent);
-  color: white;
+  background-color: transparent;
+  color: var(--color-accent-deep);
+  border: 1px solid var(--color-accent);
   text-decoration: none;
   border-radius: 4px;
+  font-weight: 600;
   transition: background-color 0.2s;
 }
 
-#detail-content a:hover {
-  background-color: var(--color-accent-deep);
+.detail-wikipedia-btn:hover {
+  background-color: var(--color-main-light);
+}
+
+.detail-wikidata-link {
+  display: block;
+  margin-top: 1.5rem;
+  font-size: 0.8rem;
+  color: var(--color-text-sub);
+  text-decoration: underline;
 }
 
 /* 「この先へ」（3本目、feature/kono-saki）。暗い色の枠に3件、1件を横長の1行で
