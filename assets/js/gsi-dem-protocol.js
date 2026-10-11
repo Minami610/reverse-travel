@@ -32,6 +32,31 @@
  * 無ければdocument.createElementのcanvasにフォールバックする（メインスレッド
  * 専用の経路）。ワーカーが使えない・失敗した環境では、このメインスレッド版の
  * 変換に自動フォールバックする（registerGsiDemProtocol参照）。
+ *
+ * 【2026-10-11修正、高松築港で3D化が毎回失敗する不具合】2つの不具合が重なっていた。
+ * 1. `new Worker('gsi-dem-worker.js', {type:'module'})` が「呼び出し元モジュール
+ *    （vendor/maplibre/）」ではなく「ドキュメントのURL」を基準にパスを解決して
+ *    いたため、実在しない`<ドキュメントのルート>/gsi-dem-worker.js`へ404リクエスト
+ *    が飛び、4つのワーカーが1つも起動できていなかった（import()の相対パス解決とは
+ *    基準が異なる。Playwrightで実機確認：workerのレスポンスが404）。
+ * 2. ワーカーの起動失敗（onerror）はプール全体を無効化して「以降の」呼び出しを
+ *    メインスレッドへフォールバックさせるだけで、エラー検出前に既にそのワーカーへ
+ *    postMessage済みで応答を待っているpendingRequestsは誰にも解決されないまま
+ *    残っていた。応答が絶対に来ないワーカーへの問い合わせが残り続けることで、
+ *    raster-demソースの読み込み完了（'load'イベント）が止まり、3D化が
+ *    TerrainMapViewの30秒タイムアウトで毎回失敗していた。
+ * 高松築港（海沿いで必要なタイル数が多く、エラー検出前に送られるリクエストの
+ * 割合が高かった）で実機確認・再現した。富山駅前・八尾駅では同じ不具合を抱えた
+ * ままでも偶然ワーカー起動失敗の検出タイミングと重ならず成功することが多かった
+ * （タイル数が少ない・運次第で再現しないことがある、根本原因は同じ）。
+ * 対策：(1) `new URL('gsi-dem-worker.js', import.meta.url)`で呼び出し元モジュール
+ * 基準に解決、(2) onerror時にそのworkerIndex宛のpendingRequestsを明示的に
+ * reject（呼び出し元のconvertGsiDemTileAutoのcatchでメインスレッド変換へ
+ * フォールバックする既存の仕組みに正しく乗る）。
+ * あわせて、dem_pngタイル自体が404（整備範囲外・海上）のときに例外を投げて
+ * いた箇所も、標高0mの平らなタイルを返すよう変更した（Minami指示：
+ * 「整備範囲外なら地図全体を止めない」。1件のタイル欠落が周辺タイルの多い
+ * 地域で読み込み完了を遅らせる一因にならないようにする）。
  */
 
 const GSI_NODATA_X = 2 ** 23; // 8388608
@@ -103,13 +128,20 @@ export async function convertGsiDemTileToTerrarium(pngBlob) {
   return outBlob.arrayBuffer();
 }
 
-const WORKER_URL = 'gsi-dem-worker.js'; // 同じvendor/maplibre/フォルダに同梱（相対import解決のため）
+// 【2026-10-11修正】プレーンな相対文字列をnew Worker()に渡すと、呼び出し元
+// モジュール（vendor/maplibre/配下）ではなく「ドキュメントのURL」を基準に
+// 解決される（import()の相対パス解決とは基準が異なる）。そのため以前は
+// 実際には存在しないhttp://.../gsi-dem-worker.js（ドキュメントのルート直下）に
+// 404リクエストが飛び、ワーカーが1つも起動できていなかった。import.meta.urlを
+// 基準にnew URL()で解決することで、呼び出し元モジュールと同じ
+// vendor/maplibre/gsi-dem-worker.jsを正しく指すようにした。
+const WORKER_URL = new URL('gsi-dem-worker.js', import.meta.url);
 const WORKER_COUNT = Math.min(4, (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2);
 
 let workerPool = null; // null=未初期化 or 無効化（フォールバック確定）
 let nextWorkerIndex = 0;
 let nextRequestId = 1;
-const pendingRequests = new Map();
+const pendingRequests = new Map(); // id -> { resolve, reject, workerIndex }
 
 function initWorkerPool() {
   if (workerPool !== null) return workerPool;
@@ -120,6 +152,7 @@ function initWorkerPool() {
   try {
     const pool = [];
     for (let i = 0; i < WORKER_COUNT; i++) {
+      const workerIndex = i;
       const worker = new Worker(WORKER_URL, { type: 'module' });
       worker.onmessage = (e) => {
         const { id, buffer, error } = e.data;
@@ -132,7 +165,23 @@ function initWorkerPool() {
       worker.onerror = () => {
         // このプール全体を無効化し、以降はメインスレッド変換にフォールバックする
         // （個別タイル単位のエラーはworker.onmessage側のerrorフィールドで扱う。
-        // onerrorはworker自体が壊れた場合＝モジュール読み込み失敗等を想定）
+        // onerrorはworker自体が壊れた場合＝モジュール読み込み失敗等を想定）。
+        // 【2026-10-11修正】workerPool=falseは「これから」の呼び出しをフォール
+        // バックさせるだけで、既にこのworkerへpostMessage済みで応答を待っている
+        // pendingRequestsは誰も解決しないまま残っていた（応答が絶対に来ない
+        // workerに投げたメッセージの返事を待ち続ける）。これがraster-demソースの
+        // 読み込み完了（'load'イベント）を止め、3D化が30秒タイムアウトで失敗する
+        // 実害につながっていた（高松築港で実機確認：ワーカーURL解決ミスにより
+        // 4ワーカー全滅、エラー検出前に送られた分だけ永久に無応答のまま残っていた）。
+        // このworkerへ投げた未解決分を明示的に拒否し、呼び出し元
+        // （convertGsiDemTileAuto）のcatchでメインスレッド変換へフォールバック
+        // させる。
+        for (const [id, entry] of pendingRequests) {
+          if (entry.workerIndex === workerIndex) {
+            pendingRequests.delete(id);
+            entry.reject(new Error('DEM変換ワーカーの初期化に失敗しました'));
+          }
+        }
         workerPool = false;
       };
       pool.push(worker);
@@ -147,11 +196,12 @@ function initWorkerPool() {
 function convertViaWorker(blob) {
   const pool = initWorkerPool();
   if (!pool) return null; // フォールバックを使う合図
-  const worker = pool[nextWorkerIndex];
+  const workerIndex = nextWorkerIndex;
+  const worker = pool[workerIndex];
   nextWorkerIndex = (nextWorkerIndex + 1) % pool.length;
   const id = nextRequestId++;
   return new Promise((resolve, reject) => {
-    pendingRequests.set(id, { resolve, reject });
+    pendingRequests.set(id, { resolve, reject, workerIndex });
     worker.postMessage({ id, blob });
   });
 }
@@ -172,6 +222,29 @@ async function convertGsiDemTileAuto(blob) {
   return convertGsiDemTileToTerrarium(blob);
 }
 
+const FLAT_TILE_SIZE = 256;
+let flatZeroTerrariumTilePromise = null;
+
+/**
+ * 標高0m一色のterrarium符号化タイル（256×256）を1回だけ生成し、以降は
+ * キャッシュを使い回す（整備範囲外・海上などでdem_pngが404のタイル用）。
+ * @returns {Promise<ArrayBuffer>}
+ */
+function getFlatZeroTerrariumTile() {
+  if (!flatZeroTerrariumTilePromise) {
+    flatZeroTerrariumTilePromise = (async () => {
+      const canvas = createCanvas(FLAT_TILE_SIZE, FLAT_TILE_SIZE);
+      const ctx = canvas.getContext('2d');
+      const [r, g, b] = encodeTerrariumElevation(0);
+      ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+      ctx.fillRect(0, 0, FLAT_TILE_SIZE, FLAT_TILE_SIZE);
+      const blob = await canvasToBlob(canvas);
+      return blob.arrayBuffer();
+    })();
+  }
+  return flatZeroTerrariumTilePromise;
+}
+
 /**
  * MapLibreにカスタムプロトコルを登録する。タイルURLは
  * `${protocolName}://<実際のdem_png URL>` の形で指定する
@@ -184,7 +257,13 @@ export function registerGsiDemProtocol(maplibregl, protocolName = 'gsidem') {
     const realUrl = params.url.slice(protocolName.length + 3); // "gsidem://" の9文字分を除く
     const response = await fetch(realUrl, { signal: abortController.signal });
     if (!response.ok) {
-      throw new Error(`地理院標高タイルの取得に失敗しました（HTTP ${response.status}）: ${realUrl}`);
+      // 【2026-10-11修正】地理院標高タイルの整備範囲外・海上など、タイル自体が
+      // 存在しない（404）地点はMinami指示により「データなし」(0m)として扱い、
+      // タイルを失敗させない。以前はここで例外を投げており、MapLibreの
+      // raster-demソースがそのタイルを読み込めないまま扱うため、周辺の
+      // タイルが多い地域（海岸沿い等）で地図全体の読み込み完了（'load'）が
+      // 遅れる・止まる一因になっていた。
+      return { data: await getFlatZeroTerrariumTile() };
     }
     const blob = await response.blob();
     const data = await convertGsiDemTileAuto(blob);
