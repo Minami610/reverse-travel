@@ -37,6 +37,21 @@ const DEFAULT_ZOOM = 9;
 const DEFAULT_EXAGGERATION = 2; // Minami指示：2〜2.5倍から開始
 const DEM_MAXZOOM = 12; // Minami指示：DEM10Bの範囲に抑え、それ以上は自動オーバーズーム
 
+// 【2026-10-11、5本目】俯瞰（fitToBudget）の引きすぎ対策：余白は地図の大きさの
+// 比率（短辺の8%）にし、ズームの下限（9.5）を設ける。maxZoomではなく下限で
+// 抑えるのは、Minami指示「上限で入りきらない点は画面の外に出てよい」ため
+// （fitBoundsのmaxZoomは「寄りすぎ」を防ぐ上限であり、「引きすぎ」を防ぐ
+// 下限が無いのが今回の不具合だった）。
+const OVERVIEW_PADDING_RATIO = 0.08;
+const OVERVIEW_MIN_ZOOM = 9.5;
+// 場所に寄ったときの見え方（Minami指示：ズーム14前後、pitch60前後）。
+const SPOT_FOCUS_ZOOM = 14;
+const SPOT_FOCUS_PITCH = 60;
+const SPOT_FOCUS_DURATION_MS = 2600; // Minami指示：2〜3秒
+// 寄ったあと操作が無ければゆっくり回る演出（Minami指示：1周40秒程度）。
+const AUTO_ROTATE_MS_PER_REV = 40000;
+const AUTO_ROTATE_START_DELAY_MS = 500; // flyTo完了後、少し間を置いてから回り始める
+
 const BAND_WIDTH = 200; // 予算の帯の幅（既存の2D検索・一覧と同じ定義）
 const SPOTS_SOURCE_ID = 'spots';
 const SPOTS_LAYER_ID = 'spots-circle';
@@ -77,6 +92,28 @@ function inBandExpr(budget) {
   return ['>', ['get', 'fare'], budget - BAND_WIDTH];
 }
 
+/**
+ * 2点間の方位角（北=0°、時計回り）を返す。地点1→地点2の向き。
+ * MapLibreのbearingは「その方位が画面奥（遠景）に来る」向き（4本目④、立山方向
+ * カメラの実機確認で確定済み）のため、出発駅→スポットの方位角をそのまま
+ * bearingに使えば「出発駅が手前、スポットが奥」になる（Minami指示）。
+ */
+function computeBearing(lat1, lon1, lat2, lon2) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const toDeg = (r) => (r * 180) / Math.PI;
+  const phi1 = toRad(lat1);
+  const phi2 = toRad(lat2);
+  const deltaLambda = toRad(lon2 - lon1);
+  const y = Math.sin(deltaLambda) * Math.cos(phi2);
+  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLambda);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+function prefersReducedMotion() {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 export class TerrainMapView {
   constructor(containerId) {
     this.containerId = containerId;
@@ -87,6 +124,8 @@ export class TerrainMapView {
     this._lastDepartureStation = null;
     this._lastSpots = null;
     this._lastBudget = null;
+    this._autoRotateFrame = null; // requestAnimationFrameのID（ゆっくり回る演出）
+    this._autoRotateStartTimer = null;
   }
 
   /**
@@ -191,6 +230,33 @@ export class TerrainMapView {
       pitch: DEFAULT_PITCH,
       bearing: 0,
       maxPitch: 75,
+      // 【2026-10-11、5本目】視点を回せるようにする（Minami指示：PC=右ドラッグ
+      // /Ctrl+ドラッグ、スマホ=2本指でひねって回転・2本指の上下で傾き、
+      // 1本指は今までどおり移動）。MapLibreの既定ハンドラがこの組み合わせを
+      // そのまま提供する（dragRotateが右ドラッグ/Ctrl+ドラッグ、
+      // touchZoomRotateが2本指ひねり、touchPitchが2本指上下）ため、明示的に
+      // 有効化するだけで追加の実装は不要。
+      dragRotate: true,
+      touchZoomRotate: true,
+      touchPitch: true,
+      pitchWithRotate: true,
+    });
+
+    // 方角コンパス（Minami指示：地図右上、押すと北向きに戻る＝
+    // NavigationControlの既定動作）。ズームボタンは出さない（+/-は別UIで
+    // 既にある）。
+    this.map.addControl(
+      new maplibregl.NavigationControl({ showCompass: true, showZoom: false, visualizePitch: false }),
+      'top-right'
+    );
+
+    // 【2026-10-11】ユーザーが手で地図を動かしたら、ゆっくり回る演出を止める
+    // （Minami指示）。*startイベントはユーザー操作（ドラッグ・ピンチ等）の
+    // ハンドラ起点でのみ発火し、プログラム側のjumpTo/easeTo/flyToや
+    // このクラス自身のsetBearing()連打（_runAutoRotateStep）では発火しない
+    // （MapLibreの既定動作。実装を確認して確定）。
+    ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart', 'wheel'].forEach((evt) => {
+      this.map.on(evt, () => this._stopAutoRotate());
     });
 
     this.map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
@@ -233,6 +299,9 @@ export class TerrainMapView {
       const feature = e.features && e.features[0];
       if (!feature) return;
       this.popup.setLngLat(e.lngLat).setHTML(buildSpotPopupHtml(feature.properties)).addTo(this.map);
+      // 【2026-10-11、5本目】地図の点をタップしたら、その場所へ寄る
+      // （Minami指示）。ポップアップ自体は従来どおり出す（「詳細を見る」導線は残す）。
+      this.flyToSpot(feature.properties, this._lastDepartureStation);
     });
     this.map.on('mouseenter', SPOTS_LAYER_ID, () => { this.map.getCanvas().style.cursor = 'pointer'; });
     this.map.on('mouseleave', SPOTS_LAYER_ID, () => { this.map.getCanvas().style.cursor = ''; });
@@ -355,9 +424,16 @@ export class TerrainMapView {
    * スライダーを指から離したときに呼ぶ。帯に入る点・安い点（=budget以下すべて）が
    * 画面に収まるよう、滑らかにカメラを引く/寄せる（Minami指示）。
    * ドラッグ中は呼ばない（カクつき防止）。
-   * 【2026-10-10修正】¥2000選択時に点が画面端からはみ出る不具合をMinamiが
-   * スクリーンショットで発見。paddingを48→96に広げた（pitchを付けた3D視点では
-   * 奥行き方向の圧縮で見かけ上の余白が足りなくなりやすいため、2Dより大きめに取る）。
+   *
+   * 【2026-10-11修正、5本目】固定96pxの余白・maxZoom13のみ（下限無し）だと、
+   * 予算を上げて対象範囲が北陸全体規模に広がったとき、画面に対して相対的に
+   * 余白が小さすぎる・引きの下限が無いため「斜めになっただけの遠景」まで
+   * 引いてしまい、3Dの良さが見えなくなっていた（Minami実機確認）。
+   * 余白を地図の大きさの比率（短辺の8%）にし、引きの下限（ズーム9.5）を
+   * 設けた。下限はMapLibreのfitBounds自体には無い（maxZoomは寄りすぎを防ぐ
+   * 上限専用）ため、cameraForBounds()で計算だけ行い、結果のズームが下限を
+   * 下回ったら9.5に引き上げてeaseToで適用する。下限で全点が入りきらない
+   * 場合は出発駅を中心にする（Minami指示：入りきらない点は画面の外に出てよい）。
    */
   fitToBudget(budget) {
     if (!this.map) return;
@@ -375,7 +451,83 @@ export class TerrainMapView {
       [Math.min(...lngs), Math.min(...lats)],
       [Math.max(...lngs), Math.max(...lats)],
     ];
-    this.map.fitBounds(bounds, { padding: 96, maxZoom: 13, duration: 600, pitch: DEFAULT_PITCH });
+
+    const container = this.map.getContainer();
+    const shortSide = Math.max(1, Math.min(container.clientWidth, container.clientHeight));
+    const padding = Math.round(shortSide * OVERVIEW_PADDING_RATIO);
+
+    const camera = this.map.cameraForBounds(bounds, { padding, pitch: DEFAULT_PITCH });
+    if (!camera) return;
+    const zoomBelowFloor = camera.zoom < OVERVIEW_MIN_ZOOM;
+    const zoom = zoomBelowFloor ? OVERVIEW_MIN_ZOOM : camera.zoom;
+    const center = zoomBelowFloor && this._lastDepartureStation
+      ? [this._lastDepartureStation.stop_lon, this._lastDepartureStation.stop_lat]
+      : camera.center;
+
+    this._stopAutoRotate();
+    this.map.easeTo({ center, zoom, pitch: DEFAULT_PITCH, bearing: this.map.getBearing(), duration: 600 });
+  }
+
+  /**
+   * 指定したスポットへ寄る（Minami指示、5本目：地図の点をタップした/一覧の
+   * カードを選んだ/詳細画面を開いたとき）。向き（bearing）は出発駅→スポットの
+   * 方位角そのまま（出発駅が手前、スポットが奥になる。4本目④の立山方向
+   * カメラで確定済みのbearingの向き）。
+   * @param {{latitude:number, longitude:number}} spot
+   * @param {{stop_lat:number, stop_lon:number}} [departureStation]
+   */
+  flyToSpot(spot, departureStation) {
+    if (!this.map || !isFiniteNumber(spot?.latitude) || !isFiniteNumber(spot?.longitude)) return;
+    let bearing = this.map.getBearing();
+    if (departureStation && isFiniteNumber(departureStation.stop_lat) && isFiniteNumber(departureStation.stop_lon)) {
+      bearing = computeBearing(departureStation.stop_lat, departureStation.stop_lon, spot.latitude, spot.longitude);
+    }
+    this._stopAutoRotate();
+    this.map.flyTo({
+      center: [spot.longitude, spot.latitude],
+      zoom: SPOT_FOCUS_ZOOM,
+      pitch: SPOT_FOCUS_PITCH,
+      bearing,
+      duration: SPOT_FOCUS_DURATION_MS,
+      essential: true,
+    });
+    this._scheduleAutoRotateAfterFlight();
+  }
+
+  /** flyTo完了（'moveend'）後、少し間を置いてゆっくり回る演出を始める。 */
+  _scheduleAutoRotateAfterFlight() {
+    if (!this.map || prefersReducedMotion()) return;
+    this.map.once('moveend', () => {
+      if (this._autoRotateStartTimer) clearTimeout(this._autoRotateStartTimer);
+      this._autoRotateStartTimer = setTimeout(() => this._startAutoRotate(), AUTO_ROTATE_START_DELAY_MS);
+    });
+  }
+
+  _startAutoRotate() {
+    if (!this.map || this._autoRotateFrame || prefersReducedMotion()) return;
+    let previousTime = null;
+    const step = (time) => {
+      if (!this.map) { this._autoRotateFrame = null; return; }
+      if (previousTime != null) {
+        const deltaMs = time - previousTime;
+        this.map.setBearing(this.map.getBearing() + (360 / AUTO_ROTATE_MS_PER_REV) * deltaMs);
+      }
+      previousTime = time;
+      this._autoRotateFrame = requestAnimationFrame(step);
+    };
+    this._autoRotateFrame = requestAnimationFrame(step);
+  }
+
+  /** ユーザー操作（ドラッグ・ズーム・回転・傾き・ホイール）で呼ばれ、演出を止める。 */
+  _stopAutoRotate() {
+    if (this._autoRotateStartTimer) {
+      clearTimeout(this._autoRotateStartTimer);
+      this._autoRotateStartTimer = null;
+    }
+    if (this._autoRotateFrame) {
+      cancelAnimationFrame(this._autoRotateFrame);
+      this._autoRotateFrame = null;
+    }
   }
 
   /**
@@ -461,6 +613,7 @@ export class TerrainMapView {
 
   /** 2D切替時・再試行時にWebGLコンテキストを確実に解放する（上限超過による失敗を防ぐ） */
   destroy() {
+    this._stopAutoRotate();
     if (this.map) {
       this.map.remove();
       this.map = null;
