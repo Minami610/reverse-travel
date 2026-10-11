@@ -295,6 +295,12 @@ class ReverseTravel {
       // 押された予算で予算欄を更新し、そのまま再検索する。
       const retryBtn = e.target.closest('.budget-retry-btn');
       if (retryBtn) {
+        // 検索失敗時の「もう一度試す」（data-budget無し）は、予算を変えず
+        // そのまま同じ条件で再検索する。
+        if (retryBtn.classList.contains('search-retry-btn')) {
+          this.performSearch();
+          return;
+        }
         const budget = parseInt(retryBtn.getAttribute('data-budget'), 10);
         this.elements.budgetInput.value = budget;
         this.updateBudgetUI();
@@ -826,6 +832,24 @@ class ReverseTravel {
   }
 
   /**
+   * 検索に失敗したとき（データ読み込み・検索処理いずれの失敗も）の表示。
+   * 【2026-10-11修正】以前はブラウザのalert()でポップアップを出していたが、
+   * Minami指示によりやめ、結果欄に穏やかな文言＋再試行ボタンを出す形に変えた
+   * （開発都合の文言は出さない。「データの読み込みに失敗しました」等の
+   * 内部的な原因は書かず、利用者が次にできる行動だけを示す）。
+   */
+  showSearchErrorMessage() {
+    this.elements.appLayout.setAttribute('data-view', 'results');
+    this.elements.appLayout.classList.add('has-results');
+    this.elements.resultsList.innerHTML = `
+      <p class="no-results">うまく読み込めませんでした。少し待ってからもう一度お試しください。</p>
+      <div class="no-results-actions">
+        <button type="button" class="budget-retry-btn search-retry-btn">もう一度試す</button>
+      </div>
+    `;
+  }
+
+  /**
    * 【2026-10-03修正】以前は`!this.loader.stationIndex`（駅一覧がまだ読み込み中、
    * ＝失敗ではない）を「読み込みに失敗しました」と同じ扱いにしていた。
    * 「読み込み中」と「失敗」を区別し、読み込み中なら完了を待って自動的に
@@ -834,14 +858,14 @@ class ReverseTravel {
    */
   async performSearch() {
     if (this.dataLoadFailed) {
-      alert('データの読み込みに失敗しました。ページを再読み込みしてください。');
+      this.showSearchErrorMessage();
       return;
     }
     if (!this.loader.stationIndex) {
       this.showLoadingMessage();
       await this.stationIndexPromise;
       if (this.dataLoadFailed) {
-        alert('データの読み込みに失敗しました。ページを再読み込みしてください。');
+        this.showSearchErrorMessage();
         return;
       }
     }
@@ -895,7 +919,7 @@ class ReverseTravel {
       stationId = this.loader.resolveStationId(prefCode, parseInt(localIndex, 10));
     } catch (error) {
       console.error('県データの読み込み失敗:', error);
-      alert('データの読み込みに失敗しました。ページを再読み込みしてください。');
+      this.showSearchErrorMessage();
       return;
     }
 
@@ -910,7 +934,7 @@ class ReverseTravel {
       this.scheduleMaxBudgetPrefetch(stationId);
     } catch (error) {
       console.error('検索失敗:', error);
-      alert('検索中にエラーが発生しました');
+      this.showSearchErrorMessage();
     }
   }
 
