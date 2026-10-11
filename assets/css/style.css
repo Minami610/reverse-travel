@@ -732,7 +732,8 @@ header p {
   border-top-color: var(--color-accent-deep);
 }
 
-/* 地図ピンのポップアップ（スポット名・短い説明・詳細ボタン） */
+/* 地図ピンのポップアップ（スポット名・往復運賃・詳細ボタン。
+   2026-10-11、6本目B：説明文ははみ出すためMinami決定で廃止） */
 .map-popup {
   min-width: 160px;
 }
@@ -743,7 +744,7 @@ header p {
   color: var(--color-text);
 }
 
-.map-popup-description {
+.map-popup-fare {
   font-size: 0.85rem;
   color: var(--color-text-sub);
   margin-bottom: 0.5rem;
@@ -878,6 +879,22 @@ header p {
 .spot-card-selected {
   outline: 3px solid var(--color-selected) !important;
   outline-offset: -3px;
+}
+
+/* 【2026-10-11、6本目B】地図の点を押したとき、該当カードを2秒ほど光らせる
+   （Minami決定。.spot-card-selectedの枠線とは別に、押した瞬間だけ分かる
+   一時的な明るい光を足す。アニメーション終了後はJS側でクラスを外す）。 */
+.spot-card-glow {
+  animation: spot-card-glow-fade 2s ease-out;
+}
+
+@keyframes spot-card-glow-fade {
+  0% {
+    box-shadow: 0 0 0 4px rgba(255, 107, 43, 0.9), 0 0 16px 6px rgba(255, 107, 43, 0.6);
+  }
+  100% {
+    box-shadow: 0 0 0 4px rgba(255, 107, 43, 0);
+  }
 }
 
 .spot-image {
@@ -1079,19 +1096,91 @@ header p {
   border-color: var(--color-border);
 }
 
-#back-btn {
-  background-color: var(--color-text-sub);
-  color: white;
-  border: none;
-  padding: 0.75rem 1.5rem;
-  border-radius: 4px;
-  cursor: pointer;
-  margin-bottom: 1.5rem;
-  transition: background-color 0.2s;
+/* 【2026-10-11、6本目E】「見てきた場所」の足あと（旧「← 一覧に戻る」の
+   置き換え）。見出しは小さく控えめに（旅の行程ではなく、戻るための導線で
+   あることが伝わるよう、Minami指示で「見てきた場所」という文言にした）。 */
+#detail-breadcrumb {
+  margin-bottom: 1.25rem;
 }
 
-#back-btn:hover {
-  background-color: var(--color-text);
+.breadcrumb-label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--color-text-sub);
+  margin-bottom: 0.25rem;
+}
+
+.breadcrumb-trail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem;
+  font-size: 0.95rem;
+}
+
+.breadcrumb-sep {
+  color: var(--color-text-sub);
+  margin: 0 0.1rem;
+}
+
+/* 押せる部分は高さ44px程度（Minami指示：スマホで押しやすい大きさ、
+   このリポジトリの他のタップ領域と同じ基準）。 */
+.breadcrumb-item,
+.breadcrumb-ellipsis {
+  background: none;
+  border: none;
+  color: var(--color-main-deep);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 0.95rem;
+  padding: 0.6rem 0.3rem;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.breadcrumb-item:hover,
+.breadcrumb-ellipsis:hover {
+  color: var(--color-main);
+}
+
+.breadcrumb-list-link {
+  padding-left: 0;
+}
+
+.breadcrumb-current {
+  font-weight: 700;
+  color: var(--color-text);
+  padding: 0.6rem 0.3rem;
+}
+
+.breadcrumb-ellipsis {
+  text-decoration: none;
+  font-weight: 700;
+}
+
+/* スマホ幅では中間の場所を省略し「一覧 ＞ … ＞ 1つ前 ＞ 今の場所」にする
+   （Minami指示）。「…」を押すと.breadcrumb-expandedが付き、中間が開く。 */
+@media (max-width: 759px) {
+  .breadcrumb-middle {
+    display: none;
+  }
+  .breadcrumb-middle-collapsed {
+    display: inline;
+  }
+  .breadcrumb-trail.breadcrumb-expanded .breadcrumb-middle {
+    display: inline;
+  }
+  .breadcrumb-trail.breadcrumb-expanded .breadcrumb-middle-collapsed {
+    display: none;
+  }
+}
+
+/* PC幅では常に全件表示（省略しない） */
+@media (min-width: 760px) {
+  .breadcrumb-middle-collapsed {
+    display: none;
+  }
 }
 
 /* 経路情報 */

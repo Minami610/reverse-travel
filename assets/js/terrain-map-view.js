@@ -27,6 +27,8 @@
  */
 
 const GSI_STD_TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png';
+const GSI_PALE_TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png';
+const GSI_SEAMLESSPHOTO_TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg';
 const GSI_DEM_PROTOCOL_TILE_URL = 'gsidem://https://cyberjapandata.gsi.go.jp/xyz/dem_png/{z}/{x}/{y}.png';
 const GSI_STD_ATTRIBUTION =
   '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院</a>';
@@ -36,6 +38,54 @@ const DEFAULT_PITCH = 57; // Minami指示：55〜60の中間
 const DEFAULT_ZOOM = 9;
 const DEFAULT_EXAGGERATION = 2; // Minami指示：2〜2.5倍から開始
 const DEM_MAXZOOM = 12; // Minami指示：DEM10Bの範囲に抑え、それ以上は自動オーバーズーム
+
+// 【2026-10-11、6本目C】3Dの見た目の比較用（Minami指示：高低差が白っぽく
+// 分かりにくい）。既定（'standard'）は今までの見た目のまま一切変えない
+// （Minamiが選ぶまで既定を変えない）。a/b/d/bdはコード上で切り替えられる
+// 比較専用の設定で、アプリのUIには出さない。
+// b+d（zoomSwitch）は、ズーム13未満はd（淡色＋強陰影）、13以上はb
+// （写真＋弱陰影）に切り替える。
+const STYLE_PATTERNS = {
+  standard: {
+    background: 'std',
+    hillshadeExaggeration: 0.3,
+    hillshadeShadowColor: '#6b6b5f',
+    hillshadeHighlightColor: '#fffdf5',
+    terrainExaggeration: DEFAULT_EXAGGERATION,
+  },
+  a: {
+    background: 'std',
+    hillshadeExaggeration: 0.8,
+    hillshadeShadowColor: '#2a2a1a',
+    hillshadeHighlightColor: '#fff8e0',
+    terrainExaggeration: 3,
+  },
+  b: {
+    background: 'seamlessphoto',
+    hillshadeExaggeration: 0.15,
+    hillshadeShadowColor: '#6b6b5f',
+    hillshadeHighlightColor: '#fffdf5',
+    terrainExaggeration: DEFAULT_EXAGGERATION,
+  },
+  d: {
+    background: 'pale',
+    hillshadeExaggeration: 0.7,
+    hillshadeShadowColor: '#2a2a1a',
+    hillshadeHighlightColor: '#fff8e0',
+    terrainExaggeration: DEFAULT_EXAGGERATION,
+  },
+  bd: {
+    zoomSwitch: 13,
+    overview: { background: 'pale', hillshadeExaggeration: 0.7, hillshadeShadowColor: '#2a2a1a', hillshadeHighlightColor: '#fff8e0' },
+    zoomed: { background: 'seamlessphoto', hillshadeExaggeration: 0.15, hillshadeShadowColor: '#6b6b5f', hillshadeHighlightColor: '#fffdf5' },
+    terrainExaggeration: DEFAULT_EXAGGERATION,
+  },
+};
+const BACKGROUND_SOURCES = {
+  std: { url: GSI_STD_TILE_URL, maxzoom: 18 },
+  pale: { url: GSI_PALE_TILE_URL, maxzoom: 18 },
+  seamlessphoto: { url: GSI_SEAMLESSPHOTO_TILE_URL, maxzoom: 18 },
+};
 
 // 【2026-10-11、5本目】俯瞰（fitToBudget）の引きすぎ対策：余白は地図の大きさの
 // 比率（短辺の8%）にし、ズームの下限（9.5）を設ける。maxZoomではなく下限で
@@ -70,18 +120,18 @@ function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-/** map-view.js（inlined側）のbuildSpotPopupHtmlと同内容の複製（上部コメント参照）。 */
+/**
+ * map-view.js（inlined側）のbuildSpotPopupHtmlと同内容の複製（上部コメント参照）。
+ * 【2026-10-11、6本目B】説明文は出さない（Minami決定：長いとはみ出すため）。
+ * 名前・往復運賃・「詳細を見る」だけにする。
+ */
 function buildSpotPopupHtml(spot) {
-  const shortDescription = spot.description
-    ? spot.description.length > 60
-      ? `${spot.description.substring(0, 60)}...`
-      : spot.description
-    : '説明情報がありません';
-
+  const fare = spot.source_round_trip_fare ?? spot.fare;
+  const fareText = typeof fare === 'number' ? `往復¥${fare.toLocaleString('ja-JP')}` : '運賃不明';
   return `
     <div class="map-popup">
       <strong class="map-popup-title">${spot.name}</strong>
-      <p class="map-popup-description">${shortDescription}</p>
+      <p class="map-popup-fare">${fareText}</p>
       <button type="button" class="popup-detail-btn" data-spot-id="${spot.id}">詳細を見る</button>
     </div>
   `;
@@ -115,12 +165,19 @@ function prefersReducedMotion() {
 }
 
 export class TerrainMapView {
-  constructor(containerId) {
+  /**
+   * @param {string} containerId
+   * @param {{styleMode?: keyof typeof STYLE_PATTERNS}} [options] - 6本目C、
+   *   見た目比較用。省略時は'standard'（今までの見た目）。
+   */
+  constructor(containerId, { styleMode = 'standard' } = {}) {
     this.containerId = containerId;
+    this.styleMode = STYLE_PATTERNS[styleMode] ? styleMode : 'standard';
     this.map = null;
     this.departureMarker = null;
     this.popup = null;
     this.onDetailRequest = null;
+    this.onSelectionChange = null; // 【2026-10-11、6本目B】地図の点をタップしたとき、一覧のカードをスクロール＋光らせるため（2Dのmap-view.jsと同じ役割）
     this._lastDepartureStation = null;
     this._lastSpots = null;
     this._lastBudget = null;
@@ -151,6 +208,39 @@ export class TerrainMapView {
       protocolRegistered = true;
     }
 
+    const pattern = STYLE_PATTERNS[this.styleMode];
+    const isDynamicPattern = !!pattern.zoomSwitch;
+    // 背景ソース・レイヤーを見た目パターンに応じて組み立てる（6本目C）。
+    // 'bd'（zoomSwitch持ち）だけは俯瞰用・寄り用の2枚を両方addし、ズームで
+    // 表示を切り替える（下のthis.map.on('zoom', ...)参照）。それ以外は1枚だけ。
+    const backgroundSources = {};
+    const backgroundLayers = [];
+    const addBackground = (layerId, key, initiallyVisible = true) => {
+      const src = BACKGROUND_SOURCES[key];
+      backgroundSources[layerId] = {
+        type: 'raster',
+        tiles: [src.url],
+        tileSize: 256,
+        maxzoom: src.maxzoom,
+        attribution: GSI_STD_ATTRIBUTION, // 標準・淡色・写真いずれも地理院タイル
+      };
+      backgroundLayers.push({
+        id: layerId,
+        type: 'raster',
+        source: layerId,
+        layout: { visibility: initiallyVisible ? 'visible' : 'none' },
+      });
+    };
+    if (isDynamicPattern) {
+      // DEFAULT_ZOOM(9)はzoomSwitch(13)未満なので、開始時は俯瞰用だけ見せる
+      // （両方visibleのまま重なって読み込まれる一瞬を避ける）。
+      addBackground('gsi-bg-overview', pattern.overview.background, true);
+      addBackground('gsi-bg-zoomed', pattern.zoomed.background, false);
+    } else {
+      addBackground('gsi-bg', pattern.background);
+    }
+    const initialHillshade = isDynamicPattern ? pattern.overview : pattern;
+
     this.map = new maplibregl.Map({
       container: this.containerId,
       // 出典はMapLibre標準の右下attributionではなく、compact（iボタンで開く）に
@@ -161,13 +251,7 @@ export class TerrainMapView {
       style: {
         version: 8,
         sources: {
-          'gsi-std': {
-            type: 'raster',
-            tiles: [GSI_STD_TILE_URL],
-            tileSize: 256,
-            maxzoom: 18,
-            attribution: GSI_STD_ATTRIBUTION,
-          },
+          ...backgroundSources,
           [DEM_SOURCE_ID]: {
             type: 'raster-dem',
             tiles: [GSI_DEM_PROTOCOL_TILE_URL],
@@ -182,23 +266,20 @@ export class TerrainMapView {
           },
         },
         layers: [
-          { id: 'gsi-std-layer', type: 'raster', source: 'gsi-std' },
+          ...backgroundLayers,
           // 起伏を見えやすくする陰影（Minami指示）。同じ標高データから計算するため
           // 標高タイルの変換自体は1回で済む（追加のネットワーク取得は発生しない）。
-          // 控えめな濃さにして、下の標準地図の色を潰さないようにする。
+          // 【2026-10-11、6本目C】濃さ・色は見た目パターンごとに変える
+          // （既定'standard'は従来どおり控えめ）。
           {
             id: HILLSHADE_LAYER_ID,
             type: 'hillshade',
             source: DEM_SOURCE_ID,
             paint: {
-              // 【2026-10-11修正】陰影が強く、地図全体が灰色にくすんで見えると
-              // Coworkがスクリーンショットで指摘（exaggeration0.6・影#3a3a2aは
-              // 平地の地理院地図の色まで暗く潰していた）。誇張を0.3に弱め、
-              // 影の色も彩度を落として地図の色を邪魔しないようにした。
-              'hillshade-exaggeration': 0.3,
+              'hillshade-exaggeration': initialHillshade.hillshadeExaggeration,
               'hillshade-illumination-direction': 315,
-              'hillshade-shadow-color': '#6b6b5f',
-              'hillshade-highlight-color': '#fffdf5',
+              'hillshade-shadow-color': initialHillshade.hillshadeShadowColor,
+              'hillshade-highlight-color': initialHillshade.hillshadeHighlightColor,
             },
           },
           {
@@ -295,18 +376,19 @@ export class TerrainMapView {
     window.__terrainViewForDebug = this; // waitForTerrainLoaded()等、ラッパー側のメソッドの検証用
 
     this.popup = new maplibregl.Popup({ offset: 12, closeButton: true });
-    this.map.on('click', SPOTS_LAYER_ID, (e) => {
-      const feature = e.features && e.features[0];
-      if (!feature) return;
-      this.popup.setLngLat(e.lngLat).setHTML(buildSpotPopupHtml(feature.properties)).addTo(this.map);
-      // 【2026-10-11、5本目】地図の点をタップしたら、その場所へ寄る
-      // （Minami指示）。ポップアップ自体は従来どおり出す（「詳細を見る」導線は残す）。
-      this.flyToSpot(feature.properties, this._lastDepartureStation);
-    });
-    this.map.on('mouseenter', SPOTS_LAYER_ID, () => { this.map.getCanvas().style.cursor = 'pointer'; });
-    this.map.on('mouseleave', SPOTS_LAYER_ID, () => { this.map.getCanvas().style.cursor = ''; });
-    this.map.on('popupopen', (e) => {
-      const el = e.popup.getElement();
+    // 【2026-10-11、6本目A修正】'popupopen'はMapLibreに存在しないイベント名
+    // だった（vendor/maplibre/maplibre-gl.jsを grep して確認：'popupopen'・
+    // 'popupclose'は0件）。Leaflet（2D側のmap-view.jsが使う地図ライブラリ）の
+    // map.on('popupopen', ...)パターンを、API が異なるMapLibreにそのまま
+    // 持ち込んでしまっていたのが原因で、「詳細を見る」ボタンへのクリック
+    // リスナーが一度も付いていなかった（Minami実機確認：押しても動かない）。
+    // MapLibreのPopupは自分自身がイベントを発行する
+    // （this.fire(new Event("open"))をソースで確認済み）ため、
+    // popup.on('open', ...)で購読する。addTo()のたびに毎回'open'が発火する
+    // ことを実機で確認済み（同じPopupインスタンスを使い回しても、クリック
+    // するたびに新しいボタン要素にリスナーを付け直せる）。
+    this.popup.on('open', () => {
+      const el = this.popup.getElement();
       const btn = el && el.querySelector('.popup-detail-btn');
       if (!btn) return;
       btn.addEventListener('click', () => {
@@ -314,6 +396,22 @@ export class TerrainMapView {
         if (this.onDetailRequest) this.onDetailRequest(spotId);
       });
     });
+    this.map.on('click', SPOTS_LAYER_ID, (e) => {
+      const feature = e.features && e.features[0];
+      if (!feature) return;
+      this.popup.setLngLat(e.lngLat).setHTML(buildSpotPopupHtml(feature.properties)).addTo(this.map);
+      // 【2026-10-11、5本目】地図の点をタップしたら、その場所へ寄る
+      // （Minami指示）。ポップアップ自体は従来どおり出す（「詳細を見る」導線は残す）。
+      this.flyToSpot(feature.properties, this._lastDepartureStation);
+      // 【2026-10-11、6本目B】2Dと同じ動き：PCでは対応する一覧のカードまで
+      // スクロールして光らせる（main.js側のhighlightCard）。スマホは
+      // 一覧が別画面のため、呼び出し先が自然に何もしない
+      // （#results-listの高さが0のときはscrollSelectedCardIntoView()が
+      // 早期returnする、map-view.jsと同じ仕組み）。
+      if (this.onSelectionChange) this.onSelectionChange(feature.properties.id);
+    });
+    this.map.on('mouseenter', SPOTS_LAYER_ID, () => { this.map.getCanvas().style.cursor = 'pointer'; });
+    this.map.on('mouseleave', SPOTS_LAYER_ID, () => { this.map.getCanvas().style.cursor = ''; });
 
     // 【2026-10-10修正】hillshadeレイヤーを追加したことで、初期表示の時点から
     // 標高タイルも取得されるようになった。標高タイルは地点によって存在しない
@@ -336,7 +434,26 @@ export class TerrainMapView {
     // 平らな地図の表示が終わった後に地形を付ける（Minami指示）。
     // addSourceでgsi-demは既に宣言済みのため、setTerrainは標高タイルの
     // 取得・変換を裏側で開始するだけで、この呼び出し自体は同期的に返る。
-    this.map.setTerrain({ source: 'gsi-dem', exaggeration: DEFAULT_EXAGGERATION });
+    this.map.setTerrain({ source: 'gsi-dem', exaggeration: pattern.terrainExaggeration });
+
+    // 【2026-10-11、6本目C】'bd'パターン（zoomSwitch持ち）だけ、ズームで
+    // 俯瞰用・寄り用の背景・陰影を切り替える。
+    if (isDynamicPattern) {
+      let currentlyZoomed = false;
+      const applyZoomState = () => {
+        const zoomed = this.map.getZoom() >= pattern.zoomSwitch;
+        if (zoomed === currentlyZoomed) return;
+        currentlyZoomed = zoomed;
+        const active = zoomed ? pattern.zoomed : pattern.overview;
+        this.map.setLayoutProperty('gsi-bg-overview', 'visibility', zoomed ? 'none' : 'visible');
+        this.map.setLayoutProperty('gsi-bg-zoomed', 'visibility', zoomed ? 'visible' : 'none');
+        this.map.setPaintProperty(HILLSHADE_LAYER_ID, 'hillshade-exaggeration', active.hillshadeExaggeration);
+        this.map.setPaintProperty(HILLSHADE_LAYER_ID, 'hillshade-shadow-color', active.hillshadeShadowColor);
+        this.map.setPaintProperty(HILLSHADE_LAYER_ID, 'hillshade-highlight-color', active.hillshadeHighlightColor);
+      };
+      applyZoomState();
+      this.map.on('zoom', applyZoomState);
+    }
 
     if (this._lastDepartureStation || this._lastSpots) {
       this.render(this._lastDepartureStation, this._lastSpots || [], this._lastBudget);

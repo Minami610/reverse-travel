@@ -259,17 +259,17 @@ function createPinIcon(kind) {
   });
 }
 
+/**
+ * 【2026-10-11、6本目B】説明文は出さない（Minami決定：長いとはみ出すため）。
+ * 名前・往復運賃・「詳細を見る」だけにする（3D側のterrain-map-view.jsと同じ）。
+ */
 export function buildSpotPopupHtml(spot) {
-  const shortDescription = spot.description
-    ? spot.description.length > 60
-      ? `${spot.description.substring(0, 60)}...`
-      : spot.description
-    : '説明情報がありません';
-
+  const fare = spot.source_round_trip_fare;
+  const fareText = typeof fare === 'number' ? `往復¥${fare.toLocaleString('ja-JP')}` : '運賃不明';
   return `
     <div class="map-popup">
       <strong class="map-popup-title">${spot.name}</strong>
-      <p class="map-popup-description">${shortDescription}</p>
+      <p class="map-popup-fare">${fareText}</p>
       <button type="button" class="popup-detail-btn" data-spot-id="${spot.id}">詳細を見る</button>
     </div>
   `;

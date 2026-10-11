@@ -147,7 +147,7 @@ class ReverseTravel {
       resultsList: document.getElementById('results-list'),
       detailContent: document.getElementById('detail-content'),
       detailContainer: document.getElementById('detail-container'),
-      backBtn: document.getElementById('back-btn'),
+      detailBreadcrumb: document.getElementById('detail-breadcrumb'),
       aboutBtn: document.getElementById('about-data-btn'),
       aboutModal: document.getElementById('about-modal'),
       aboutModalClose: document.getElementById('about-modal-close'),
@@ -266,16 +266,28 @@ class ReverseTravel {
 
     this.updateBudgetUI();
 
-    // 【2026-10-10追記】スマホ本体の戻る操作（ジェスチャー・物理ボタン）と
-    // 画面上の「← 戻る」ボタンを同じ動きにするため、ボタン側はhistory.back()を
-    // 呼ぶだけにし、実際の画面切り替えはpopstateハンドラ（goBackInDetail()）に
-    // 一本化する。共有リンクのURLパラメータと干渉しないよう、pushState/
-    // replaceStateはURLを変えず（第3引数を省略）状態オブジェクトだけを積む。
-    this.elements.backBtn.addEventListener('click', () => {
-      history.back();
-    });
+    // 【2026-10-10追記】スマホ本体の戻る操作（ジェスチャー・物理ボタン）の
+    // 画面切り替えはpopstateハンドラ（goBackInDetail()）に一本化する。
+    // 共有リンクのURLパラメータと干渉しないよう、pushState/replaceStateは
+    // URLを変えず（第3引数を省略）状態オブジェクトだけを積む。
     window.addEventListener('popstate', () => {
       this.goBackInDetail();
+    });
+
+    // 【2026-10-11、6本目E】「見てきた場所」の足あと（旧「← 一覧に戻る」
+    // ボタンを置き換え）。クリック委譲：「一覧」またはそれより前の場所を
+    // 押すと、そこまで一気に戻る（今いる場所・ボタンでない「…」は
+    // data-history-indexを持たない）。
+    this.elements.detailBreadcrumb.addEventListener('click', (e) => {
+      const ellipsisBtn = e.target.closest('.breadcrumb-ellipsis');
+      if (ellipsisBtn) {
+        this.elements.detailBreadcrumb.querySelector('.breadcrumb-trail')?.classList.add('breadcrumb-expanded');
+        return;
+      }
+      const btn = e.target.closest('[data-history-index]');
+      if (!btn) return;
+      const index = parseInt(btn.getAttribute('data-history-index'), 10);
+      this.goToBreadcrumb(index);
     });
 
     this.elements.sortSelect.addEventListener('change', (e) => {
@@ -1117,6 +1129,10 @@ class ReverseTravel {
         const { TerrainMapView } = await loadTerrainModule();
         this.terrainMapView = new TerrainMapView('spots-map-3d');
         this.terrainMapView.onDetailRequest = (spotId) => this.openSpotDetailById(spotId);
+        // 【2026-10-11、6本目B】2Dと同じ動き：地図の点を押したら該当カードを
+        // スクロール＋光らせる（highlightCardはスマホで一覧が非表示のときは
+        // 自然に何もしない）。
+        this.terrainMapView.onSelectionChange = (spotId) => this.highlightCard(spotId);
         this.layoutController.terrainMapView = this.terrainMapView; // 遅延生成のため後から差し替える
       }
       await this.terrainMapView.ensureMap({ lat: station.stop_lat, lon: station.stop_lon });
@@ -1752,6 +1768,22 @@ class ReverseTravel {
       card.classList.toggle('spot-card-selected', card.getAttribute('data-spot-id') === spotId);
     });
     this.scrollSelectedCardIntoView();
+
+    // 【2026-10-11、6本目B】地図の点を押したとき、該当カードを2秒ほど
+    // 光らせる（Minami決定）。前の光りが終わる前に別のカードが押された
+    // 場合に備え、既存のタイマー・クラスをまず片付けてから付け直す。
+    if (this._glowTimer) {
+      clearTimeout(this._glowTimer);
+      this.elements.resultsList.querySelector('.spot-card-glow')?.classList.remove('spot-card-glow');
+    }
+    const card = this.elements.resultsList.querySelector(`.spot-card[data-spot-id="${spotId}"]`);
+    if (card) {
+      card.classList.add('spot-card-glow');
+      this._glowTimer = setTimeout(() => {
+        card.classList.remove('spot-card-glow');
+        this._glowTimer = null;
+      }, 2000);
+    }
   }
 
   /**
@@ -1786,9 +1818,17 @@ class ReverseTravel {
     list.scrollTo({ top: Math.max(0, centeredScrollTop), behavior: 'smooth' });
   }
 
-  /** spotIdからスポット詳細画面を開く（地図ポップアップの「詳細を見る」ボタン用） */
+  /**
+   * spotIdからスポット詳細画面を開く（地図ポップアップの「詳細を見る」ボタン用）。
+   * 【2026-10-11、6本目A】地図のピンは帯の外（予算以下だが帯未満＝「cheaper」）の
+   * スポットも薄い色で表示しており（map-view.js・terrain-map-view.jsのapplyBudget
+   * 参照）、その場所を選んで「詳細を見る」を押しても、ここが帯だけのthis.currentSpots
+   * しか探していなかったため該当スポットが見つからず、ボタンを押しても何も起きない
+   * （実クリックのPlaywrightテストで発覚）不具合があった。帯の内外どちらも含む
+   * this.currentAllSpots（地図のピン自体と同じ集合）から探すよう修正した。
+   */
   openSpotDetailById(spotId) {
-    const spot = this.currentSpots.find((s) => s.id === spotId);
+    const spot = this.currentAllSpots.find((s) => s.id === spotId);
     if (spot) {
       this.detailHistory = []; // 一覧からの新規の詳細表示なので「この先へ」の履歴をリセットする
       history.pushState({}, ''); // スマホの戻る操作で一覧に戻れるよう、履歴を1つ積む
@@ -1797,17 +1837,75 @@ class ReverseTravel {
   }
 
   /**
-   * 戻る操作（画面上の「← 戻る」ボタン・スマホ本体の戻る操作のどちらからも呼ばれる）。
-   * 「この先へ」で辿った履歴があれば直前のスポット詳細に戻す（1回で1つ前に戻る）。
-   * 履歴が無ければ一覧に戻す。
+   * スマホ本体の戻る操作（popstate）から呼ばれる。「この先へ」で辿った履歴が
+   * あれば直前のスポット詳細に戻す（1回で1つ前に戻る。足あとのクリックと同じ
+   * 「この先へ」の位置までスクロール）。履歴が無ければ一覧に戻す。
    */
   goBackInDetail() {
     if (this.detailHistory.length > 0) {
       const previousSpot = this.detailHistory.pop();
-      this.showSpotDetail(previousSpot);
+      this.showSpotDetail(previousSpot, { scrollTo: 'onward' });
     } else {
       this.showResultsList();
     }
+  }
+
+  /**
+   * 「見てきた場所」の足あと（6本目E、Minami決定）。旧「← 一覧に戻る」
+   * ボタンを置き換える。this.detailHistory（古い順）＋現在のスポットを
+   * つなげた「一覧 ＞ A ＞ B ＞ 今の場所」を組み立てる。今の場所だけ
+   * 太字・押せない。スマホ幅で3件を超えるときは中間を省略し「…」で開ける
+   * （CSS側で.breadcrumb-middleを隠し、.breadcrumb-expandedで解除する）。
+   */
+  renderBreadcrumb() {
+    const el = this.elements.detailBreadcrumb;
+    if (!el) return;
+    const trail = [...this.detailHistory, this._currentDetailSpot]; // 古い順、最後が今の場所
+    const listItem = `<button type="button" class="breadcrumb-item breadcrumb-list-link" data-history-index="-1">一覧</button>`;
+    const sep = '<span class="breadcrumb-sep" aria-hidden="true">＞</span>';
+
+    // 中間（一覧の直後〜「1つ前」の手前まで）。スマホ幅ではここを省略する。
+    const middleCount = trail.length - 2; // 現在地と「1つ前」を除いた件数
+    const middleItems = [];
+    for (let i = 0; i < trail.length - 2; i++) {
+      middleItems.push(
+        `<span class="breadcrumb-middle">${sep}<button type="button" class="breadcrumb-item" data-history-index="${i}">${trail[i].name}</button></span>`
+      );
+    }
+    const ellipsis = middleCount > 0
+      ? `<span class="breadcrumb-middle breadcrumb-middle-collapsed">${sep}<button type="button" class="breadcrumb-ellipsis" aria-label="途中の場所を表示">…</button></span>`
+      : '';
+
+    // 「1つ前」（現在地のひとつ前。中間を省略しても常に表示する）
+    const prevItem = trail.length >= 2
+      ? `${sep}<button type="button" class="breadcrumb-item" data-history-index="${trail.length - 2}">${trail[trail.length - 2].name}</button>`
+      : '';
+
+    const currentItem = `${sep}<span class="breadcrumb-current" aria-current="page">${trail[trail.length - 1].name}</span>`;
+
+    el.innerHTML = `
+      <span class="breadcrumb-label">見てきた場所</span>
+      <div class="breadcrumb-trail">${listItem}${ellipsis}${middleItems.join('')}${prevItem}${currentItem}</div>
+    `;
+  }
+
+  /**
+   * 足あとの「一覧」または途中の場所をクリックしたときに、そこまで一気に
+   * 戻る（6本目E、Minami決定：2つ以上前に戻ったら後ろの足あとは消す）。
+   * @param {number} index -1なら一覧、0以上ならdetailHistoryの該当位置
+   */
+  goToBreadcrumb(index) {
+    if (index < 0) {
+      this.detailHistory = [];
+      history.pushState({}, '');
+      this.showResultsList();
+      return;
+    }
+    const targetSpot = this.detailHistory[index];
+    if (!targetSpot) return;
+    this.detailHistory = this.detailHistory.slice(0, index);
+    history.pushState({}, '');
+    this.showSpotDetail(targetSpot, { scrollTo: 'onward' });
   }
 
   /**
@@ -1907,7 +2005,14 @@ class ReverseTravel {
     `;
   }
 
-  async showSpotDetail(spot) {
+  /**
+   * @param {object} spot
+   * @param {{scrollTo?: 'top'|'onward'}} [opts] - 'onward'は「この先へ」の
+   *   位置までスクロールする（6本目E、Minami決定：前の場所に戻ったときは
+   *   そこで辿った「この先へ」の位置を見せる）。新しい場所を開くとき
+   *   （一覧から・この先へカードから・共有リンクから）は常に既定の'top'。
+   */
+  async showSpotDetail(spot, { scrollTo = 'top' } = {}) {
     this._currentDetailSpot = spot; // 詳細画面の☆・共有ボタンから参照する
     const routeInfoHtml = this.routeFormatter && this.currentDepartureStationId
       ? this.routeFormatter.format(this.currentDepartureStationId, spot)
@@ -1954,12 +2059,21 @@ class ReverseTravel {
 
     this.elements.detailContent.innerHTML = html;
     this.elements.appLayout.setAttribute('data-view', 'detail');
-    // 【2026-10-11、5本目】「この先へ」で別の場所を開いたときも、戻ってきた
-    // ときも、詳細画面の一番上（写真）までスクロールを戻す（Minami指示）。
-    // showSpotDetail()はopenSpotDetailById・goBackInDetail・
-    // openOnwardCandidateのすべてから呼ばれる唯一の入口のため、ここ1箇所で
-    // 全経路をカバーできる。
-    if (this.elements.detailContainer) this.elements.detailContainer.scrollTop = 0;
+    this.renderBreadcrumb();
+    // 【2026-10-11、5本目→6本目Eで変更】新しい場所を開いたときは詳細画面の
+    // 一番上（写真）から、前の場所に戻ったときはそこで辿った「この先へ」の
+    // 位置から見せる（Minami決定）。showSpotDetail()はopenSpotDetailById・
+    // goBackInDetail・openOnwardCandidate・goToBreadcrumbのすべてから
+    // 呼ばれる唯一の入口のため、ここ1箇所で全経路をカバーできる。
+    if (this.elements.detailContainer) {
+      if (scrollTo === 'onward') {
+        const onwardEl = this.elements.detailContent.querySelector('.onward-section');
+        if (onwardEl) onwardEl.scrollIntoView({ block: 'start' });
+        else this.elements.detailContainer.scrollTop = 0;
+      } else {
+        this.elements.detailContainer.scrollTop = 0;
+      }
+    }
 
     // 【2026-10-11、5本目】3Dのときだけ、詳細画面を開いたらその場所へ寄る
     // （Minami指示。2Dは今の動きのまま変えない）。

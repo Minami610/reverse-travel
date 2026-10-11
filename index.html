@@ -104,7 +104,9 @@
 
         <!-- スポット詳細表示エリア（一覧／地図タブと排他表示。data-view="detail"のときのみ表示） -->
         <div id="detail-container">
-          <button id="back-btn">← 一覧に戻る</button>
+          <!-- 「見てきた場所」の足あと（6本目E、Minami決定）。
+               旧「← 一覧に戻る」ボタンを置き換える。中身はJSが都度組み立てる。 -->
+          <nav id="detail-breadcrumb" aria-label="見てきた場所"></nav>
           <div id="detail-content"></div>
         </div>
       </div>
