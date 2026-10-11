@@ -49,6 +49,25 @@ const DOCS_DATA_ROOT = path.join(rootDir, 'docs/data');
 
 const ODPT_OR_GTFS_DATA_JP = new Set(['odpt', 'gtfs-data-jp']);
 
+/**
+ * 都道府県1件分としてdocs/data/pref/{code}/に存在すべきファイルの一覧
+ * （route-details.jsonは別処理でindexRouteIds()を通すが、出力ファイル名は同じ）。
+ * verify-local-prefectures.jsが「docs/dataに実際に書き出し漏れがないか」を
+ * 機械的に確認する際にもこの一覧を使う（2026-10-11、route-sequences.jsonの
+ * 書き出し漏れでブラウザの検索が全滅した実害を受けて追加。一覧を二重管理すると
+ * また同じ種類の漏れが起きるため、唯一の定義をここに置く）。
+ */
+export const PREF_REQUIRED_FILES = [
+  'fare-lookup-tables.json',
+  'stops-metadata.json',
+  'stations.json',
+  'route-info.json',
+  'spots-by-station.json',
+  'data-sources.json',
+  'route-sequences.json',
+  'route-details.json',
+];
+
 function prefCodeStr(code) {
   return String(code).padStart(2, '0');
 }
@@ -98,15 +117,7 @@ export function generateSiteDataForPrefecture(prefCode, outRoot = DOCS_DATA_ROOT
   const destDir = path.join(outRoot, 'pref', codeStr);
   fs.mkdirSync(destDir, { recursive: true });
 
-  const plainCopyFiles = [
-    'fare-lookup-tables.json',
-    'stops-metadata.json',
-    'stations.json',
-    'route-info.json',
-    'spots-by-station.json',
-    'data-sources.json',
-    'route-sequences.json', // 3本目「この先へ」機能（同じ路線の先の判定用）
-  ];
+  const plainCopyFiles = PREF_REQUIRED_FILES.filter((file) => file !== 'route-details.json');
   for (const file of plainCopyFiles) {
     const srcPath = path.join(srcDir, file);
     if (!fs.existsSync(srcPath)) {
