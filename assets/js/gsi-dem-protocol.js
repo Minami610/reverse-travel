@@ -206,6 +206,16 @@ function convertViaWorker(blob) {
   });
 }
 
+// 検証用のカウンタ（window.__terrainMapForDebug等と同じ考え方：アプリ自体は
+// 使わず、本番でも実害がないため条件分岐は入れない）。2026-10-11、Worker URL
+// 解決ミスで「Workerが実は1度も起動していなかった」のにverify-layoutの
+// 既存チェックは素通りしていた反省から追加。Workerが実際に変換経路として
+// 使われているか（viaMainThreadに偏っていないか）をテストから機械的に
+// 確認できるようにする。
+if (typeof window !== 'undefined') {
+  window.__gsiDemConversionStats = window.__gsiDemConversionStats || { viaWorker: 0, viaMainThread: 0 };
+}
+
 /**
  * Workerプールが使えればそちらで変換し、無ければ・失敗すればメインスレッドで
  * 変換する（呼び出し元はどちらの経路かを意識しなくてよい）。
@@ -214,11 +224,14 @@ async function convertGsiDemTileAuto(blob) {
   const viaWorker = convertViaWorker(blob);
   if (viaWorker) {
     try {
-      return await viaWorker;
+      const result = await viaWorker;
+      if (typeof window !== 'undefined') window.__gsiDemConversionStats.viaWorker++;
+      return result;
     } catch {
       // ワーカー経由の変換に失敗した場合はメインスレッドへフォールバックする
     }
   }
+  if (typeof window !== 'undefined') window.__gsiDemConversionStats.viaMainThread++;
   return convertGsiDemTileToTerrarium(blob);
 }
 

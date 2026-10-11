@@ -789,6 +789,14 @@ async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
     const page = await context.newPage();
     const pageErrors = [];
     page.on('pageerror', (e) => pageErrors.push(e.message));
+    // 【2026-10-11追加】Worker URL解決ミスで「Workerが実は1度も起動していな
+    // かった」のに、地形読み込みの検証（terrainLoaded）自体は素通りしていた
+    // 反省から、gsi-dem-worker.jsへのリクエストが実際に200で返ること、変換が
+    // メインスレッドにフォールバックしていないことを機械的に確認する。
+    const workerResponses = [];
+    page.on('response', (res) => {
+      if (res.url().includes('gsi-dem-worker')) workerResponses.push(res.status());
+    });
     await page.goto(baseUrl, { waitUntil: 'load' });
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
@@ -818,6 +826,19 @@ async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
       const terrainLoaded1 = await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(20000));
       record(`[${label}] 地形（標高タイル）の読み込みが完了する`, terrainLoaded1);
       await page.waitForTimeout(300);
+
+      // Workerが実際に起動・使用されていることの確認（2026-10-11追加）。
+      record(
+        `[${label}] gsi-dem-worker.jsへのリクエストが200で返る`,
+        workerResponses.length > 0 && workerResponses.every((s) => s === 200),
+        `${workerResponses.length}件: ${JSON.stringify(workerResponses)}`
+      );
+      const conversionStats = await page.evaluate(() => window.__gsiDemConversionStats);
+      record(
+        `[${label}] DEMタイルの変換がWorker経由で行われている（メインスレッドに落ちていない）`,
+        conversionStats && conversionStats.viaWorker > 0 && conversionStats.viaMainThread === 0,
+        JSON.stringify(conversionStats)
+      );
       const initialPath = path.join(screenshotDir, `terrain-3d-initial-${label}.png`);
       await page.locator('#map-area').screenshot({ path: initialPath });
       savedPaths.push(initialPath);
