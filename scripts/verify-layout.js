@@ -1269,6 +1269,120 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
 }
 
 /**
+ * 【2026-10-12、7本目①③】3Dの既定の見た目が「D」（Minami決定：全体=淡色地図＋
+ * 強め陰影、寄ったとき＝ズーム13以上＝航空写真＋弱い陰影）であること、
+ * 自動回転が場所に寄ったあとに始まり、止めたら再始動しないこと
+ * （6本目で残っていた競合の本番修正）を検証する。
+ */
+async function checkDefaultStyleD(browser, baseUrl, savedPaths) {
+  console.log('\n=== 3Dの既定の見た目がD・自動回転の検証（7本目①③） ===');
+
+  const context = await browser.newContext({ viewport: VIEWPORTS.pc });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', (e) => pageErrors.push(e.message));
+  await page.goto(baseUrl, { waitUntil: 'load' });
+  await page.waitForSelector('#departure-input');
+  await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+  await searchAt(page, '八尾駅', 400);
+  await page.click('#map-dimension-toggle');
+  const became3d = await page.waitForFunction(
+    () => document.getElementById('map-area').classList.contains('mode-3d'),
+    { timeout: 30000 }
+  ).then(() => true).catch(() => false);
+  record('[D既定] 3D化（検証の前提）', became3d);
+  if (!became3d) {
+    await context.close();
+    return;
+  }
+  await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+
+  const layerInfo = await page.evaluate(() => {
+    const map = window.__terrainMapForDebug;
+    const layerIds = map.getStyle().layers.map((l) => l.id);
+    return {
+      layerIds,
+      hasPale: layerIds.includes('gsi-bg-pale'),
+      hasAerial: layerIds.includes('gsi-bg-aerial'),
+      hasOldComparisonLayers: layerIds.some((id) => id === 'gsi-bg' || id === 'gsi-bg-overview' || id === 'gsi-bg-zoomed'),
+      aerialOpacityExpr: map.getPaintProperty('gsi-bg-aerial', 'raster-opacity'),
+    };
+  });
+  record(
+    '[D既定] 背景レイヤーが淡色地図(gsi-bg-pale)＋航空写真(gsi-bg-aerial)の2枚',
+    layerInfo.hasPale && layerInfo.hasAerial,
+    JSON.stringify(layerInfo.layerIds)
+  );
+  record('[D既定] 6本目の比較用パターン（gsi-bg/gsi-bg-overview/gsi-bg-zoomed）が残っていない（使わないコードを削除済み）', !layerInfo.hasOldComparisonLayers);
+  record(
+    '[D既定] 航空写真のraster-opacityがズームで補間される式になっている（パッと切り替わらない）',
+    Array.isArray(layerInfo.aerialOpacityExpr) && layerInfo.aerialOpacityExpr[0] === 'interpolate',
+    JSON.stringify(layerInfo.aerialOpacityExpr)
+  );
+
+  const coords = await page.evaluate((name) => {
+    const feats = window.__terrainMapForDebug.querySourceFeatures('spots');
+    const f = feats.find((x) => x.properties.name === name);
+    return f ? { latitude: f.geometry.coordinates[1], longitude: f.geometry.coordinates[0] } : null;
+  }, '城生城');
+  record('[D既定] 検証用スポット「城生城」が見つかる', !!coords);
+  const station = await page.evaluate(() => window.__terrainViewForDebug._lastDepartureStation);
+
+  if (coords) {
+    await page.evaluate(({ spot, station }) => window.__terrainViewForDebug.flyToSpot(spot, station), { spot: coords, station });
+    await page.evaluate(() => window.__terrainViewForDebug.waitForSceneSettled(30000));
+    const zoomAndOpacity = await page.evaluate(() => {
+      const map = window.__terrainMapForDebug;
+      const zoom = map.getZoom();
+      // raster-opacityの式を現在のズームで手動評価する（MapLibreは式の実評価
+      // 結果を取得する公開APIを持たないため、2点の線形補間として自前で計算）。
+      const expr = map.getPaintProperty('gsi-bg-aerial', 'raster-opacity');
+      const [, , , z0, v0, z1, v1] = expr;
+      const t = Math.max(0, Math.min(1, (zoom - z0) / (z1 - z0)));
+      return { zoom, evaluatedOpacity: v0 + (v1 - v0) * t };
+    });
+    record(
+      '[D既定] 場所に寄る（ズーム13以上）と航空写真の不透明度がほぼ1になる',
+      zoomAndOpacity.zoom >= 13 && zoomAndOpacity.evaluatedOpacity >= 0.99,
+      JSON.stringify(zoomAndOpacity)
+    );
+
+    // 自動回転：場所に寄ったあと、ゆっくり回る演出が始まることを確認
+    // （settle＋AUTO_ROTATE_START_DELAY_MSぶん待つ必要があるため、余裕を見て6秒待つ）。
+    await page.waitForTimeout(6000);
+    const bearingRotating1 = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
+    await page.waitForTimeout(1000);
+    const bearingRotating2 = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
+    record(
+      '[自動回転] 場所に寄ったあと、ゆっくり回る演出が始まる',
+      Math.abs(bearingRotating2 - bearingRotating1) > 0.01,
+      `${bearingRotating1} -> ${bearingRotating2}`
+    );
+
+    // 【2026-10-12、7本目③】止めたら再始動しないこと（6本目で残っていた
+    // 競合の本番修正。_stopAutoRotate()が保留中のmoveendリスナーも
+    // 確実に外すようになったかを見る）。
+    await page.evaluate(() => window.__terrainViewForDebug._stopAutoRotate());
+    const bearingStoppedAt = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
+    await page.waitForTimeout(5000);
+    const bearingAfterWait = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
+    record(
+      '[自動回転] 止めると、その後も再始動しない（6本目で残っていた競合の本番修正）',
+      Math.abs(bearingAfterWait - bearingStoppedAt) < 0.01,
+      `停止時=${bearingStoppedAt} / 5秒後=${bearingAfterWait}`
+    );
+
+    const mapAreaBox = await page.locator('#map-area').boundingBox();
+    const shotPath = path.join(screenshotDir, 'default-style-d-zoomed-pc.png');
+    await page.screenshot({ path: shotPath, clip: mapAreaBox });
+    savedPaths.push(shotPath);
+  }
+
+  if (pageErrors.length > 0) record('[D既定] 検証中にページエラーが発生していない', false, pageErrors.join('; '));
+  await context.close();
+}
+
+/**
  * 【2026-10-11、6本目A・B】地図のピンをクリック→ポップアップの「詳細を見る」を
  * 実際にクリックして、詳細画面が開くことを検証する（2D・3D、PC・スマホ375px）。
  * 原因（A）：MapLibreには'popupopen'イベントが存在せず（Leafletのパターンを
@@ -1647,6 +1761,7 @@ async function main() {
     await checkTerrainMapToggle(browser, baseUrl, savedPaths);
     await checkTerrainMapOpensForBaselineStations(browser, baseUrl);
     await checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths);
+    await checkDefaultStyleD(browser, baseUrl, savedPaths);
     await checkPopupDetailButtonClick(browser, baseUrl, savedPaths);
     await checkBreadcrumbTrail(browser, baseUrl, savedPaths);
     await checkBudgetSlider(browser, baseUrl, savedPaths);

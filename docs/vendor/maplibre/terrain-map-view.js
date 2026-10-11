@@ -26,7 +26,6 @@
  * 更新だけで済み、スライダー1コマごとにDOM/オブジェクトを作り直さない）。
  */
 
-const GSI_STD_TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png';
 const GSI_PALE_TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png';
 const GSI_SEAMLESSPHOTO_TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg';
 const GSI_DEM_PROTOCOL_TILE_URL = 'gsidem://https://cyberjapandata.gsi.go.jp/xyz/dem_png/{z}/{x}/{y}.png';
@@ -39,53 +38,33 @@ const DEFAULT_ZOOM = 9;
 const DEFAULT_EXAGGERATION = 2; // Minami指示：2〜2.5倍から開始
 const DEM_MAXZOOM = 12; // Minami指示：DEM10Bの範囲に抑え、それ以上は自動オーバーズーム
 
-// 【2026-10-11、6本目C】3Dの見た目の比較用（Minami指示：高低差が白っぽく
-// 分かりにくい）。既定（'standard'）は今までの見た目のまま一切変えない
-// （Minamiが選ぶまで既定を変えない）。a/b/d/bdはコード上で切り替えられる
-// 比較専用の設定で、アプリのUIには出さない。
-// b+d（zoomSwitch）は、ズーム13未満はd（淡色＋強陰影）、13以上はb
-// （写真＋弱陰影）に切り替える。
-const STYLE_PATTERNS = {
-  standard: {
-    background: 'std',
-    hillshadeExaggeration: 0.3,
-    hillshadeShadowColor: '#6b6b5f',
-    hillshadeHighlightColor: '#fffdf5',
-    terrainExaggeration: DEFAULT_EXAGGERATION,
-  },
-  a: {
-    background: 'std',
-    hillshadeExaggeration: 0.8,
-    hillshadeShadowColor: '#2a2a1a',
-    hillshadeHighlightColor: '#fff8e0',
-    terrainExaggeration: 3,
-  },
-  b: {
-    background: 'seamlessphoto',
-    hillshadeExaggeration: 0.15,
-    hillshadeShadowColor: '#6b6b5f',
-    hillshadeHighlightColor: '#fffdf5',
-    terrainExaggeration: DEFAULT_EXAGGERATION,
-  },
-  d: {
-    background: 'pale',
-    hillshadeExaggeration: 0.7,
-    hillshadeShadowColor: '#2a2a1a',
-    hillshadeHighlightColor: '#fff8e0',
-    terrainExaggeration: DEFAULT_EXAGGERATION,
-  },
-  bd: {
-    zoomSwitch: 13,
-    overview: { background: 'pale', hillshadeExaggeration: 0.7, hillshadeShadowColor: '#2a2a1a', hillshadeHighlightColor: '#fff8e0' },
-    zoomed: { background: 'seamlessphoto', hillshadeExaggeration: 0.15, hillshadeShadowColor: '#6b6b5f', hillshadeHighlightColor: '#fffdf5' },
-    terrainExaggeration: DEFAULT_EXAGGERATION,
-  },
-};
-const BACKGROUND_SOURCES = {
-  std: { url: GSI_STD_TILE_URL, maxzoom: 18 },
-  pale: { url: GSI_PALE_TILE_URL, maxzoom: 18 },
-  seamlessphoto: { url: GSI_SEAMLESSPHOTO_TILE_URL, maxzoom: 18 },
-};
+// 【2026-10-12、7本目、Minami決定】3Dの既定の見た目を「D」にする
+// （6本目Cで比較したa/b/d/bdのうち、全体=淡色地図＋強め陰影、寄り=航空写真＋
+// 弱い陰影、のbd相当のもの。理由：航空写真だけだと重く、高低差も読めない
+// ため、全体は軽い淡色地図、寄ったら周りの景色が分かる航空写真）。比較用に
+// 残していたa/b/d単体パターンの切替コードは使わないため削除した。
+// 【Minami指示】パッと切り替わらないよう、ズーム12.5〜13.5の間で淡色地図→
+// 航空写真へ滑らかに重ねる。MapLibreの['interpolate','linear',['zoom'],...]
+// 式はペイントのたびに現在のズームで再評価されるため、setLayoutProperty+
+// 'zoom'イベントでの離散切替（6本目の実装）と違って本質的に連続的になる
+// （flyTo中の毎フレームでも自動的に追従する）。
+// 淡色地図（gsi-bg-pale）は常にvisibility:'visible'・不透明のまま下に敷き、
+// 航空写真（gsi-bg-aerial）だけraster-opacityを0→1で重ねる。これにより、
+// 航空写真のタイルがまだ読み込めていない箇所は下の淡色地図がそのまま
+// 見える（6本目Cのbdパターンで白く抜けていた問題の対策。原因は
+// visibility:'none'での切替があり得ないほど完全だったこと＝切替後に
+// 旧背景が消え、新背景の未読込部分が何も無い状態になっていたため）。
+// 陰影の強さ・色もあわせてズームで補間する（強め陰影の値は6本目Cの
+// パターンd、弱め陰影の値はパターンbの値をそのまま流用。見比べた結果の
+// 採用値）。
+const BG_CROSSFADE_ZOOM_START = 12.5;
+const BG_CROSSFADE_ZOOM_END = 13.5;
+const AERIAL_OPACITY_EXPR = ['interpolate', ['linear'], ['zoom'], BG_CROSSFADE_ZOOM_START, 0, BG_CROSSFADE_ZOOM_END, 1];
+const HILLSHADE_EXAGGERATION_EXPR = ['interpolate', ['linear'], ['zoom'], BG_CROSSFADE_ZOOM_START, 0.7, BG_CROSSFADE_ZOOM_END, 0.15];
+const HILLSHADE_SHADOW_COLOR_EXPR = ['interpolate', ['linear'], ['zoom'], BG_CROSSFADE_ZOOM_START, '#2a2a1a', BG_CROSSFADE_ZOOM_END, '#6b6b5f'];
+const HILLSHADE_HIGHLIGHT_COLOR_EXPR = ['interpolate', ['linear'], ['zoom'], BG_CROSSFADE_ZOOM_START, '#fff8e0', BG_CROSSFADE_ZOOM_END, '#fffdf5'];
+const BG_PALE_LAYER_ID = 'gsi-bg-pale';
+const BG_AERIAL_LAYER_ID = 'gsi-bg-aerial';
 
 // 【2026-10-11、5本目】俯瞰（fitToBudget）の引きすぎ対策：余白は地図の大きさの
 // 比率（短辺の8%）にし、ズームの下限（9.5）を設ける。maxZoomではなく下限で
@@ -164,15 +143,51 @@ function prefersReducedMotion() {
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
+/** 標準的なスリッピータイル座標（z/x/y）。経緯度を含むタイルを求める。 */
+function tileXYAt(lng, lat, z) {
+  const n = 2 ** z;
+  const x = Math.floor(((lng + 180) / 360) * n);
+  const latRad = (lat * Math.PI) / 180;
+  const y = Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n);
+  return { x, y };
+}
+
+/**
+ * 【2026-10-12、7本目】指定ソースについて、経緯度（通常は画面中央）を覆う
+ * タイルのうち最も高いズームのものが読み込み済み（またはエラー確定。404等で
+ * 永遠に待たないため）かを見る。waitForTerrainLoaded()のようなソース全体の
+ * 完了待ちとは違い、「その1点を覆う最高解像度のタイル」だけを見るため、
+ * 画面の端・地平線側のタイルがまだでも中央さえ揃っていればtrueになる
+ * （Minami指示：「見える」は中央付近が揃った時点とし、遠くのタイルまで
+ * 待たない）。
+ * タイルの読み込み状態はMapLibreの公開API areTilesLoaded()と同じ内部参照
+ * （map.style.sourceCaches[id]._tiles）を使う。
+ */
+function isCenterTileReady(map, sourceId, lng, lat) {
+  const cache = map.style && map.style.sourceCaches && map.style.sourceCaches[sourceId];
+  if (!cache) return false;
+  let bestZ = -1;
+  let bestReady = false;
+  for (const key in cache._tiles) {
+    const tile = cache._tiles[key];
+    const canonical = tile.tileID && tile.tileID.canonical;
+    if (!canonical) continue;
+    const { x, y } = tileXYAt(lng, lat, canonical.z);
+    if (canonical.x !== x || canonical.y !== y) continue;
+    if (canonical.z > bestZ) {
+      bestZ = canonical.z;
+      bestReady = tile.state === 'loaded' || tile.state === 'errored';
+    }
+  }
+  return bestZ >= 0 && bestReady;
+}
+
 export class TerrainMapView {
   /**
    * @param {string} containerId
-   * @param {{styleMode?: keyof typeof STYLE_PATTERNS}} [options] - 6本目C、
-   *   見た目比較用。省略時は'standard'（今までの見た目）。
    */
-  constructor(containerId, { styleMode = 'standard' } = {}) {
+  constructor(containerId) {
     this.containerId = containerId;
-    this.styleMode = STYLE_PATTERNS[styleMode] ? styleMode : 'standard';
     this.map = null;
     this.departureMarker = null;
     this.popup = null;
@@ -183,6 +198,8 @@ export class TerrainMapView {
     this._lastBudget = null;
     this._autoRotateFrame = null; // requestAnimationFrameのID（ゆっくり回る演出）
     this._autoRotateStartTimer = null;
+    this._pendingMoveEndHandler = null; // 【2026-10-12、7本目】_scheduleAutoRotateAfterFlight()が登録したmoveendリスナー（_stopAutoRotate()で確実に外すため参照を保持）
+    this._autoRotateScheduleToken = 0; // 同上。保留中の非同期チェーン（settle待ち）を無効化するための世代カウンタ
   }
 
   /**
@@ -208,39 +225,6 @@ export class TerrainMapView {
       protocolRegistered = true;
     }
 
-    const pattern = STYLE_PATTERNS[this.styleMode];
-    const isDynamicPattern = !!pattern.zoomSwitch;
-    // 背景ソース・レイヤーを見た目パターンに応じて組み立てる（6本目C）。
-    // 'bd'（zoomSwitch持ち）だけは俯瞰用・寄り用の2枚を両方addし、ズームで
-    // 表示を切り替える（下のthis.map.on('zoom', ...)参照）。それ以外は1枚だけ。
-    const backgroundSources = {};
-    const backgroundLayers = [];
-    const addBackground = (layerId, key, initiallyVisible = true) => {
-      const src = BACKGROUND_SOURCES[key];
-      backgroundSources[layerId] = {
-        type: 'raster',
-        tiles: [src.url],
-        tileSize: 256,
-        maxzoom: src.maxzoom,
-        attribution: GSI_STD_ATTRIBUTION, // 標準・淡色・写真いずれも地理院タイル
-      };
-      backgroundLayers.push({
-        id: layerId,
-        type: 'raster',
-        source: layerId,
-        layout: { visibility: initiallyVisible ? 'visible' : 'none' },
-      });
-    };
-    if (isDynamicPattern) {
-      // DEFAULT_ZOOM(9)はzoomSwitch(13)未満なので、開始時は俯瞰用だけ見せる
-      // （両方visibleのまま重なって読み込まれる一瞬を避ける）。
-      addBackground('gsi-bg-overview', pattern.overview.background, true);
-      addBackground('gsi-bg-zoomed', pattern.zoomed.background, false);
-    } else {
-      addBackground('gsi-bg', pattern.background);
-    }
-    const initialHillshade = isDynamicPattern ? pattern.overview : pattern;
-
     this.map = new maplibregl.Map({
       container: this.containerId,
       // 出典はMapLibre標準の右下attributionではなく、compact（iボタンで開く）に
@@ -251,7 +235,22 @@ export class TerrainMapView {
       style: {
         version: 8,
         sources: {
-          ...backgroundSources,
+          // 【2026-10-12、7本目】既定の見た目「D」（Minami決定）：淡色地図を
+          // 常に敷き、航空写真をズームで重ねる。どちらも地理院タイル。
+          [BG_PALE_LAYER_ID]: {
+            type: 'raster',
+            tiles: [GSI_PALE_TILE_URL],
+            tileSize: 256,
+            maxzoom: 18,
+            attribution: GSI_STD_ATTRIBUTION,
+          },
+          [BG_AERIAL_LAYER_ID]: {
+            type: 'raster',
+            tiles: [GSI_SEAMLESSPHOTO_TILE_URL],
+            tileSize: 256,
+            maxzoom: 18,
+            attribution: GSI_STD_ATTRIBUTION,
+          },
           [DEM_SOURCE_ID]: {
             type: 'raster-dem',
             tiles: [GSI_DEM_PROTOCOL_TILE_URL],
@@ -266,20 +265,30 @@ export class TerrainMapView {
           },
         },
         layers: [
-          ...backgroundLayers,
+          // 淡色地図は常に不透明で下に敷く（航空写真の未読込部分はここが
+          // そのまま透けて見える＝白く抜けない）。
+          { id: BG_PALE_LAYER_ID, type: 'raster', source: BG_PALE_LAYER_ID },
+          // 航空写真はraster-opacityをズームで0→1に補間し、パッと切り替わらず
+          // 重なっていく（Minami指示）。
+          {
+            id: BG_AERIAL_LAYER_ID,
+            type: 'raster',
+            source: BG_AERIAL_LAYER_ID,
+            paint: { 'raster-opacity': AERIAL_OPACITY_EXPR },
+          },
           // 起伏を見えやすくする陰影（Minami指示）。同じ標高データから計算するため
           // 標高タイルの変換自体は1回で済む（追加のネットワーク取得は発生しない）。
-          // 【2026-10-11、6本目C】濃さ・色は見た目パターンごとに変える
-          // （既定'standard'は従来どおり控えめ）。
+          // 【2026-10-12、7本目】濃さ・色も同じズーム区間で補間し、背景の
+          // 切替と連動して「全体は強め・寄ったら弱め」に自然に変わる。
           {
             id: HILLSHADE_LAYER_ID,
             type: 'hillshade',
             source: DEM_SOURCE_ID,
             paint: {
-              'hillshade-exaggeration': initialHillshade.hillshadeExaggeration,
+              'hillshade-exaggeration': HILLSHADE_EXAGGERATION_EXPR,
               'hillshade-illumination-direction': 315,
-              'hillshade-shadow-color': initialHillshade.hillshadeShadowColor,
-              'hillshade-highlight-color': initialHillshade.hillshadeHighlightColor,
+              'hillshade-shadow-color': HILLSHADE_SHADOW_COLOR_EXPR,
+              'hillshade-highlight-color': HILLSHADE_HIGHLIGHT_COLOR_EXPR,
             },
           },
           {
@@ -434,26 +443,7 @@ export class TerrainMapView {
     // 平らな地図の表示が終わった後に地形を付ける（Minami指示）。
     // addSourceでgsi-demは既に宣言済みのため、setTerrainは標高タイルの
     // 取得・変換を裏側で開始するだけで、この呼び出し自体は同期的に返る。
-    this.map.setTerrain({ source: 'gsi-dem', exaggeration: pattern.terrainExaggeration });
-
-    // 【2026-10-11、6本目C】'bd'パターン（zoomSwitch持ち）だけ、ズームで
-    // 俯瞰用・寄り用の背景・陰影を切り替える。
-    if (isDynamicPattern) {
-      let currentlyZoomed = false;
-      const applyZoomState = () => {
-        const zoomed = this.map.getZoom() >= pattern.zoomSwitch;
-        if (zoomed === currentlyZoomed) return;
-        currentlyZoomed = zoomed;
-        const active = zoomed ? pattern.zoomed : pattern.overview;
-        this.map.setLayoutProperty('gsi-bg-overview', 'visibility', zoomed ? 'none' : 'visible');
-        this.map.setLayoutProperty('gsi-bg-zoomed', 'visibility', zoomed ? 'visible' : 'none');
-        this.map.setPaintProperty(HILLSHADE_LAYER_ID, 'hillshade-exaggeration', active.hillshadeExaggeration);
-        this.map.setPaintProperty(HILLSHADE_LAYER_ID, 'hillshade-shadow-color', active.hillshadeShadowColor);
-        this.map.setPaintProperty(HILLSHADE_LAYER_ID, 'hillshade-highlight-color', active.hillshadeHighlightColor);
-      };
-      applyZoomState();
-      this.map.on('zoom', applyZoomState);
-    }
+    this.map.setTerrain({ source: 'gsi-dem', exaggeration: DEFAULT_EXAGGERATION });
 
     if (this._lastDepartureStation || this._lastSpots) {
       this.render(this._lastDepartureStation, this._lastSpots || [], this._lastBudget);
@@ -611,13 +601,44 @@ export class TerrainMapView {
     this._scheduleAutoRotateAfterFlight();
   }
 
-  /** flyTo完了（'moveend'）後、少し間を置いてゆっくり回る演出を始める。 */
+  /**
+   * flyTo完了（'moveend'）後、中央付近の地形・背景が落ち着いてから少し間を
+   * 置いてゆっくり回る演出を始める。
+   *
+   * 【2026-10-12、7本目②・③】2つの問題を直した。
+   * 1. 【6本目で未解決だった競合】旧実装はmap.once('moveend', ...)の
+   *    リスナーを_stopAutoRotate()から外せなかった。flyTo開始直後（まだ
+   *    moveendが来る前）にユーザー操作やテストコードが_stopAutoRotate()を
+   *    呼んでも、このリスナー自体は残り続け、後からmoveend（ユーザー操作に
+   *    よる中断分も含む）が来るたびに新しいタイマーを仕込み直してしまい、
+   *    「止めたはずなのに後で勝手に回り出す」不具合になっていた（6本目の
+   *    Playwright検証で、ポップアップの画面座標が数百px単位で動き続ける
+   *    形で発覚）。_pendingMoveEndHandlerに参照を保持し、_stopAutoRotate()
+   *    側でmap.off()する。
+   * 2. 【7本目②の調査結果】自動回転それ自体が「寄ってから地形が見えるまで
+   *    20秒」の主因ではなかった（回転を無効化しても25.3秒→19.7秒と2割弱の
+   *    短縮に留まった。詳しくはこのファイルの変更に対応するコミットの
+   *    説明・報告を参照）。ただし回転が続く間は新しい背景タイルを要求し
+   *    続けるため、無関係ではない。影響を無くすため、固定500ms待つのでは
+   *    なく、中央付近の読み込みが落ち着く（waitForSceneSettled()）まで
+   *    そもそも回転を始めない設計にした（Minami指示の対策案）。
+   * 世代カウンタ（_autoRotateScheduleToken）で、settle待ちの途中に
+   * _stopAutoRotate()が呼ばれた場合はその後のstartを無効化する。
+   */
   _scheduleAutoRotateAfterFlight() {
     if (!this.map || prefersReducedMotion()) return;
-    this.map.once('moveend', () => {
-      if (this._autoRotateStartTimer) clearTimeout(this._autoRotateStartTimer);
-      this._autoRotateStartTimer = setTimeout(() => this._startAutoRotate(), AUTO_ROTATE_START_DELAY_MS);
-    });
+    const token = this._autoRotateScheduleToken;
+    this._pendingMoveEndHandler = () => {
+      this._pendingMoveEndHandler = null;
+      this.waitForSceneSettled().then(() => {
+        if (token !== this._autoRotateScheduleToken || !this.map) return;
+        this._autoRotateStartTimer = setTimeout(() => {
+          if (token !== this._autoRotateScheduleToken) return;
+          this._startAutoRotate();
+        }, AUTO_ROTATE_START_DELAY_MS);
+      });
+    };
+    this.map.once('moveend', this._pendingMoveEndHandler);
   }
 
   _startAutoRotate() {
@@ -635,8 +656,18 @@ export class TerrainMapView {
     this._autoRotateFrame = requestAnimationFrame(step);
   }
 
-  /** ユーザー操作（ドラッグ・ズーム・回転・傾き・ホイール）で呼ばれ、演出を止める。 */
+  /**
+   * ユーザー操作（ドラッグ・ズーム・回転・傾き・ホイール）で呼ばれ、演出を
+   * 止める。【2026-10-12修正】世代カウンタを進めて保留中のsettle待ち
+   * （_scheduleAutoRotateAfterFlight()のPromiseチェーン）を無効化し、
+   * 登録済みのmoveendリスナーも確実に外す（上のコメント参照）。
+   */
   _stopAutoRotate() {
+    this._autoRotateScheduleToken++;
+    if (this._pendingMoveEndHandler) {
+      if (this.map) this.map.off('moveend', this._pendingMoveEndHandler);
+      this._pendingMoveEndHandler = null;
+    }
     if (this._autoRotateStartTimer) {
       clearTimeout(this._autoRotateStartTimer);
       this._autoRotateStartTimer = null;
@@ -721,6 +752,66 @@ export class TerrainMapView {
       // （タイルが0枚要求の時点でtrueになっている場合も、直後に要求が始まれば
       // onDataLoadingがsettleタイマーを取り消すため、正しく未完了扱いになる）。
       if (this.map.isSourceLoaded(DEM_SOURCE_ID)) scheduleSettleCheck();
+    });
+  }
+
+  /**
+   * 【2026-10-12、7本目②】画面中央付近の地形・背景タイルの読み込みが
+   * 済んだ時点を判定する（Minami指示：「見える」は中央付近が揃った時点とし、
+   * 遠くのタイル・地平線側まで待たない）。waitForTerrainLoaded()はDEM
+   * ソース全体（画面の端・地平線側を含む全タイル）の完了を待つため重く、
+   * 実測で寄ってから20秒前後かかっていた。こちらは中央の経緯度を覆う
+   * タイル（DEM・現在のズームに応じた背景レイヤー）だけを見るため、
+   * 体感の「もう景色が見えている」に近い時点で解決する。
+   * ズーム12.5〜13.5（航空写真への切り替え区間）の間は、淡色地図・航空写真
+   * 両方が中央で読み込み済みであることを求める（どちらが主に見えているか
+   * 確定していない区間のため）。
+   *
+   * 【2026-10-12、計測中に発覚した不具合の修正】flyTo()呼び出し直後（アニメー
+   * ション開始直後）にこのメソッドを呼ぶと、map.getCenter()がまだ出発地点に
+   * 近い値を返すため、そこを覆うタイル（俯瞰時に既読込）を見て即座に
+   * 「揃っている」と誤判定していた（実測：新基準の経過時間が0〜1msという
+   * 明らかにおかしい値になって発覚）。flyTo・easeTo等のカメラアニメーション
+   * 中（map.isMoving()）は、最初の'moveend'まで判定を保留することで、
+   * 必ず最終的な到着地点を基準に判定するようにした。
+   * @param {number} [timeoutMs]
+   * @returns {Promise<boolean>}
+   */
+  waitForSceneSettled(timeoutMs = 15000) {
+    if (!this.map) return Promise.resolve(false);
+    const map = this.map;
+    const backgroundIdsToCheck = () => {
+      const zoom = map.getZoom();
+      if (zoom <= BG_CROSSFADE_ZOOM_START) return [BG_PALE_LAYER_ID];
+      if (zoom >= BG_CROSSFADE_ZOOM_END) return [BG_AERIAL_LAYER_ID];
+      return [BG_PALE_LAYER_ID, BG_AERIAL_LAYER_ID];
+    };
+    const isSettled = () => {
+      if (map.isMoving()) return false; // カメラアニメーション中は到着地点が確定していない
+      const center = map.getCenter();
+      if (!isCenterTileReady(map, DEM_SOURCE_ID, center.lng, center.lat)) return false;
+      return backgroundIdsToCheck().every((id) => isCenterTileReady(map, id, center.lng, center.lat));
+    };
+    return new Promise((resolve) => {
+      if (isSettled()) {
+        resolve(true);
+        return;
+      }
+      const onData = () => {
+        if (isSettled()) finish(true);
+      };
+      const onMoveEnd = () => {
+        if (isSettled()) finish(true);
+      };
+      const finish = (result) => {
+        clearTimeout(timeout);
+        map.off('data', onData);
+        map.off('moveend', onMoveEnd);
+        resolve(result);
+      };
+      const timeout = setTimeout(() => finish(false), timeoutMs);
+      map.on('data', onData);
+      map.on('moveend', onMoveEnd);
     });
   }
 
