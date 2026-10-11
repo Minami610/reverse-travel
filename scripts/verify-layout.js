@@ -405,8 +405,10 @@ async function captureDetailFavoriteShareScreen(page, viewportLabel) {
 
   await checkNoHorizontalOverflow(page, `[${viewportLabel}] 詳細画面の☆・共有`);
   // 一覧に戻しておく（他のキャプチャ関数が毎回searchAtし直すので必須ではないが、
-  // 状態を崩したまま次に渡さない）
-  await page.click('#back-btn').catch(() => {});
+  // 状態を崩したまま次に渡さない）。旧#back-btnは6本目Eで「見てきた場所」の
+  // 足あと表示に置き換わった。カードから直接開いた詳細（この先への履歴なし）
+  // なので「一覧」を押すのが旧back-btnと同じ結果になる。
+  await page.click('.breadcrumb-list-link').catch(() => {});
   return screenshotPath;
 }
 
@@ -525,7 +527,7 @@ async function captureReservationScreen(page, viewportLabel) {
   record(`[${viewportLabel}] 予約制: 詳細画面の経路にも「要予約」が出る`, detailText.includes('要予約'));
 
   await checkNoHorizontalOverflow(page, `[${viewportLabel}] 予約制詳細画面`);
-  await page.click('#back-btn').catch(() => {});
+  await page.click('.breadcrumb-list-link').catch(() => {});
   return [screenshotPath, detailScreenshotPath];
 }
 
@@ -568,8 +570,11 @@ async function captureOnwardSectionScreen(page, viewportLabel) {
   record(`[${viewportLabel}] この先へ: カードをクリックすると詳細が切り替わる`, secondHeading !== firstHeading, `${firstHeading} → ${secondHeading}`);
 
   await checkNoHorizontalOverflow(page, `[${viewportLabel}] この先へ`);
-  await page.click('#back-btn').catch(() => {});
-  await page.click('#back-btn').catch(() => {});
+  // 旧#back-btn×2（候補詳細→元の詳細→一覧）を、足あとの「1つ前」→「一覧」の
+  // クリックに置き換える。この時点の足あとは「一覧 ＞ 元の場所 ＞ 候補」
+  // （trail.length=2）のため、「1つ前」はdata-history-index="0"。
+  await page.click('[data-history-index="0"]').catch(() => {});
+  await page.click('.breadcrumb-list-link').catch(() => {});
   return screenshotPath;
 }
 
@@ -585,7 +590,7 @@ async function captureOnwardBadgeScreen(page, viewportLabel) {
   const heartCount = await page.locator('.onward-card .onward-heart').count();
   record(`[${viewportLabel}] この先へ: 応援マーク付きの候補がある例が見つかる`, heartCount > 0, `${heartCount}件`);
   if (heartCount === 0) {
-    await page.click('#back-btn').catch(() => {});
+    await page.click('.breadcrumb-list-link').catch(() => {});
     return null;
   }
 
@@ -594,7 +599,7 @@ async function captureOnwardBadgeScreen(page, viewportLabel) {
   await screenshotElementSafely(page, onwardSection, screenshotPath, VIEWPORTS[viewportLabel]);
 
   await checkNoHorizontalOverflow(page, `[${viewportLabel}] この先へ（応援マーク付き）`);
-  await page.click('#back-btn').catch(() => {});
+  await page.click('.breadcrumb-list-link').catch(() => {});
   return screenshotPath;
 }
 
@@ -612,7 +617,7 @@ async function captureOnwardBackScreen(page, viewportLabel) {
   const hasOnward = await page.locator('.onward-card').count() > 0;
   record(`[${viewportLabel}] この先へ: 戻り確認用に候補が1件以上ある`, hasOnward);
   if (!hasOnward) {
-    await page.click('#back-btn').catch(() => {});
+    await page.click('.breadcrumb-list-link').catch(() => {});
     return null;
   }
 
@@ -634,7 +639,7 @@ async function captureOnwardBackScreen(page, viewportLabel) {
   await screenshotElementSafely(page, detailContent, screenshotPath, VIEWPORTS[viewportLabel]);
 
   await checkNoHorizontalOverflow(page, `[${viewportLabel}] この先へ（戻った後の詳細）`);
-  await page.click('#back-btn').catch(() => {});
+  await page.click('.breadcrumb-list-link').catch(() => {});
   return screenshotPath;
 }
 
@@ -1054,7 +1059,7 @@ async function checkTerrainMapOpensForBaselineStations(browser, baseUrl) {
  * 1. 視点を回せる（dragRotate・touchZoomRotate）・コンパスボタンがある
  * 2. 一覧のカードから開いた詳細で、その場所へ寄る（ズーム13以上）、
  *    スマホの詳細画面「地図で見る」でも同様に寄る、詳細は一番上から始まる
- * 3. 「← 一覧に戻る」で引きすぎ対策の範囲（ズーム9.5以上）に戻る
+ * 3. 足あと（旧「← 一覧に戻る」）の「一覧」で引きすぎ対策の範囲（ズーム9.5以上）に戻る
  * 4. 予算¥2000（対象範囲が広がる）でも引きすぎない（ズーム9.5以上）
  * （いずれもMinami指示、3D限定。2Dの動きは変えていない＝map-view.js無変更。
  * 検証用スポット「城生城」は八尾駅から往復¥400のため、¥2000への変更は
@@ -1162,8 +1167,8 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
 
       if (label === 'sp') {
         // 【2026-10-11追加】スマホは「地図で見る」でdata-view="results"（地図
-        // タブ）に移っており、#back-btnが見えない状態になっている
-        // （#back-btnはdata-view="detail"のときだけ表示）。Minami指示
+        // タブ）に移っており、足あと（旧#back-btn）が見えない状態になっている
+        // （足あとはdata-view="detail"のときだけ表示）。Minami指示
         // 「地図タブから詳細へ戻れること」の経路＝寄った先のピンをタップして
         // ポップアップの「詳細を見る」から戻る、を検証したい。
         // 【試行錯誤】画面中央をタップする方法を試したが、3D地形では標高の
@@ -1174,6 +1179,12 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
         // （中心タップより頑健。production側のクリックハンドラ自体は
         // 変更していないため、実際のクリック→ポップアップ→詳細の経路を
         // 引き続き検証できる）。
+        // 【2026-10-11、6本目A修正】以前はこのクリックが不安定で、
+        // onDetailRequest()の直接呼び出しにフォールバックしていた。原因は
+        // 'popupopen'（MapLibreに存在しないイベント名）でボタンに
+        // クリックリスナーを登録していたこと自体が誤りだったためと判明し、
+        // popup.on('open', ...)に直した。フォールバックは外し、実クリックが
+        // 確実に通ることを要件にする（直接呼び出しで済ませない）。
         const pinScreenPos = await page.evaluate(() => {
           const map = window.__terrainMapForDebug;
           const feats = map.querySourceFeatures('spots');
@@ -1190,26 +1201,8 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
         }
         record(`[${label}] 地図タブでピンをタップするとポップアップが出る`, detailBtnVisible);
         if (detailBtnVisible) {
-          await page.evaluate(() => document.querySelector('.popup-detail-btn')?.click());
-          await page.waitForFunction(
-            () => document.getElementById('app-layout')?.getAttribute('data-view') === 'detail',
-            { timeout: 3000 }
-          ).catch(() => {});
-        }
-        // 【2026-10-11】ポップアップの「詳細を見る」ボタンへの実クリックが、
-        // 同一のmaplibregl.Popupインスタンスを使い回す実装（setHTML()の
-        // 再利用）のせいか、popupopenイベントが想定どおりに再発火せず
-        // クリックリスナーが効かないケースが自動テストで見られた
-        // （原因を完全には特定できなかった）。「地図タブから詳細へ戻れる」
-        // という要件自体は、ボタンが呼ぶ経路（onDetailRequest）を直接
-        // 検証することで確実に確認する（まだdetail画面になっていなければ
-        // ここで呼ぶ。実クリックが効いていれば二重呼び出しにならないよう
-        // data-view を見てから判断する）。
-        const reachedDetail = await page.evaluate(
-          () => document.getElementById('app-layout')?.getAttribute('data-view') === 'detail'
-        );
-        if (!reachedDetail) {
-          await page.evaluate((qid) => window.__terrainViewForDebug.onDetailRequest(qid), 'Q11426240');
+          const btnBox = await page.locator('.popup-detail-btn').first().boundingBox();
+          await page.mouse.click(btnBox.x + btnBox.width / 2, btnBox.y + btnBox.height / 2);
           await page.waitForFunction(
             () => document.getElementById('app-layout')?.getAttribute('data-view') === 'detail',
             { timeout: 5000 }
@@ -1218,7 +1211,7 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
         const dataViewAfterReturn = await page.evaluate(
           () => document.getElementById('app-layout')?.getAttribute('data-view')
         );
-        record(`[${label}] 地図タブから詳細へ戻れる`, dataViewAfterReturn === 'detail', `data-view=${dataViewAfterReturn}`);
+        record(`[${label}] 地図タブでポップアップの「詳細を見る」を実クリックすると詳細へ戻れる`, dataViewAfterReturn === 'detail', `data-view=${dataViewAfterReturn}`);
       }
 
       // 詳細画面に戻ってスクロール位置を確認（この先へ経由の確認は別関数、
@@ -1226,13 +1219,13 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
       const scrollTop = await page.evaluate(() => document.getElementById('detail-container')?.scrollTop ?? -1);
       record(`[${label}] 詳細画面が一番上から始まる`, scrollTop === 0, `scrollTop=${scrollTop}`);
 
-      // 「← 一覧に戻る」で引きすぎ対策の範囲に戻る
-      await page.click('#back-btn');
+      // 足あとの「一覧」（旧「← 一覧に戻る」）で引きすぎ対策の範囲に戻る
+      await page.click('.breadcrumb-list-link');
       await page.waitForTimeout(1000);
       if (label === 'sp') await page.click('.tab-btn[data-tab="map"]').catch(() => {});
       const zoomAfterBack = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
       record(
-        `[${label}] 「← 一覧に戻る」で俯瞰（ズーム9.5以上）に戻る`,
+        `[${label}] 足あとの「一覧」で俯瞰（ズーム9.5以上）に戻る`,
         zoomAfterBack >= 9.5,
         `zoom=${zoomAfterBack.toFixed(2)}`
       );
@@ -1271,6 +1264,325 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
 
     if (pageErrors.length > 0) record(`[${label}] 3Dカメラ検証中にページエラーが発生していない`, false, pageErrors.join('; '));
 
+    await context.close();
+  }
+}
+
+/**
+ * 【2026-10-11、6本目A・B】地図のピンをクリック→ポップアップの「詳細を見る」を
+ * 実際にクリックして、詳細画面が開くことを検証する（2D・3D、PC・スマホ375px）。
+ * 原因（A）：MapLibreには'popupopen'イベントが存在せず（Leafletのパターンを
+ * 誤って持ち込んでいた）、ボタンへのクリックリスナーが一度も登録されていなかった。
+ * popup.on('open', ...)に直したため、ここではハンドラを直接呼ばず、本物の
+ * クリックイベントだけで開くことを検証する（Minami指示：直接呼び出しで済ませない）。
+ * あわせてB（ポップアップに説明文が無く、名前・往復運賃・「詳細を見る」だけで
+ * あること）もここで確認し、吹き出しのスクリーンショットも撮る。
+ */
+async function checkPopupDetailButtonClick(browser, baseUrl, savedPaths) {
+  console.log('\n=== ポップアップ「詳細を見る」の実クリック検証（A・B） ===');
+
+  // --- 2D ---
+  for (const [label, viewport] of Object.entries(VIEWPORTS)) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '高松築港', 1000);
+    if (label === 'sp') {
+      await page.click('.tab-btn[data-tab="map"]');
+      await page.waitForTimeout(200);
+    }
+
+    // 実際のピン（.map-pin-spot、L.divIcon）を本物のクリックで押す
+    // （onDetailRequest()等の直接呼び出しは使わない）。
+    // 【2026-10-11】applyBudget()は予算の帯の外にあるスポットのマーカーに
+    // display:noneを付けて隠す（DOM上には残る）ため、.first()だけだと
+    // 非表示のピンを掴んでクリックがタイムアウトすることがあった。
+    // Playwrightの:visible疑似クラスで実際に見えているピンに絞る。
+    // 【試行錯誤】locator.click()は、ピンが密集する場面で別のマーカーの
+    // leaflet-marker-icon（祖先）にポインタイベントを奪われ
+    // 「intercepts pointer events」でタイムアウトすることがあった。
+    // このファイルの3D側と同じ、boundingBox()を取ってmouse.click()で
+    // 座標指定して押す方式に統一する（actionabilityの奪い合いを回避）。
+    const pinLocator = page.locator('.map-pin-spot:visible').first();
+    const pinBox = await pinLocator.boundingBox();
+    if (pinBox) await page.mouse.click(pinBox.x + pinBox.width / 2, pinBox.y + pinBox.height / 2);
+    const popupVisible = await page.locator('.leaflet-popup').isVisible().catch(() => false);
+    record(`[2D/${label}] ピンをクリックするとポップアップが開く`, popupVisible);
+
+    if (popupVisible) {
+      // Leafletのポップアップはleaflet-fade-animでフェードインするため、
+      // 開いた直後にboundingBox()を取ると途中の小さい矩形を拾ってしまい、
+      // スクリーンショットが中身の見えない半端な切り抜きになることがあった。
+      await page.waitForTimeout(300);
+      const descCount = await page.locator('.leaflet-popup p:not(.map-popup-fare)').count();
+      record(`[2D/${label}] ポップアップに説明文が無い（名前・運賃・ボタンのみ）`, descCount === 0, `余分な<p>の数: ${descCount}`);
+
+      const popupBox = await page.locator('.leaflet-popup').boundingBox();
+      if (popupBox) {
+        const popupPath = path.join(screenshotDir, `map-popup-2d-${label}.png`);
+        await page.screenshot({ path: popupPath, clip: popupBox });
+        savedPaths.push(popupPath);
+      }
+
+      const spotName = await page.locator('.map-popup-title').first().textContent();
+      const btnBox = await page.locator('.popup-detail-btn').first().boundingBox();
+      if (btnBox) await page.mouse.click(btnBox.x + btnBox.width / 2, btnBox.y + btnBox.height / 2);
+      const openedDetail = await page.waitForFunction(
+        () => document.getElementById('app-layout')?.getAttribute('data-view') === 'detail',
+        { timeout: 5000 }
+      ).then(() => true).catch(() => false);
+      const heading = openedDetail ? await page.locator('#detail-content h2').textContent() : null;
+      record(
+        `[2D/${label}] 「詳細を見る」を実クリックすると、該当スポットの詳細画面が開く`,
+        openedDetail && heading === spotName,
+        `popup="${spotName}" / heading="${heading}"`
+      );
+      if (openedDetail) await page.click('.breadcrumb-list-link').catch(() => {});
+    }
+
+    if (pageErrors.length > 0) record(`[2D/${label}] ポップアップ検証中にページエラーが発生していない`, false, pageErrors.join('; '));
+    await context.close();
+  }
+
+  // --- 3D ---
+  for (const [label, viewport] of Object.entries(VIEWPORTS)) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '高松築港', 1000);
+    if (label === 'sp') {
+      await page.click('.tab-btn[data-tab="map"]');
+      await page.waitForTimeout(200);
+    }
+    await page.click('#map-dimension-toggle');
+    const became3d = await page.waitForFunction(
+      () => document.getElementById('map-area').classList.contains('mode-3d'),
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
+    if (!became3d) {
+      record(`[3D/${label}] 3D化（ポップアップ検証の前提）`, false);
+      await context.close();
+      continue;
+    }
+    await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+    await page.evaluate(() => window.__terrainViewForDebug._stopAutoRotate());
+
+    // 円（circle-layer）は実DOM要素を持たないため、project()で実際の画面座標を
+    // 求めてからmouse.click()で押す（このファイルの他のピン検証箇所と同じ方式）。
+    const pinScreenPos = await page.evaluate((budget) => {
+      const map = window.__terrainMapForDebug;
+      const feats = map.querySourceFeatures('spots').filter((f) => f.properties.fare <= budget);
+      if (feats.length === 0) return null;
+      const f = feats[0];
+      const p = map.project(f.geometry.coordinates);
+      return { x: p.x, y: p.y, name: f.properties.name };
+    }, 1000);
+    record(`[3D/${label}] 検証対象のピンが見つかる`, !!pinScreenPos);
+
+    if (pinScreenPos) {
+      const mapBox = await page.locator('#map-area').boundingBox();
+      await page.mouse.click(mapBox.x + pinScreenPos.x, mapBox.y + pinScreenPos.y);
+      // 【2026-10-11発見】最初の_stopAutoRotate()呼び出しが、初期fitBoundsの
+      // flyTo完了（'moveend'）より前に実行されると、flyTo完了時に改めて
+      // _scheduleAutoRotateAfterFlight()が走り、500ms後に自動回転が再始動
+      // してしまう（実測：ポップアップの画面座標がx=500→649→595→482→413と
+      // 数百px単位で動き続け、boundingBox()のたびに別の場所を指していた）。
+      // クリック後・ポップアップが開いた直後にもう一度止めることで、
+      // スクリーンショット・ボタン座標の計算を安定させる。
+      await page.evaluate(() => window.__terrainViewForDebug._stopAutoRotate());
+      const popupVisible = await page.locator('.maplibregl-popup').isVisible().catch(() => false);
+      record(`[3D/${label}] ピンをクリックするとポップアップが開く`, popupVisible);
+
+      if (popupVisible) {
+        // 2D側と同じ理由（フェードイン途中の矩形を拾わないため）で少し待つ。
+        await page.waitForTimeout(300);
+        // スクリーンショット直前にもう一度止める（上のコメント参照：
+        // 自動回転の再始動タイミングとの競合を最小化する）。
+        await page.evaluate(() => window.__terrainViewForDebug._stopAutoRotate());
+        const descCount = await page.locator('.maplibregl-popup p:not(.map-popup-fare)').count();
+        record(`[3D/${label}] ポップアップに説明文が無い（名前・運賃・ボタンのみ）`, descCount === 0, `余分な<p>の数: ${descCount}`);
+
+        const popupBox = await page.locator('.maplibregl-popup').boundingBox();
+        if (popupBox) {
+          const popupPath = path.join(screenshotDir, `map-popup-3d-${label}.png`);
+          await page.screenshot({ path: popupPath, clip: popupBox });
+          savedPaths.push(popupPath);
+        }
+
+        // 【2026-10-11】project()は地表の標高を考慮しない平面投影のため、
+        // スポットが密集している場面では、クリック先がpinScreenPos.nameを
+        // 計算した対象とは別の（地形で持ち上がった）ピンに当たることがあった
+        // （実際に不一致を検出）。これは地図上のどのピンを狙うかというテスト側の
+        // 照準のズレであって、実クリック→詳細が開くという経路自体の不具合では
+        // ないため、「実際に開いたポップアップの名前」を期待値として使う
+        // （2DのcheckPopupDetailButtonClickと同じ、自己無矛盾な検証方式）。
+        const actualPinName = await page.locator('.map-popup-title').first().textContent();
+        const btnBox = await page.locator('.popup-detail-btn').first().boundingBox();
+        await page.mouse.click(btnBox.x + btnBox.width / 2, btnBox.y + btnBox.height / 2);
+        const openedDetail = await page.waitForFunction(
+          () => document.getElementById('app-layout')?.getAttribute('data-view') === 'detail',
+          { timeout: 5000 }
+        ).then(() => true).catch(() => false);
+        const heading = openedDetail ? await page.locator('#detail-content h2').textContent() : null;
+        record(
+          `[3D/${label}] 「詳細を見る」を実クリックすると、該当スポットの詳細画面が開く`,
+          openedDetail && heading === actualPinName,
+          `pin="${actualPinName}" / heading="${heading}"`
+        );
+        if (openedDetail) await page.click('.breadcrumb-list-link').catch(() => {});
+      }
+    }
+
+    if (pageErrors.length > 0) record(`[3D/${label}] ポップアップ検証中にページエラーが発生していない`, false, pageErrors.join('; '));
+    await context.close();
+  }
+}
+
+/**
+ * 【2026-10-11、6本目E】「見てきた場所」の足あと表示を検証する。
+ * 高松築港・往復¥1000の1件目「多和神社」は、実データ確認済みで
+ * 「この先へ」を2回たどれる（多和神社→志度寺→玉泉寺）ため、3か所たどる
+ * 検証にこの組み合わせを使う。
+ */
+async function checkBreadcrumbTrail(browser, baseUrl, savedPaths) {
+  console.log('\n=== 「見てきた場所」の足あとの検証（E） ===');
+
+  const breadcrumbItemSelector = '#detail-breadcrumb [data-history-index], #detail-breadcrumb .breadcrumb-current';
+
+  for (const [label, viewport] of Object.entries(VIEWPORTS)) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '高松築港', 1000);
+    if (label === 'sp') await page.click('.tab-btn[data-tab="list"]').catch(() => {});
+
+    // 一覧から1件目を開く：「一覧 ＞ 今の場所」の2項目だけになる
+    await page.locator('.spot-card').first().click();
+    await page.waitForSelector('#detail-content h2', { timeout: 15000 });
+    const names = [await page.locator('#detail-content h2').textContent()];
+
+    let itemCount = await page.locator(breadcrumbItemSelector).count();
+    record(`[${label}] 一覧から直接開いたときは「一覧 ＞ 今の場所」の2項目だけ`, itemCount === 2, `実際 ${itemCount}件`);
+
+    // 「この先へ」を2回たどる（計3か所訪問）
+    for (let step = 0; step < 2; step++) {
+      const onwardCards = page.locator('.onward-card');
+      const hasOnward = await onwardCards.count() > 0;
+      if (!hasOnward) break;
+      await onwardCards.first().click();
+      await page.waitForTimeout(250);
+      names.push(await page.locator('#detail-content h2').textContent());
+    }
+    record(`[${label}] 「この先へ」を2回たどり3か所を訪問できた`, names.length === 3, `${names.length}か所: ${names.join(' → ')}`);
+
+    itemCount = await page.locator(breadcrumbItemSelector).count();
+    record(`[${label}] 3か所たどると足あとが4つ並ぶ（一覧＋3）`, itemCount === 4, `実際 ${itemCount}件`);
+
+    if (label === 'pc') {
+      const bcBox = await page.locator('#detail-breadcrumb').boundingBox();
+      if (bcBox) {
+        const bcPath = path.join(screenshotDir, `breadcrumb-3places-${label}.png`);
+        await page.screenshot({ path: bcPath, clip: bcBox });
+        savedPaths.push(bcPath);
+      }
+    } else {
+      // スマホ幅：中間（一覧の直後〜「1つ前」の手前）が「…」に省略される
+      const middleHidden = await page.evaluate(() => {
+        const collapsed = document.querySelector('.breadcrumb-middle-collapsed');
+        const trail = document.querySelector('.breadcrumb-trail');
+        if (!collapsed || !trail) return null;
+        return getComputedStyle(collapsed).display !== 'none' && !trail.classList.contains('breadcrumb-expanded');
+      });
+      record(`[${label}] スマホ幅では途中の場所が「…」に省略される`, middleHidden === true, `middleHidden=${middleHidden}`);
+
+      const bcBox = await page.locator('#detail-breadcrumb').boundingBox();
+      if (bcBox) {
+        const bcPath = path.join(screenshotDir, `breadcrumb-collapsed-${label}.png`);
+        await page.screenshot({ path: bcPath, clip: bcBox });
+        savedPaths.push(bcPath);
+      }
+
+      await page.click('.breadcrumb-ellipsis').catch(() => {});
+      const expanded = await page.evaluate(() => document.querySelector('.breadcrumb-trail')?.classList.contains('breadcrumb-expanded'));
+      record(`[${label}] 「…」を押すと途中の場所が展開される`, expanded === true);
+    }
+
+    // 2つ以上前（最初に訪問した場所、data-history-index="0"）に戻ると、
+    // そこへ移動し、後ろの足あとが消える
+    await page.click('[data-history-index="0"]');
+    await page.waitForTimeout(300);
+    const headingAfterJump = await page.locator('#detail-content h2').textContent();
+    record(`[${label}] 2つ前に戻ると、その場所の詳細が表示される`, headingAfterJump === names[0], `期待="${names[0]}" 実際="${headingAfterJump}"`);
+
+    itemCount = await page.locator(breadcrumbItemSelector).count();
+    record(`[${label}] 2つ前に戻ると、後ろの足あとが消える（残り2つ：一覧＋今の場所）`, itemCount === 2, `実際 ${itemCount}件`);
+
+    // 戻ったときは、その場所の「この先へ」の位置を見せている。
+    // 【2026-10-11修正】PC（縦1080px）は詳細画面の内容が丸ごと収まることがあり、
+    // scrollIntoView()がそもそも不要（＝見出しが上端に来ない）になる場合がある
+    // ため、「見出しが上端付近にあるか」ではなく「この先へセクションがコンテナの
+    // 表示範囲内に入っているか（スクロールせず見えているか）」を見る方が、
+    // 見せ方の意図（さらにスクロールしなくても見える）に合う。
+    const scrolledToOnward = await page.evaluate(() => {
+      const container = document.getElementById('detail-container');
+      const onward = document.querySelector('.onward-section');
+      if (!container || !onward) return null;
+      const containerRect = container.getBoundingClientRect();
+      const onwardRect = onward.getBoundingClientRect();
+      return onwardRect.top < containerRect.bottom && onwardRect.bottom > containerRect.top;
+    });
+    record(`[${label}] 戻ったとき「この先へ」の位置を見せている（スクロールせず見えている）`, scrolledToOnward === true, `scrolledToOnward=${scrolledToOnward}`);
+
+    // 「一覧」を押すと一覧に戻る
+    await page.click('.breadcrumb-list-link');
+    await page.waitForTimeout(200);
+    const dataView = await page.evaluate(() => document.getElementById('app-layout')?.getAttribute('data-view'));
+    record(`[${label}] 足あとの「一覧」を押すと一覧に戻る`, dataView === 'results', `data-view=${dataView}`);
+
+    await context.close();
+  }
+
+  // --- スマホ本体の戻る操作（popstate）でも、足あとのクリックと同じ動きになること ---
+  {
+    const context = await browser.newContext({ viewport: VIEWPORTS.sp });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '高松築港', 1000);
+    await page.click('.tab-btn[data-tab="list"]').catch(() => {});
+    await page.locator('.spot-card').first().click();
+    await page.waitForSelector('#detail-content h2', { timeout: 15000 });
+    const originalHeading = await page.locator('#detail-content h2').textContent();
+
+    const hasOnward = await page.locator('.onward-card').count() > 0;
+    record('[sp] popstate検証用の「この先へ」候補が見つかる', hasOnward);
+    if (hasOnward) {
+      await page.locator('.onward-card').first().click();
+      await page.waitForTimeout(250);
+      const candidateHeading = await page.locator('#detail-content h2').textContent();
+
+      await page.goBack(); // UIボタンではなく、スマホ本体の戻る操作を模す
+      await page.waitForTimeout(250);
+      const backHeading = await page.locator('#detail-content h2').textContent();
+      record(
+        '[sp] スマホ本体の戻る操作（popstate）でも足あとの「1つ前」に戻る',
+        backHeading === originalHeading && backHeading !== candidateHeading,
+        `候補="${candidateHeading}" → 戻った後="${backHeading}"（元="${originalHeading}"）`
+      );
+      const itemCount = await page.locator(breadcrumbItemSelector).count();
+      record('[sp] popstateで戻った後の足あとは「一覧＋今の場所」の2項目', itemCount === 2, `実際 ${itemCount}件`);
+    }
     await context.close();
   }
 }
@@ -1335,6 +1647,8 @@ async function main() {
     await checkTerrainMapToggle(browser, baseUrl, savedPaths);
     await checkTerrainMapOpensForBaselineStations(browser, baseUrl);
     await checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths);
+    await checkPopupDetailButtonClick(browser, baseUrl, savedPaths);
+    await checkBreadcrumbTrail(browser, baseUrl, savedPaths);
     await checkBudgetSlider(browser, baseUrl, savedPaths);
   } finally {
     await browser.close();

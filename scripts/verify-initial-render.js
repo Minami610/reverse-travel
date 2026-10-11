@@ -215,6 +215,21 @@ function stubMatchMedia(window, matches) {
       return false;
     },
   });
+
+  // 【2026-10-11、6本目E】jsdomはscrollIntoView()を実装していない
+  // （レイアウトエンジンが無いため未実装。verify-layout.jsがPlaywrightを
+  // 使う理由と同じ制約）。showSpotDetail()の「この先への位置に戻る」で
+  // 呼んでおり、無いとTypeErrorでscriptエラーになる。本番のブラウザには
+  // 実装があるため、本番コード側で存在チェックを足す必要はなく、jsdom側の
+  // 環境の欠落をここで補う。実際のピクセル位置はjsdomでは検証できない
+  // （verify-layout.jsのPlaywright検証が担当）ため、「呼ばれた回数」を
+  // window.__scrollIntoViewCallsに記録し、scrollTo:'onward'の分岐が実際に
+  // 実行されたかどうかだけをjsdom側のテストで確認できるようにする。
+  if (typeof window.Element.prototype.scrollIntoView !== 'function') {
+    window.Element.prototype.scrollIntoView = function scrollIntoViewStub() {
+      window.__scrollIntoViewCalls = (window.__scrollIntoViewCalls || 0) + 1;
+    };
+  }
 }
 
 /** #search-form およびその祖先要素をルートまで辿り、display:noneのものを探す */
@@ -1734,15 +1749,24 @@ async function checkSharedSpotBandBypass(html) {
       : `❌ 予算欄が想定と異なります（実際: ¥${budgetValue} / 期待: ¥1800）`
   );
 
-  // 「← 一覧に戻る」で、このスポットを含む一覧に戻れること
-  // （2026-10-10：戻るボタンはhistory.back()→popstateという非同期経路になったため、
-  // 同期チェックではなくwaitForで画面切り替えを待つ必要がある）
-  doc.getElementById('back-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
+  // 【2026-10-11、6本目E】旧「← 一覧に戻る」ボタンは「見てきた場所」の足あと
+  // 表示に置き換わった。共有リンクから開いた詳細は履歴が空のため、足あとは
+  // 「一覧 ＞ その場所」の2項目のみになる（Minami決定：共有リンク・マイリスト
+  // から開いたときは「一覧 ＞ その場所」から始める）。
+  const breadcrumbItemCount = doc.querySelectorAll('#detail-breadcrumb [data-history-index], #detail-breadcrumb .breadcrumb-current').length;
+  const breadcrumbFresh = breadcrumbItemCount === 2;
+  console.log(
+    breadcrumbFresh
+      ? '✅ 共有リンクから開いた詳細の足あとは「一覧 ＞ その場所」の2項目のみでした'
+      : `❌ 共有リンクから開いた詳細の足あとの項目数が想定と異なります（実際 ${breadcrumbItemCount}件、期待2件）`
+  );
+
+  doc.querySelector('.breadcrumb-list-link').dispatchEvent(new window.Event('click', { bubbles: true }));
   const backToList = await waitFor(() => doc.getElementById('app-layout')?.getAttribute('data-view') === 'results', 3000);
   const cardIncluded = !!doc.querySelector(`.spot-card[data-spot-id="${qid}"]`);
   console.log(
     backToList && cardIncluded
-      ? '✅ 「← 一覧に戻る」で、このスポットを含む一覧に戻れました'
+      ? '✅ 足あとの「一覧」で、このスポットを含む一覧に戻れました'
       : `❌ 一覧に戻ってもこのスポットが含まれていません（戻った=${backToList}, 含まれる=${cardIncluded}）`
   );
 
@@ -2581,6 +2605,7 @@ async function checkOnwardNavigation(html) {
   // OS/スマホの戻るジェスチャーを模す。ボタン自体の動作はcheckSharedSpotBandBypass等
   // 別のテストで確認済み）。
   if (detailContainer) detailContainer.scrollTop = 500; // 戻る前にもわざとスクロールさせておく
+  const scrollIntoViewCallsBeforeBack = window.__scrollIntoViewCalls || 0;
   window.history.back(); // 1回目：候補の詳細 → 元のスポットの詳細
   const backToOriginalDetail = await waitFor(() => {
     const view = doc.getElementById('app-layout')?.getAttribute('data-view');
@@ -2591,10 +2616,17 @@ async function checkOnwardNavigation(html) {
     ? '✅ スマホ本体の戻る操作（popstate）1回目：候補の詳細から、一覧にではなく元のスポットの詳細画面に戻りました（履歴スタック）'
     : `❌ popstateでの戻る動作（1回目）が想定と異なります（data-view="${doc.getElementById('app-layout')?.getAttribute('data-view')}", h2="${doc.getElementById('detail-content')?.querySelector('h2')?.textContent}"）`);
 
-  const scrollResetOnBack = detailContainer?.scrollTop === 0;
-  console.log(scrollResetOnBack
-    ? '✅ 戻る操作で前の場所に戻ったときも、詳細画面が一番上から始まります'
-    : `❌ 戻った直後のスクロール位置が一番上ではありません（scrollTop=${detailContainer?.scrollTop}）`);
+  // 【2026-10-11、6本目E、Minami決定で仕様変更】以前は「戻ったときも一番上」
+  // だったが、今回から「前の場所に戻ったら、その場所の『この先へ』の位置まで
+  // スクロールした状態で見せる」に変わった（新しい場所を開いたときだけ一番上）。
+  // jsdomはレイアウトを持たずscrollIntoView()を実際には動かせない（スタブは
+  // no-op、上のstubMatchMedia参照）ため、ピクセル位置そのものではなく
+  // 「scrollIntoView()がonwardセクションに対して呼ばれたか」を見る。
+  // ピクセル単位の実際の見た目はverify-layout.js（Playwright）側で検証する。
+  const onwardScrollCalledOnBack = (window.__scrollIntoViewCalls || 0) > scrollIntoViewCallsBeforeBack;
+  console.log(onwardScrollCalledOnBack
+    ? '✅ 前の場所に戻ったとき、その場所の「この先へ」の位置へのスクロールが実行されます（scrollIntoView呼び出しを確認）'
+    : '❌ 前の場所に戻ったときに「この先へ」の位置へスクロールする処理が実行されませんでした');
 
   window.history.back(); // 2回目：元のスポットの詳細 → 一覧
   const backToList = await waitFor(() => doc.getElementById('app-layout')?.getAttribute('data-view') === 'results', 3000);
@@ -2609,7 +2641,7 @@ async function checkOnwardNavigation(html) {
 
   window.close();
   return countOk && fareFormatOk && blurbFormatOk && movedToCandidate && scrollResetOnForward &&
-    backToOriginalDetail && scrollResetOnBack && backToList && errors.length === 0;
+    backToOriginalDetail && onwardScrollCalledOnBack && backToList && errors.length === 0;
 }
 
 async function main() {
