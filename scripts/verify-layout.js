@@ -946,6 +946,52 @@ async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
   }
 }
 
+/**
+ * 【2026-10-11追加】高松築港で3D表示が毎回失敗する不具合があった
+ * （原因：new Worker('gsi-dem-worker.js')がドキュメント基準でURL解決され
+ * 404・全ワーカー起動失敗・応答待ちのpendingRequestsが永久に残る、の2点）。
+ * 富山駅前（checkTerrainMapToggle）以外の基準駅でも3Dが開けることを確認する。
+ * 公開中の各都道府県から少なくとも1駅（高松築港・琴電琴平＝香川、
+ * 小松駅＝石川）を選び、海沿い・内陸どちらでも開けることを見る
+ * （高松築港は海沿いでDEMタイル数が多く、今回の不具合が最も再現しやすかった）。
+ */
+async function checkTerrainMapOpensForBaselineStations(browser, baseUrl) {
+  console.log('\n=== 各県の基準駅で3D表示が開けるかの検証 ===');
+  const stations = ['高松築港', '琴電琴平', '小松駅'];
+
+  for (const station of stations) {
+    const context = await browser.newContext({ viewport: VIEWPORTS.pc });
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, station, 1000);
+
+    await page.click('#map-dimension-toggle');
+    const became3d = await page.waitForFunction(
+      () => document.getElementById('map-area').classList.contains('mode-3d'),
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
+    record(`[${station}] 切替ボタンで3Dになる`, became3d);
+
+    if (became3d) {
+      const terrainLoaded = await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(20000));
+      record(`[${station}] 地形（標高タイル）の読み込みが完了する`, terrainLoaded);
+      const circleCount = await page.evaluate(() => {
+        const map = window.__terrainMapForDebug;
+        return map ? map.querySourceFeatures('spots').length : -1;
+      });
+      record(`[${station}] 3D地図上にスポットの点が出る`, circleCount > 0, `${circleCount}件`);
+    }
+
+    if (pageErrors.length > 0) record(`[${station}] 3D化中にページエラーが発生していない`, false, pageErrors.join('; '));
+
+    await context.close();
+  }
+}
+
 async function main() {
   assertBundleFresh('verify-layout');
   assertSiteDataFresh('verify-layout');
@@ -1004,6 +1050,7 @@ async function main() {
     }
 
     await checkTerrainMapToggle(browser, baseUrl, savedPaths);
+    await checkTerrainMapOpensForBaselineStations(browser, baseUrl);
     await checkBudgetSlider(browser, baseUrl, savedPaths);
   } finally {
     await browser.close();

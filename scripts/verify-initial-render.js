@@ -149,7 +149,7 @@ function buildExpectedCoverageText() {
   return `現在は${prefectures.join('・')}に対応しています。対応している路線は「出典の詳細」で確認できます。`;
 }
 
-function stubFetch(window, { delayMsForPrefData = 0 } = {}) {
+function stubFetch(window, { delayMsForPrefData = 0, failPaths = [] } = {}) {
   window.fetch = async (url) => {
     const relPath = String(url).replace(/^\//, '');
     // 県データ（data/pref/配下）の読み込み中表示を検証するため、意図的に
@@ -157,6 +157,11 @@ function stubFetch(window, { delayMsForPrefData = 0 } = {}) {
     // 駅一覧（national/配下）は遅延させない＝オートコンプリート自体の検証を妨げない。
     if (delayMsForPrefData > 0 && /^data\/pref\//.test(relPath)) {
       await new Promise((r) => setTimeout(r, delayMsForPrefData));
+    }
+    // 特定ファイルだけをわざと404にする（failPaths、checkOptionalFileFailure参照）。
+    // 必須ファイルと追加機能用ファイルの切り分けを検証するために使う。
+    if (failPaths.some((pattern) => pattern.test(relPath))) {
+      return { ok: false, status: 404, json: async () => { throw new Error(`stubFetch(failPaths指定): ${relPath}`); } };
     }
     const filePath = path.join(docsDir, relPath);
     if (!fs.existsSync(filePath)) {
@@ -772,6 +777,158 @@ async function checkLoadingState(html) {
 
   window.close();
   return showsLoadingMessage && noFailureAlertYet && rendered && errors.length === 0;
+}
+
+/**
+ * 【2026-10-11追加】route-sequences.json（「この先へ」の「同じ路線の先」専用、
+ * 検索そのものには不要）が404でも、検索自体は通ることを確認する。
+ * 実際にdocs/への書き出し漏れで、この1ファイルの404のせいで県まるごと
+ * スキップされ検索が全滅する事故があった（gtfs-loader.jsのloadPrefectures()が
+ * 7ファイルをPromise.allで並行fetchしており、1つでも404だと県ごとcatchされて
+ * いたため）。必須ファイルと追加機能用ファイルを分離した修正の回帰防止。
+ */
+async function checkOptionalFileFailureStillSearches(html) {
+  console.log('\n=== route-sequences.json（追加機能用）が404でも検索が通るかのチェック ===');
+  const errors = [];
+  const alerts = [];
+
+  const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'dangerously', pretendToBeVisual: true });
+  const { window } = dom;
+  stubMatchMedia(window, true);
+  stubFetch(window, { failPaths: [/route-sequences\.json$/] });
+  window.alert = (msg) => alerts.push(msg);
+  window.addEventListener('error', (e) => errors.push(e.error ? (e.error.stack || e.error.message) : e.message));
+
+  await new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 50);
+    if (window.document.readyState === 'complete') done();
+    else window.addEventListener('load', done);
+  });
+  const doc = window.document;
+
+  const item = await waitForSuggestion(doc, window, '高松築港', '高松築港');
+  if (!item) {
+    console.log('❌ 検証用の出発駅「高松築港」の候補が見つかりません');
+    window.close();
+    return false;
+  }
+  item.dispatchEvent(new window.Event('click', { bubbles: true }));
+  doc.getElementById('budget-input').value = '1000';
+  doc.getElementById('search-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+
+  const rendered = await waitFor(
+    () => doc.getElementById('results-list').querySelectorAll('.spot-card').length > 0,
+    10000
+  );
+  const cardCount = doc.getElementById('results-list').querySelectorAll('.spot-card').length;
+  console.log(
+    rendered
+      ? `✅ route-sequences.jsonが404でも検索が通り、カードが表示されました（${cardCount}件）`
+      : '❌ route-sequences.jsonが404のとき検索結果が表示されませんでした'
+  );
+  console.log(
+    alerts.length === 0
+      ? '✅ route-sequences.json失敗時にアラートは出ていません'
+      : `❌ アラートが出ました: ${JSON.stringify(alerts)}`
+  );
+
+  if (errors.length > 0) {
+    console.log('⚠️  ページ実行中に発生したエラー:');
+    errors.forEach((e) => console.log('  - ' + e));
+  }
+
+  window.close();
+  return rendered && alerts.length === 0 && errors.length === 0;
+}
+
+/**
+ * 【2026-10-11追加】検索に必須のファイル（例: stations.json）が404のとき、
+ * ブラウザのalert()を出さず、結果欄に穏やかな文言＋再試行ボタンを出すことを
+ * 確認する（Minami指示：alertをやめる。以前はalert('データの読み込みに
+ * 失敗しました。ページを再読み込みしてください。')を出していた）。
+ * 再試行ボタンを押すと（必須ファイルの404が解消していれば）検索が成功することも
+ * あわせて確認する。
+ */
+async function checkRequiredFileFailureShowsGentleMessage(html) {
+  console.log('\n=== 必須ファイルが404のときアラートを出さず穏やかな文言＋再試行ボタンを出すかのチェック ===');
+  const errors = [];
+  const alerts = [];
+  let failStations = true;
+
+  const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'dangerously', pretendToBeVisual: true });
+  const { window } = dom;
+  stubMatchMedia(window, true);
+  window.fetch = async (url) => {
+    const relPath = String(url).replace(/^\//, '');
+    if (failStations && /^data\/pref\/.*\/stations\.json$/.test(relPath)) {
+      return { ok: false, status: 404, json: async () => { throw new Error(`stubFetch(わざと404): ${relPath}`); } };
+    }
+    const filePath = path.join(docsDir, relPath);
+    if (!fs.existsSync(filePath)) {
+      return { ok: false, status: 404, json: async () => { throw new Error(`stubFetch: ${relPath} not found`); } };
+    }
+    const text = fs.readFileSync(filePath, 'utf-8');
+    return { ok: true, status: 200, json: async () => JSON.parse(text) };
+  };
+  window.alert = (msg) => alerts.push(msg);
+  window.addEventListener('error', (e) => errors.push(e.error ? (e.error.stack || e.error.message) : e.message));
+
+  await new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 50);
+    if (window.document.readyState === 'complete') done();
+    else window.addEventListener('load', done);
+  });
+  const doc = window.document;
+
+  const item = await waitForSuggestion(doc, window, '高松築港', '高松築港');
+  if (!item) {
+    console.log('❌ 検証用の出発駅「高松築港」の候補が見つかりません');
+    window.close();
+    return false;
+  }
+  item.dispatchEvent(new window.Event('click', { bubbles: true }));
+  doc.getElementById('budget-input').value = '1000';
+  doc.getElementById('search-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+
+  const gentleMessageShown = await waitFor(
+    () => /うまく読み込めませんでした/.test(doc.getElementById('results-list').textContent),
+    10000
+  );
+  const retryBtn = doc.querySelector('.search-retry-btn');
+  console.log(
+    gentleMessageShown && retryBtn
+      ? '✅ 必須ファイル404時、結果欄に穏やかな文言と再試行ボタンが表示されました'
+      : `❌ 想定と異なります（文言表示=${gentleMessageShown}, 再試行ボタン=${!!retryBtn}）`
+  );
+  console.log(
+    alerts.length === 0
+      ? '✅ 必須ファイル404時もアラートは出ていません'
+      : `❌ アラートが出ました: ${JSON.stringify(alerts)}`
+  );
+
+  // 再試行：404を解消してからボタンを押すと検索が成功することを確認する
+  let retrySucceeded = false;
+  if (retryBtn) {
+    failStations = false;
+    retryBtn.dispatchEvent(new window.Event('click', { bubbles: true }));
+    retrySucceeded = await waitFor(
+      () => doc.getElementById('results-list').querySelectorAll('.spot-card').length > 0,
+      10000
+    );
+  }
+  console.log(
+    retrySucceeded
+      ? '✅ 再試行ボタンを押すと（404解消後）検索が成功しました'
+      : '❌ 再試行ボタンを押しても検索が成功しませんでした'
+  );
+
+  if (errors.length > 0) {
+    console.log('⚠️  ページ実行中に発生したエラー:');
+    errors.forEach((e) => console.log('  - ' + e));
+  }
+
+  window.close();
+  return gentleMessageShown && !!retryBtn && alerts.length === 0 && retrySucceeded && errors.length === 0;
 }
 
 /**
@@ -2451,6 +2608,8 @@ async function main() {
   const mobileOk = await checkVisible(html, false, 'スマホ幅相当');
   const cardsOk = await checkResultCards(html);
   const loadingStateOk = await checkLoadingState(html);
+  const optionalFileFailureOk = await checkOptionalFileFailureStillSearches(html);
+  const requiredFileFailureGentleOk = await checkRequiredFileFailureShowsGentleMessage(html);
   const transferDisplayOk = await checkTransferDisplay(html);
   const spotLevelBandingOk = await checkSpotLevelBanding(html);
   const departureMismatchOk = await checkDepartureMismatchGuard(html);
@@ -2472,7 +2631,8 @@ async function main() {
   const gsiDemProtocolMathOk = await checkGsiDemProtocolMath();
 
   if (
-    publishedOk && desktopOk && mobileOk && cardsOk && loadingStateOk && transferDisplayOk &&
+    publishedOk && desktopOk && mobileOk && cardsOk && loadingStateOk &&
+    optionalFileFailureOk && requiredFileFailureGentleOk && transferDisplayOk &&
     spotLevelBandingOk && departureMismatchOk && partialBandMessageOk && partialBandMessageUozuEkiOk &&
     searchButtonStateOk && favoritesStorageOk && favoriteCardToggleOk && sharedSpotBandBypassOk &&
     sharedSpotSidMismatchOk && sharedSpotAmbiguousNameOk && sharedListMixedDepartureOk &&
