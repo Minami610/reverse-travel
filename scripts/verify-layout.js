@@ -837,14 +837,42 @@ async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
         JSON.stringify(overlapInfo)
       );
 
-      // 立山連峰が見える向き（Minami指示：pitch70前後・ズーム10前後。市街地〜
-      // 山地の中間を中心にすると稜線がはっきり見えることを調査で確認済み）
+      // 立山連峰が見える向き（Minami指示：富山駅前から南東・pitch70前後・
+      // ズーム10前後）。bearingはCoworkの指摘を受けて実機でbearing=0,45,...,315を
+      // 振り、画面上部（遠方）の地点のqueryTerrainElevationが最も高くなる値を
+      // 確認した結果、130（富山湾を背にして立山連峰側を向く）に修正した
+      // （旧220は富山湾＝北側が奥に見えてしまっていた）。
       await page.evaluate(() => {
-        window.__terrainMapForDebug.jumpTo({ center: [137.40, 36.63], pitch: 72, zoom: 10.4, bearing: 220 });
+        window.__terrainMapForDebug.jumpTo({ center: [137.2133, 36.7004], pitch: 70, zoom: 10, bearing: 130 });
       });
       const terrainLoaded2 = await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(20000));
       record(`[${label}] 立山方向への移動後も地形の読み込みが完了する`, terrainLoaded2);
       await page.waitForTimeout(300);
+
+      // 画面上部（奥）に標高2000m以上の地点が入っていることを確認する
+      // （Minami指示：数字で確認する）。PC（横長）とsp（縦長）でアスペクト比が
+      // 大きく異なり、1点だけだと同じfrac指定でも実際に遠景が指す地点がずれる
+      // （実機でpcだけ標高0mになる例を確認）ため、画面上部の複数の高さで
+      // 調べて最大値を見る。
+      const highPointElevation = await page.evaluate(() => {
+        const map = window.__terrainMapForDebug;
+        const canvas = map.getCanvas();
+        const w = canvas.width / (window.devicePixelRatio || 1);
+        const h = canvas.height / (window.devicePixelRatio || 1);
+        let max = null;
+        for (const frac of [0.02, 0.05, 0.08, 0.12, 0.16]) {
+          const pt = map.unproject([w / 2, h * frac]);
+          const elev = map.queryTerrainElevation([pt.lng, pt.lat]);
+          if (elev !== null && (max === null || elev > max)) max = elev;
+        }
+        return max;
+      });
+      record(
+        `[${label}] 立山方向の画面に標高2000m以上の地点が入っている`,
+        highPointElevation !== null && highPointElevation >= 2000,
+        `画面上部付近の最高標高: ${highPointElevation}m`
+      );
+
       const tateyamaPath = path.join(screenshotDir, `terrain-3d-tateyama-${label}.png`);
       await page.locator('#map-area').screenshot({ path: tateyamaPath });
       savedPaths.push(tateyamaPath);

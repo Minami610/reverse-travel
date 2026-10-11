@@ -152,10 +152,14 @@ export class TerrainMapView {
             type: 'hillshade',
             source: DEM_SOURCE_ID,
             paint: {
-              'hillshade-exaggeration': 0.6,
+              // 【2026-10-11修正】陰影が強く、地図全体が灰色にくすんで見えると
+              // Coworkがスクリーンショットで指摘（exaggeration0.6・影#3a3a2aは
+              // 平地の地理院地図の色まで暗く潰していた）。誇張を0.3に弱め、
+              // 影の色も彩度を落として地図の色を邪魔しないようにした。
+              'hillshade-exaggeration': 0.3,
               'hillshade-illumination-direction': 315,
-              'hillshade-shadow-color': '#3a3a2a',
-              'hillshade-highlight-color': '#fff8e0',
+              'hillshade-shadow-color': '#6b6b5f',
+              'hillshade-highlight-color': '#fffdf5',
             },
           },
           {
