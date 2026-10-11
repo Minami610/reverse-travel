@@ -2550,6 +2550,13 @@ async function checkOnwardNavigation(html) {
     : `❌ 一言の文言が想定外です（${blurbTexts.join(' / ')}）`);
 
   const candidateName = onwardCards[0].querySelector('.onward-name')?.textContent?.trim();
+  // 【2026-10-11、5本目】スクロール位置の回帰チェック用に、遷移前にわざと
+  // 詳細欄を下までスクロールさせておく（Minami指示：「この先へ」で別の場所を
+  // 開いたら一番上から見せる）。jsdomはレイアウトを計算しないため、scrollTopは
+  // 単純な書き込み可能プロパティとして扱える（実ブラウザのスクロール挙動の
+  // 再現ではなく、「遷移時にscrollTop=0を代入しているか」のロジックを見る）。
+  const detailContainer = doc.getElementById('detail-container');
+  if (detailContainer) detailContainer.scrollTop = 500;
   onwardCards[0].dispatchEvent(new window.Event('click', { bubbles: true }));
   const movedToCandidate = await waitFor(
     () => {
@@ -2563,11 +2570,17 @@ async function checkOnwardNavigation(html) {
     ? `✅ 「この先へ」カードをクリックすると候補の詳細画面に切り替わりました（"${candidateHeading}"）`
     : `❌ 候補クリックでの詳細画面の切り替えに失敗しました（見出し="${candidateHeading}"）`);
 
+  const scrollResetOnForward = detailContainer?.scrollTop === 0;
+  console.log(scrollResetOnForward
+    ? '✅ 「この先へ」で新しい場所を開いたとき、詳細画面が一番上から始まります'
+    : `❌ 「この先へ」で開いた直後のスクロール位置が一番上ではありません（scrollTop=${detailContainer?.scrollTop}）`);
+
   // スマホ本体の戻る操作（popstate）だけで、「この先へ」で開いた候補の詳細 →
   // 1つ前の詳細 → 一覧の順に戻れること（Minami指示：前回の指示で抜けていたテスト。
   // UIの「← 戻る」ボタンには一切触れず、window.history.back()を直接呼んで
   // OS/スマホの戻るジェスチャーを模す。ボタン自体の動作はcheckSharedSpotBandBypass等
   // 別のテストで確認済み）。
+  if (detailContainer) detailContainer.scrollTop = 500; // 戻る前にもわざとスクロールさせておく
   window.history.back(); // 1回目：候補の詳細 → 元のスポットの詳細
   const backToOriginalDetail = await waitFor(() => {
     const view = doc.getElementById('app-layout')?.getAttribute('data-view');
@@ -2577,6 +2590,11 @@ async function checkOnwardNavigation(html) {
   console.log(backToOriginalDetail
     ? '✅ スマホ本体の戻る操作（popstate）1回目：候補の詳細から、一覧にではなく元のスポットの詳細画面に戻りました（履歴スタック）'
     : `❌ popstateでの戻る動作（1回目）が想定と異なります（data-view="${doc.getElementById('app-layout')?.getAttribute('data-view')}", h2="${doc.getElementById('detail-content')?.querySelector('h2')?.textContent}"）`);
+
+  const scrollResetOnBack = detailContainer?.scrollTop === 0;
+  console.log(scrollResetOnBack
+    ? '✅ 戻る操作で前の場所に戻ったときも、詳細画面が一番上から始まります'
+    : `❌ 戻った直後のスクロール位置が一番上ではありません（scrollTop=${detailContainer?.scrollTop}）`);
 
   window.history.back(); // 2回目：元のスポットの詳細 → 一覧
   const backToList = await waitFor(() => doc.getElementById('app-layout')?.getAttribute('data-view') === 'results', 3000);
@@ -2590,7 +2608,8 @@ async function checkOnwardNavigation(html) {
   }
 
   window.close();
-  return countOk && fareFormatOk && blurbFormatOk && movedToCandidate && backToOriginalDetail && backToList && errors.length === 0;
+  return countOk && fareFormatOk && blurbFormatOk && movedToCandidate && scrollResetOnForward &&
+    backToOriginalDetail && scrollResetOnBack && backToList && errors.length === 0;
 }
 
 async function main() {

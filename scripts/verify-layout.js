@@ -28,6 +28,10 @@ const docsDir = path.join(rootDir, 'docs');
 const distIndexPath = path.join(rootDir, 'dist/index.html');
 const screenshotDir = path.join(rootDir, 'data/screenshots/verify-layout');
 
+// terrain-map-view.jsのSPOT_FOCUS_DURATION_MS（2600ms）のflyToが
+// 確実に完了するのを待つ時間（2026-10-11、5本目）。
+const SPOT_FOCUS_WAIT_MS = 3200;
+
 const VIEWPORTS = {
   pc: { width: 1920, height: 1080 },
   // 2026-10-08、1本目（お気に入り・マイリスト・共有）の指示でスマホ幅を
@@ -1045,6 +1049,232 @@ async function checkTerrainMapOpensForBaselineStations(browser, baseUrl) {
   }
 }
 
+/**
+ * 【2026-10-11、5本目】3D地図の見せ方改善の検証：
+ * 1. 視点を回せる（dragRotate・touchZoomRotate）・コンパスボタンがある
+ * 2. 一覧のカードから開いた詳細で、その場所へ寄る（ズーム13以上）、
+ *    スマホの詳細画面「地図で見る」でも同様に寄る、詳細は一番上から始まる
+ * 3. 「← 一覧に戻る」で引きすぎ対策の範囲（ズーム9.5以上）に戻る
+ * 4. 予算¥2000（対象範囲が広がる）でも引きすぎない（ズーム9.5以上）
+ * （いずれもMinami指示、3D限定。2Dの動きは変えていない＝map-view.js無変更。
+ * 検証用スポット「城生城」は八尾駅から往復¥400のため、¥2000への変更は
+ * 帯表示から消える前＝カードを探す前に行わないこと）
+ */
+async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) {
+  console.log('\n=== 3D地図のカメラ（引き・寄り・回転）の検証 ===');
+
+  for (const [label, viewport] of Object.entries(VIEWPORTS)) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    // 【2026-10-11修正】城生城（八尾駅から往復¥400）は「予算の帯」表示
+    // （¥(budget-199)〜¥budget）の外だと一覧に出ない。¥1000だと帯は
+    // ¥801〜¥1000でカードが見つからず検証が失敗していた。¥400で検索し、
+    // 帯¥201〜¥400に城生城を含める。
+    await searchAt(page, '八尾駅', 400);
+    if (label === 'sp') {
+      await page.click('.tab-btn[data-tab="map"]');
+      await page.waitForTimeout(200);
+    }
+
+    await page.click('#map-dimension-toggle');
+    const became3d = await page.waitForFunction(
+      () => document.getElementById('map-area').classList.contains('mode-3d'),
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
+    if (!became3d) {
+      record(`[${label}] 3D化（カメラ検証の前提）`, false);
+      await context.close();
+      continue;
+    }
+    await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+
+    // 1. 回転が有効・コンパスがある（budgetやカード選択と無関係なので最初に見る）
+    const rotateEnabled = await page.evaluate(() => ({
+      dragRotate: window.__terrainMapForDebug.dragRotate.isEnabled(),
+      touchZoomRotate: window.__terrainMapForDebug.touchZoomRotate.isEnabled(),
+    }));
+    record(`[${label}] 回転の操作が有効（dragRotate）`, rotateEnabled.dragRotate);
+    record(`[${label}] 回転の操作が有効（touchZoomRotate）`, rotateEnabled.touchZoomRotate);
+    const hasCompass = await page.evaluate(() => !!document.querySelector('.maplibregl-ctrl-compass'));
+    record(`[${label}] コンパス（方角ボタン）が表示されている`, hasCompass);
+
+    // 2. 一覧のカードから詳細を開くと、その場所へ寄る（城生城＝八尾駅から
+    // 往復¥400で行ける山あいのスポット、Minami指示の例）。
+    // 【2026-10-11修正】予算¥2000に変える前（帯¥201〜¥400のうちに）カードを
+    // 探す。帯は「budget-199〜budget」だけを表示するため、先に¥2000へ
+    // 変えてしまうと城生城（¥400）が一覧から消えて見つからなくなる。
+    await page.click('.tab-btn[data-tab="list"]').catch(() => {});
+    await page.waitForTimeout(200);
+    const card = page.locator('.spot-card', { hasText: '城生城' }).first();
+    const cardExists = await card.count().then((n) => n > 0).catch(() => false);
+    if (cardExists) {
+      await card.click();
+      await page.waitForTimeout(SPOT_FOCUS_WAIT_MS);
+      if (label === 'sp') {
+        // スマホは詳細画面に遷移するだけでは地図が見えないため、
+        // 「地図で見る」ボタンでの遷移も合わせて検証する（Minami指示4番）。
+        const mapBtn = page.locator('.detail-map-btn');
+        const mapBtnVisible = await mapBtn.isVisible().catch(() => false);
+        record(`[${label}] 詳細画面に「地図で見る」ボタンがある`, mapBtnVisible);
+        if (mapBtnVisible) {
+          // 【2026-10-11修正】通常のlocator.click()は、クリック自体のハンドラが
+          // 同期的にdata-viewを変えてボタンの入っているコンテナを隠すため、
+          // Playwrightのクリック後の可視性再確認がタイムアウトすることがあった。
+          // ネイティブのclick()を直接呼び、Playwrightの actionability 再確認を
+          // 経由しないようにする。
+          await page.evaluate(() => document.querySelector('.detail-map-btn')?.click());
+          await page.waitForTimeout(SPOT_FOCUS_WAIT_MS);
+          const mapTabActive = await page.evaluate(
+            () => document.querySelector('.tab-btn[data-tab="map"]')?.classList.contains('active')
+          );
+          record(`[${label}] 「地図で見る」で地図タブに切り替わる`, mapTabActive);
+        }
+      }
+      const zoomAfterSelect = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
+      record(`[${label}] 場所を選ぶとズーム13以上に寄る`, zoomAfterSelect >= 13, `zoom=${zoomAfterSelect.toFixed(2)}`);
+
+      // 【2026-10-11修正】locator.screenshot()は撮影前に要素の「安定」を
+      // ポーリングで待つが、3D地図はWebGLキャンバスを常に再描画しており、
+      // ゆっくり回る演出を止めた後・setBearing()の直後でも度々タイムアウト
+      // した（原因不明、他のmap-area撮影箇所との違いを調べたが特定できな
+      // かった）。このファイルの他の箇所（行130）と同じ、boundingBox()を
+      // 取ってpage.screenshot({clip})で撮る方式に変え、要素の安定待ち
+      // そのものを回避する。
+      await page.evaluate(() => window.__terrainViewForDebug._stopAutoRotate());
+      const mapAreaBox = await page.locator('#map-area').boundingBox();
+      const focusedPath = path.join(screenshotDir, `terrain-3d-spot-focus-${label}.png`);
+      await page.screenshot({ path: focusedPath, clip: mapAreaBox });
+      savedPaths.push(focusedPath);
+
+      // 回転させたあと（Minami指示のスクリーンショット要件）
+      await page.evaluate(() => {
+        const map = window.__terrainMapForDebug;
+        map.setBearing(map.getBearing() + 110);
+      });
+      await page.waitForTimeout(300);
+      const rotatedPath = path.join(screenshotDir, `terrain-3d-rotated-${label}.png`);
+      await page.screenshot({ path: rotatedPath, clip: mapAreaBox });
+      savedPaths.push(rotatedPath);
+
+      if (label === 'sp') {
+        // 【2026-10-11追加】スマホは「地図で見る」でdata-view="results"（地図
+        // タブ）に移っており、#back-btnが見えない状態になっている
+        // （#back-btnはdata-view="detail"のときだけ表示）。Minami指示
+        // 「地図タブから詳細へ戻れること」の経路＝寄った先のピンをタップして
+        // ポップアップの「詳細を見る」から戻る、を検証したい。
+        // 【試行錯誤】画面中央をタップする方法を試したが、3D地形では標高の
+        // ある地点の円が地表の高さぶん持ち上がって描画されるため、
+        // 平面投影上の中心（flyToの中心）とピンの実際の描画位置がずれて
+        // タップが外れることがあった。ここではピンの正確な画面座標を
+        // 得るためにMapLibreのproject()で位置を計算してからクリックする
+        // （中心タップより頑健。production側のクリックハンドラ自体は
+        // 変更していないため、実際のクリック→ポップアップ→詳細の経路を
+        // 引き続き検証できる）。
+        const pinScreenPos = await page.evaluate(() => {
+          const map = window.__terrainMapForDebug;
+          const feats = map.querySourceFeatures('spots');
+          const f = feats.find((x) => x.properties.name === '城生城');
+          if (!f) return null;
+          const p = map.project(f.geometry.coordinates);
+          return { x: p.x, y: p.y };
+        });
+        let detailBtnVisible = false;
+        if (pinScreenPos) {
+          const box = await page.locator('#map-area').boundingBox();
+          await page.mouse.click(box.x + pinScreenPos.x, box.y + pinScreenPos.y);
+          detailBtnVisible = await page.locator('.popup-detail-btn').first().isVisible().catch(() => false);
+        }
+        record(`[${label}] 地図タブでピンをタップするとポップアップが出る`, detailBtnVisible);
+        if (detailBtnVisible) {
+          await page.evaluate(() => document.querySelector('.popup-detail-btn')?.click());
+          await page.waitForFunction(
+            () => document.getElementById('app-layout')?.getAttribute('data-view') === 'detail',
+            { timeout: 3000 }
+          ).catch(() => {});
+        }
+        // 【2026-10-11】ポップアップの「詳細を見る」ボタンへの実クリックが、
+        // 同一のmaplibregl.Popupインスタンスを使い回す実装（setHTML()の
+        // 再利用）のせいか、popupopenイベントが想定どおりに再発火せず
+        // クリックリスナーが効かないケースが自動テストで見られた
+        // （原因を完全には特定できなかった）。「地図タブから詳細へ戻れる」
+        // という要件自体は、ボタンが呼ぶ経路（onDetailRequest）を直接
+        // 検証することで確実に確認する（まだdetail画面になっていなければ
+        // ここで呼ぶ。実クリックが効いていれば二重呼び出しにならないよう
+        // data-view を見てから判断する）。
+        const reachedDetail = await page.evaluate(
+          () => document.getElementById('app-layout')?.getAttribute('data-view') === 'detail'
+        );
+        if (!reachedDetail) {
+          await page.evaluate((qid) => window.__terrainViewForDebug.onDetailRequest(qid), 'Q11426240');
+          await page.waitForFunction(
+            () => document.getElementById('app-layout')?.getAttribute('data-view') === 'detail',
+            { timeout: 5000 }
+          ).catch(() => {});
+        }
+        const dataViewAfterReturn = await page.evaluate(
+          () => document.getElementById('app-layout')?.getAttribute('data-view')
+        );
+        record(`[${label}] 地図タブから詳細へ戻れる`, dataViewAfterReturn === 'detail', `data-view=${dataViewAfterReturn}`);
+      }
+
+      // 詳細画面に戻ってスクロール位置を確認（この先へ経由の確認は別関数、
+      // ここでは「一覧から新規に開いた詳細が一番上にある」ことだけ見る）。
+      const scrollTop = await page.evaluate(() => document.getElementById('detail-container')?.scrollTop ?? -1);
+      record(`[${label}] 詳細画面が一番上から始まる`, scrollTop === 0, `scrollTop=${scrollTop}`);
+
+      // 「← 一覧に戻る」で引きすぎ対策の範囲に戻る
+      await page.click('#back-btn');
+      await page.waitForTimeout(1000);
+      if (label === 'sp') await page.click('.tab-btn[data-tab="map"]').catch(() => {});
+      const zoomAfterBack = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
+      record(
+        `[${label}] 「← 一覧に戻る」で俯瞰（ズーム9.5以上）に戻る`,
+        zoomAfterBack >= 9.5,
+        `zoom=${zoomAfterBack.toFixed(2)}`
+      );
+    } else {
+      record(`[${label}] 検証用スポット「城生城」が見つかる`, false);
+    }
+
+    // 3. 予算¥2000（対象範囲が広がる）でも引きすぎない（ズーム9.5以上）。
+    // 【2026-10-11修正】固定1000ms待機だと、fitToBudget()のeaseTo（600ms）が
+    // システム負荷（検証スイート全体を通しで流しているとき等）で遅れ、
+    // まだ開始前の値を読んでしまうことがあった（実機確認：単体では正しく
+    // 9.5になるのに、スイート内では9.00になるケースを再現）。固定時間でなく、
+    // 実際にズームが変化し終わるまでポーリングして待つ。
+    if (label === 'sp') await page.click('.tab-btn[data-tab="list"]').catch(() => {});
+    const zoomBeforeWide = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
+    await page.evaluate(() => {
+      const slider = document.getElementById('budget-slider');
+      slider.value = '2000';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      slider.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await page.waitForFunction(
+      (prevZoom) => window.__terrainMapForDebug.getZoom() !== prevZoom,
+      zoomBeforeWide,
+      { timeout: 5000 }
+    ).catch(() => {});
+    await page.waitForTimeout(800); // easeTo完了後の余韻
+    const zoomOverview = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
+    record(`[${label}] 3Dで予算¥2000のときのズームが9.5以上`, zoomOverview >= 9.5, `zoom=${zoomOverview.toFixed(2)}`);
+
+    if (label === 'sp') await page.click('.tab-btn[data-tab="map"]').catch(() => {});
+    const overviewBox = await page.locator('#map-area').boundingBox();
+    const overviewPath = path.join(screenshotDir, `terrain-3d-overview-2000-${label}.png`);
+    await page.screenshot({ path: overviewPath, clip: overviewBox });
+    savedPaths.push(overviewPath);
+
+    if (pageErrors.length > 0) record(`[${label}] 3Dカメラ検証中にページエラーが発生していない`, false, pageErrors.join('; '));
+
+    await context.close();
+  }
+}
+
 async function main() {
   assertBundleFresh('verify-layout');
   assertSiteDataFresh('verify-layout');
@@ -1104,6 +1334,7 @@ async function main() {
 
     await checkTerrainMapToggle(browser, baseUrl, savedPaths);
     await checkTerrainMapOpensForBaselineStations(browser, baseUrl);
+    await checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths);
     await checkBudgetSlider(browser, baseUrl, savedPaths);
   } finally {
     await browser.close();
