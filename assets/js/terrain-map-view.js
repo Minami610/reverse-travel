@@ -382,27 +382,76 @@ export class TerrainMapView {
    * 標高タイル（gsi-dem）の、現在の表示範囲に必要なタイルの読み込みが
    * 完了するまで待つ（2026-10-10、Minami指摘：地形が立ち上がる前に
    * スクリーンショットを撮ってしまい、平らなままかすみがかかったように
-   * 見えていた）。'idle'（全タイル・周辺余白まで含めて待つ）より直接的で
-   * 速く解決する、isSourceLoaded()＋'sourcedata'イベントを使う。
+   * 見えていた）。
+   *
+   * 【2026-10-11修正】「地形読み込み完了」が「平らな地図」より速く終わる
+   * （setTerrain()は平らな地図のload後にしか呼ばないため、原理的に
+   * 起こり得ない）という矛盾をMinamiが指摘。原因を推測せず実機トレースで
+   * 確認したところ、以下が判明した：
+   * - MapLibreはdemタイルを1回の要求にまとめず、複数バッチに分けて要求する
+   *   （実測：富山駅前で最初のバッチ約13枚が片付いた時点でisSourceLoaded()が
+   *   一瞬trueになるが、44ms後には次のバッチの要求（'dataloading'）が始まり、
+   *   最終的に計34枚・3つ以上のバッチに分かれて1秒以上かけて完了していた）。
+   * - 旧実装は最初の'sourcedata'（isSourceLoaded===true）だけを見て即resolve
+   *   していたため、最初のバッチだけで「完了」と誤判定していた。
+   * - Minami指摘の「demソース未追加／タイル0枚要求時点でtrueになっている」説も
+   *   確認したが、これは実際には起きていなかった（最初にtrueになった時点で
+   *   既に12〜13枚が要求・変換済みだった）。「タイルを1枚以上要求済み」を
+   *   条件に加えるだけでは、この多バッチ問題は防げない（trueになる時点で
+   *   既に1枚以上要求済みのため、条件を満たしてしまう）。
+   * 対策：isSourceLoaded()がtrueになってから一定時間（settleMs）、新しい
+   * タイル要求（'dataloading'）が来ないことを確認してから完了とする
+   * （新しいバッチが来ればsettleタイマーを取り消し、再度仕切り直す）。
+   * これにより、Minamiが挙げた3条件（demソース追加済み／タイル1枚以上
+   * 要求済み／isSourceLoaded()==true）に加えて「それ以上バッチが来ない」
+   * という第4の条件を満たした時点で初めて完了とする。
    * @param {number} [timeoutMs]
+   * @param {number} [settleMs] - isSourceLoaded()==true後、新規タイル要求が
+   *   来ないことを確認する猶予（実測の最短バッチ間隔44msに対し十分な余裕を見た）
    * @returns {Promise<boolean>} 読み込み完了ならtrue、タイムアウトならfalse
    */
-  waitForTerrainLoaded(timeoutMs = 20000) {
+  waitForTerrainLoaded(timeoutMs = 20000, settleMs = 400) {
     if (!this.map) return Promise.resolve(false);
-    if (this.map.isSourceLoaded(DEM_SOURCE_ID)) return Promise.resolve(true);
     return new Promise((resolve) => {
-      const onData = (e) => {
-        if (e.sourceId !== DEM_SOURCE_ID) return;
-        if (!this.map.isSourceLoaded(DEM_SOURCE_ID)) return;
+      let settleTimer = null;
+      const finish = (result) => {
         clearTimeout(timeout);
-        this.map.off('sourcedata', onData);
-        resolve(true);
+        if (settleTimer) clearTimeout(settleTimer);
+        this.map.off('sourcedata', onSourceData);
+        this.map.off('dataloading', onDataLoading);
+        resolve(result);
       };
-      const timeout = setTimeout(() => {
-        this.map.off('sourcedata', onData);
-        resolve(false);
-      }, timeoutMs);
-      this.map.on('sourcedata', onData);
+      const timeout = setTimeout(() => finish(false), timeoutMs);
+      const scheduleSettleCheck = () => {
+        if (settleTimer) clearTimeout(settleTimer);
+        settleTimer = setTimeout(() => {
+          settleTimer = null;
+          if (this.map.isSourceLoaded(DEM_SOURCE_ID)) finish(true);
+        }, settleMs);
+      };
+      const onDataLoading = (e) => {
+        if (e.sourceId !== DEM_SOURCE_ID) return;
+        // 新しいタイルの読み込みが始まった＝まだ完了していない。保留中の
+        // settle確認があれば取り消す（新バッチの到着で仕切り直す）。
+        if (settleTimer) {
+          clearTimeout(settleTimer);
+          settleTimer = null;
+        }
+      };
+      const onSourceData = (e) => {
+        if (e.sourceId !== DEM_SOURCE_ID) return;
+        if (this.map.isSourceLoaded(DEM_SOURCE_ID)) scheduleSettleCheck();
+        else if (settleTimer) {
+          clearTimeout(settleTimer);
+          settleTimer = null;
+        }
+      };
+      this.map.on('dataloading', onDataLoading);
+      this.map.on('sourcedata', onSourceData);
+      // 呼び出し時点で既にtrueの場合も、新規バッチが来ないかsettle確認する
+      // （タイルが0枚要求の時点でtrueになっている場合も、直後に要求が始まれば
+      // onDataLoadingがsettleタイマーを取り消すため、正しく未完了扱いになる）。
+      if (this.map.isSourceLoaded(DEM_SOURCE_ID)) scheduleSettleCheck();
     });
   }
 

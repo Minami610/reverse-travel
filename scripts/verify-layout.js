@@ -806,7 +806,26 @@ async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
       await page.waitForTimeout(200);
     }
 
+    // 【2026-10-11追加】「地形読み込み完了」が「平らな地図」より速く終わる
+    // （setTerrain()は平らな地図のload後にしか呼ばないため、原理的に起こり
+    // 得ない）矛盾をMinamiが指摘。原因はwaitForTerrainLoaded()がMapLibreの
+    // 複数バッチ読み込みの最初のバッチだけで完了と誤判定していたこと
+    // （terrain-map-view.js参照、settleベースの待機に修正済み）。クリック直後、
+    // flat map load（ensureMap()が解決する基準）とterrain load（修正後の
+    // waitForTerrainLoaded()が解決する基準）の両方のタイムスタンプを記録し、
+    // 「地形 >= 平らな地図」の順序が常に成り立つことを回帰チェックする。
     await page.click('#map-dimension-toggle');
+    await page.waitForFunction(() => !!window.__terrainMapForDebug, { timeout: 10000 }).catch(() => {});
+    await page.evaluate(() => {
+      window.__perfTiming = {};
+      if (!window.__terrainMapForDebug) return;
+      window.__terrainMapForDebug.once('load', () => { window.__perfTiming.flatMapAt = Date.now(); });
+      window.__terrainViewForDebug.waitForTerrainLoaded(60000).then((ok) => {
+        window.__perfTiming.terrainAt = Date.now();
+        window.__perfTiming.terrainOk = ok;
+      });
+    });
+
     const became3d = await page.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
@@ -826,6 +845,14 @@ async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
       const terrainLoaded1 = await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(20000));
       record(`[${label}] 地形（標高タイル）の読み込みが完了する`, terrainLoaded1);
       await page.waitForTimeout(300);
+
+      // 地形 >= 平らな地図の順序が崩れていないか（2026-10-11追加の回帰チェック）。
+      const timing = await page.evaluate(() => window.__perfTiming);
+      record(
+        `[${label}] 地形の読み込み完了が平らな地図より後（または同時）である`,
+        typeof timing.flatMapAt === 'number' && typeof timing.terrainAt === 'number' && timing.terrainAt >= timing.flatMapAt,
+        `flatMapAt=${timing.flatMapAt}, terrainAt=${timing.terrainAt}, 差=${timing.terrainAt - timing.flatMapAt}ms`
+      );
 
       // Workerが実際に起動・使用されていることの確認（2026-10-11追加）。
       record(
@@ -866,7 +893,12 @@ async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
       await page.evaluate(() => {
         window.__terrainMapForDebug.jumpTo({ center: [137.2133, 36.7004], pitch: 70, zoom: 10, bearing: 130 });
       });
-      const terrainLoaded2 = await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(20000));
+      // 【2026-10-11修正】waitForTerrainLoaded()が複数バッチの最後まで正しく
+      // 待つよう直った結果、立山方向（zoom10・pitch70、高標高域で要求タイルが
+      // 多い）の地形読み込みは実測36秒程度かかることが分かった（旧20秒の
+      // タイムアウトでは「未完了」に化けていた。実機トレースで
+      // ok=true・所要36059msを確認済み、ハングしているわけではない）。
+      const terrainLoaded2 = await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
       record(`[${label}] 立山方向への移動後も地形の読み込みが完了する`, terrainLoaded2);
       await page.waitForTimeout(300);
 
