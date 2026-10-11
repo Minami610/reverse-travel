@@ -900,16 +900,52 @@ class ReverseTravel {
     }
 
     try {
-      // 【4本目③】予算スライダーがデータ再取得なしで動かせるよう、検索は常に
-      // MAX_BUDGET(¥2000)で行い、帯（一覧用）はallSpotsから同期的に絞り込む
-      // （Minami指示：計算は¥2000で一度出したallSpotsから帯で絞るだけで足りる）。
-      const { allSpots, reachableCount } = await this.computeSearchResult(stationId, MAX_BUDGET);
-      const { bandSpots, hasCheaperSpots } = this.filterBandFromAllSpots(allSpots, budget);
-      this.displayResults(bandSpots, stationId, prefCode, reachableCount, budget, hasCheaperSpots, allSpots);
+      // 【4本目④修正】4本目③では毎回MAX_BUDGET(¥2000)で検索しており、
+      // 富山駅前（通常CPU）で630ms→1151msに延びていた（Coworkがスクリーン
+      // ショット・計測で指摘）。まず今の予算だけで一覧を出す（従来の速さ）。
+      // ¥2000全域（スライダーで帯外の安い点を塗り分けるためのデータ）は
+      // 一覧を出した後、裏で計算する（scheduleMaxBudgetPrefetch）。
+      const result = await this.computeSearchResult(stationId, budget);
+      this.displayResults(result.bandSpots, stationId, prefCode, result.reachableCount, budget, result.hasCheaperSpots, result.bandSpots);
+      this.scheduleMaxBudgetPrefetch(stationId);
     } catch (error) {
       console.error('検索失敗:', error);
       alert('検索中にエラーが発生しました');
     }
+  }
+
+  /**
+   * 【4本目④】一覧を先に出した後、裏でMAX_BUDGET(¥2000)全域を計算し、
+   * 終わり次第スライダー用のallSpotsを差し替える（Minami指示）。この計算が
+   * 終わるまで、スライダーは「今の帯の点だけ」を塗り分ける（displayResults()が
+   * 渡すallSpotsが最初はbandSpotsのままのため、自然とそうなる）。
+   * requestIdleCallback（無ければsetTimeout）で、一覧の描画を妨げない
+   * タイミングに後回しにする。
+   */
+  scheduleMaxBudgetPrefetch(stationId) {
+    const schedule = window.requestIdleCallback || ((cb) => setTimeout(cb, 50));
+    schedule(async () => {
+      // 裏の計算が終わるまでの間に別の駅で検索し直されていたら、
+      // 今の表示とは無関係なデータのため何もしない。
+      if (this.currentDepartureStationId !== stationId) return;
+      try {
+        const { allSpots } = await this.computeSearchResult(stationId, MAX_BUDGET);
+        if (this.currentDepartureStationId !== stationId) return;
+        this.currentAllSpots = allSpots;
+        const departureStation = this.data.stations?.[stationId];
+        // 裏の計算中にスライダーが動かされている場合があるため、検索時の予算
+        // （this.currentBudget）ではなく、スライダーの今の値を使う。
+        const liveBudget = parseInt(this.elements.budgetInput.value, 10);
+        this.mapView.render(departureStation, allSpots, liveBudget);
+        if (this.terrainMapView) this.terrainMapView.render(departureStation, allSpots, liveBudget);
+        const count = allSpots.filter(
+          (s) => s.source_round_trip_fare <= liveBudget && s.source_round_trip_fare > liveBudget - BAND_WIDTH
+        ).length;
+        this.updateBudgetBandPreview(liveBudget, count);
+      } catch (e) {
+        console.warn('¥2000範囲の裏取得に失敗しました（一覧・現在の帯の表示には影響しません）:', e);
+      }
+    });
   }
 
   /**
