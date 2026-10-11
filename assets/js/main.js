@@ -9,7 +9,7 @@ import { SpotFinder } from './spot-finder.js';
 import { RouteFormatter } from './route-formatter.js';
 import { estimateTripFrequency, formatDayLabel, operatorLabelWord, sameRouteWord } from './route-duration.js';
 import { buildOnwardCandidates } from './onward-candidates.js';
-import { MapView } from './map-view.js';
+import { MapView, isFiniteNumber } from './map-view.js';
 import { isWebglLikelySupported, loadTerrainModule, preloadTerrainModuleWhenIdle } from './terrain-loader.js';
 import { LayoutController } from './layout-controller.js';
 import {
@@ -146,6 +146,7 @@ class ReverseTravel {
       bandHeading: document.getElementById('results-band-heading'),
       resultsList: document.getElementById('results-list'),
       detailContent: document.getElementById('detail-content'),
+      detailContainer: document.getElementById('detail-container'),
       backBtn: document.getElementById('back-btn'),
       aboutBtn: document.getElementById('about-data-btn'),
       aboutModal: document.getElementById('about-modal'),
@@ -1826,6 +1827,12 @@ class ReverseTravel {
 
   showResultsList() {
     this.elements.appLayout.setAttribute('data-view', 'results');
+    // 【2026-10-11、5本目】「← 一覧に戻る」で、3Dのときは帯の点が見える
+    // 俯瞰位置に戻す（Minami指示。fitToBudget自体の引きすぎ対策は
+    // terrain-map-view.js参照）。2Dは元々寄らないため変化なし。
+    if (this.terrainMapView?.map && this.currentBudget != null) {
+      this.terrainMapView.fitToBudget(this.currentBudget);
+    }
   }
 
   /**
@@ -1931,6 +1938,7 @@ class ReverseTravel {
       <div class="detail-actions">
         <button type="button" class="favorite-btn detail-favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}" aria-label="${fav ? 'マイリストから外す' : 'マイリストに保存'}">${starIconHtml(fav)}<span class="btn-label">${fav ? '保存済み' : 'マイリストに保存'}</span></button>
         <button type="button" class="share-btn detail-share-btn" data-spot-id="${spot.id}" aria-label="共有">${shareIconHtml()}<span class="btn-label">共有</span></button>
+        <button type="button" class="map-view-btn detail-map-btn" data-spot-id="${spot.id}">地図で見る</button>
       </div>
       ${spot.image
         ? `<img src="${spot.image}" alt="${spot.name}" class="detail-image">`
@@ -1939,13 +1947,42 @@ class ReverseTravel {
       <p class="spot-pageviews">月間ページビュー数: ${spot.pageviews || 'データなし'}</p>
       <p class="spot-distance">最寄駅からの距離: ${spot.distance?.toFixed(1) || '不明'}km</p>
       ${routeInfoHtml}
-      ${spot.wikidata_url ? `<a href="${spot.wikidata_url}" target="_blank">Wikidataで見る</a>` : ''}
-      ${spot.wikipedia_url ? `<a href="${spot.wikipedia_url}" target="_blank">Wikipediaで見る</a>` : ''}
+      ${spot.wikipedia_url ? `<a href="${spot.wikipedia_url}" target="_blank" class="detail-wikipedia-btn">Wikipediaで詳しく見る</a>` : ''}
       ${onwardHtml}
+      ${spot.wikidata_url ? `<a href="${spot.wikidata_url}" target="_blank" class="detail-wikidata-link">データの出典（Wikidata）</a>` : ''}
     `;
 
     this.elements.detailContent.innerHTML = html;
     this.elements.appLayout.setAttribute('data-view', 'detail');
+    // 【2026-10-11、5本目】「この先へ」で別の場所を開いたときも、戻ってきた
+    // ときも、詳細画面の一番上（写真）までスクロールを戻す（Minami指示）。
+    // showSpotDetail()はopenSpotDetailById・goBackInDetail・
+    // openOnwardCandidateのすべてから呼ばれる唯一の入口のため、ここ1箇所で
+    // 全経路をカバーできる。
+    if (this.elements.detailContainer) this.elements.detailContainer.scrollTop = 0;
+
+    // 【2026-10-11、5本目】3Dのときだけ、詳細画面を開いたらその場所へ寄る
+    // （Minami指示。2Dは今の動きのまま変えない）。
+    if (this.terrainMapView?.map && isFiniteNumber(spot.latitude) && isFiniteNumber(spot.longitude)) {
+      const departureStation = this.data?.stations?.[this.currentDepartureStationId];
+      this.terrainMapView.flyToSpot(spot, departureStation);
+    }
+
+    this.elements.detailContent.querySelector('.detail-map-btn')?.addEventListener('click', () => {
+      // スマホの「地図で見る」：地図タブへ切り替え、3Dが有効ならその場所へ寄る
+      // （Minami指示）。2Dのときはタブ切替のみ（今の動きのまま）。
+      // 【2026-10-11修正】#app-layout[data-view="detail"]のCSSはタブパネル
+      // （#map-areaを含む）自体をdisplay:noneで隠すため、activateTab('map')
+      // だけではタブの状態は切り替わっても地図は見えないままだった
+      // （実機確認：boundingBoxがnullになる）。data-viewを"results"へ
+      // 戻してから地図タブを有効にする。
+      this.elements.appLayout.setAttribute('data-view', 'results');
+      this.layoutController.activateTab('map');
+      if (this.terrainMapView?.map) {
+        const departureStation = this.data?.stations?.[this.currentDepartureStationId];
+        this.terrainMapView.flyToSpot(spot, departureStation);
+      }
+    });
 
     this.elements.detailContent.querySelector('.detail-favorite-btn')?.addEventListener('click', () => {
       // toggleFavoriteForSpot()内でrefreshFavoriteButtons()が呼ばれ、
