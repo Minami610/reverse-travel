@@ -18,6 +18,46 @@ const GSI_ATTRIBUTION =
 // バンドル後は同じスクリプトスコープに連結されるため、名前が衝突しないよう
 // このファイルだけMAP_BAND_WIDTHという別名にしている。
 const MAP_BAND_WIDTH = 200;
+// 【2026-10-14、10本目②】予算の到達範囲の円・波の演出用の定数・関数。
+// 同じ理由（バンドル後は同一スクリプトスコープ）で、他ファイル（onward-candidates.js
+// 等）の同種の関数と衝突しない名前にしている。
+const REACH_CIRCLE_LABEL_BEARING = 45; // ラベルを置く方位角（出発駅の吹き出しと重ならない向き）
+const WAVE_DURATION_MS = 1000; // Minami指示：検索後、点を波のように出す所要時間（全体で1秒前後）
+const EARTH_RADIUS_KM = 6371;
+const toRadReach = (d) => (d * Math.PI) / 180;
+const toDegReach = (r) => (r * 180) / Math.PI;
+
+function reachHaversineKm(lat1, lon1, lat2, lon2) {
+  const phi1 = toRadReach(lat1);
+  const phi2 = toRadReach(lat2);
+  const dPhi = toRadReach(lat2 - lat1);
+  const dLambda = toRadReach(lon2 - lon1);
+  const a = Math.sin(dPhi / 2) ** 2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLambda / 2) ** 2;
+  return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+function reachDestinationPoint(lat, lon, bearingDeg, distanceKm) {
+  const delta = distanceKm / EARTH_RADIUS_KM;
+  const theta = toRadReach(bearingDeg);
+  const phi1 = toRadReach(lat);
+  const lambda1 = toRadReach(lon);
+  const phi2 = Math.asin(Math.sin(phi1) * Math.cos(delta) + Math.cos(phi1) * Math.sin(delta) * Math.cos(theta));
+  const lambda2 = lambda1 + Math.atan2(
+    Math.sin(theta) * Math.sin(delta) * Math.cos(phi1),
+    Math.cos(delta) - Math.sin(phi1) * Math.sin(phi2)
+  );
+  return { lat: toDegReach(phi2), lon: toDegReach(lambda2) };
+}
+
+function formatReachRadiusKm(km) {
+  if (!(km > 0)) return '0km';
+  return km < 10 ? `${Math.round(km * 10) / 10}km` : `${Math.round(km)}km`;
+}
+
+function reachPrefersReducedMotion() {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
 
 export class MapView {
   constructor(containerId) {
@@ -29,6 +69,17 @@ export class MapView {
     this.spotsLatLngById = new Map(); // fitToBudget用
     this.selectedSpotId = null;
     this.lastBounds = [];
+    this._lastSpots = []; // 【2026-10-14、10本目②】到達円の半径計算用（出発駅からの距離はここから出す）
+    this._departureStation = null;
+    this._reachCircle = null;
+    this._reachCircleLabel = null;
+    this._reachCircleRadiusKm = 0;
+    this._circlePaintScheduled = false;
+    this._pendingCircleRadiusKm = null;
+    this._pendingCircleStyle = 'live';
+    this._waveToken = 0;
+    this._waveTimers = [];
+    this._pendingWaveReveal = false; // 【2026-10-14、10本目②】layout-controller.jsのinvalidateMapSize()参照
 
     this.onDetailRequest = null; // (spotId) => void … ポップアップの「詳細を見る」ボタン
     this.onSelectionChange = null; // (spotId) => void … ピン選択と一覧パネルの連動用
@@ -45,6 +96,10 @@ export class MapView {
       maxZoom: 18,
     }).addTo(this.map);
     this.markersLayer = L.layerGroup().addTo(this.map);
+
+    // 検証用の参照（terrain-map-view.jsのwindow.__terrainViewForDebugと同じ考え方）。
+    // アプリ自体はこれを使わない。本番でも害はないため条件分岐は入れていない。
+    window.__mapViewForDebug = this;
 
     // ポップアップ内の「詳細を見る」ボタンはHTML文字列として渡すため、
     // 開いたタイミングでイベントを後付けする
@@ -64,14 +119,19 @@ export class MapView {
    * @param {Array} spots - latitude/longitude を持つスポット配列（¥2000で一度取得したallSpots全体。
    *   予算の絞り込み・塗り分けはapplyBudget側で行うため、ここでは帯を絞らずそのまま渡す）
    * @param {number} [budget] - 初期表示の予算。省略時は2000
+   * @param {{reveal?: boolean}} [opts] - 【2026-10-14、10本目②】reveal:trueで、出発駅から
+   *   近い順に波が広がるように点を出す（Minami指示：「この条件で検索」を押したときだけ）。
    */
-  render(departureStation, spots, budget = 2000) {
+  render(departureStation, spots, budget = 2000, { reveal = false } = {}) {
     this.ensureMap();
+    this._cancelWaveReveal();
     this.markersLayer.clearLayers();
     this.markersBySpotId.clear();
     this.fareBySpotId.clear();
     this.spotsLatLngById.clear();
     this.selectedSpotId = null;
+    this._lastSpots = spots || [];
+    this._departureStation = departureStation || null;
 
     this.departureLatLng = null;
     if (departureStation && isFiniteNumber(departureStation.stop_lat) && isFiniteNumber(departureStation.stop_lon)) {
@@ -108,6 +168,8 @@ export class MapView {
 
     this.applyBudget(budget);
     this.fitToBudget(budget, { animate: false });
+    this.updateReachCircle(budget, { style: 'settled' });
+    if (reveal) this._startWaveReveal();
 
     // PC/スマホの切り替えやタブが非表示（display:none）のタイミングで
     // 呼ばれるとコンテナ寸法が0のままfitBoundsが不正確になるため、
@@ -196,6 +258,137 @@ export class MapView {
     if (this.map && this.lastBounds.length > 0) {
       this.map.fitBounds(this.lastBounds, { padding: [36, 36], maxZoom: 16 });
     }
+  }
+
+  /**
+   * 【2026-10-14、10本目②、Minami決定：A】予算の±・スライダーを動かしている間は
+   * 点を変えず、出発駅を中心にした到達範囲の円だけを広げる・縮める。
+   * 半径は「今の予算以内（往復）で行ける場所のうち、一番遠い場所までの直線距離」
+   * （¥2000で先に取得済みのallSpotsから実測。推測値にしない、Minami指示）。
+   * まだ検索していない（allSpots無し）ときは円を出さない。
+   * 塗り替えはrequestAnimationFrame 1コマに1回へ間引く（3D側のapplyBudget()と
+   * 同じ理由。スライダーのinputは連続発火するため）。
+   * @param {number} budget
+   * @param {{style?: 'live'|'settled'}} [opts] - settled:検索確定後（薄くする）
+   */
+  updateReachCircle(budget, { style = 'live' } = {}) {
+    if (!this.departureLatLng || !this._lastSpots || this._lastSpots.length === 0) {
+      this._pendingCircleRadiusKm = 0;
+    } else {
+      const [lat, lon] = this.departureLatLng;
+      this._pendingCircleRadiusKm = this._lastSpots.reduce((max, s) => {
+        if (!isFiniteNumber(s.latitude) || !isFiniteNumber(s.longitude)) return max;
+        if (s.source_round_trip_fare > budget) return max;
+        return Math.max(max, reachHaversineKm(lat, lon, s.latitude, s.longitude));
+      }, 0);
+    }
+    this._pendingCircleStyle = style;
+    if (this._circlePaintScheduled) return;
+    this._circlePaintScheduled = true;
+    requestAnimationFrame(() => {
+      this._circlePaintScheduled = false;
+      this._paintReachCircle(this._pendingCircleRadiusKm, this._pendingCircleStyle);
+    });
+  }
+
+  _paintReachCircle(radiusKm, style) {
+    this.ensureMap();
+    this._reachCircleRadiusKm = radiusKm; // 検証用（verify-layout.js参照）
+    if (!this.map || !radiusKm || radiusKm <= 0 || !this.departureLatLng) {
+      if (this._reachCircle) { this.map?.removeLayer(this._reachCircle); this._reachCircle = null; }
+      if (this._reachCircleLabel) { this.map?.removeLayer(this._reachCircleLabel); this._reachCircleLabel = null; }
+      return;
+    }
+    const opts = style === 'settled'
+      ? { color: '#2F6FB2', weight: 1.5, opacity: 0.35, fillColor: '#2F6FB2', fillOpacity: 0.07 }
+      : { color: '#2F6FB2', weight: 1.5, opacity: 0.55, fillColor: '#2F6FB2', fillOpacity: 0.12 };
+    const radiusMeters = radiusKm * 1000;
+    if (!this._reachCircle) {
+      this._reachCircle = L.circle(this.departureLatLng, { ...opts, radius: radiusMeters, interactive: false }).addTo(this.map);
+    } else {
+      this._reachCircle.setLatLng(this.departureLatLng);
+      this._reachCircle.setRadius(radiusMeters);
+      this._reachCircle.setStyle(opts);
+    }
+
+    const edge = reachDestinationPoint(this.departureLatLng[0], this.departureLatLng[1], REACH_CIRCLE_LABEL_BEARING, radiusKm);
+    const labelLatLng = [edge.lat, edge.lon];
+    if (!this._reachCircleLabel) {
+      this._reachCircleLabel = L.marker(labelLatLng, {
+        icon: L.divIcon({ className: 'reach-circle-label-anchor', html: '', iconSize: [0, 0] }),
+        interactive: false,
+        zIndexOffset: -1000,
+      })
+        .addTo(this.map)
+        .bindTooltip('', { permanent: true, direction: 'center', className: 'reach-circle-label' });
+    } else {
+      this._reachCircleLabel.setLatLng(labelLatLng);
+    }
+    this._reachCircleLabel.setTooltipContent(`最大${formatReachRadiusKm(radiusKm)}先まで`);
+  }
+
+  /**
+   * 【2026-10-14、10本目②】検索を押した直後、出発駅から近い順に点が波のように
+   * 広がって出る演出（Minami指示：全体で1秒前後）。帯内・帯外どちらの点も対象
+   * （applyBudget()が既に非表示にした予算超の点は対象外）。
+   * prefers-reduced-motionのときは即座に全部出す。
+   *
+   * 【不具合修正】スマホで「一覧」タブを見ながら検索した場合、地図のコンテナ
+   * （#spots-map）はdisplay:noneでサイズ0のまま。Leafletはコンテナが未初期化
+   * （サイズ0）の間はマーカーのアイコン要素を正しく生成しない
+   * （marker.getElement()がundefinedを返す。applyBudget()も同じ理由で既に
+   * コンテナサイズ0の間は塗り替えを保留する設計になっている）。この状態で
+   * 波の演出を試みても対象の要素が1つも見つからず、演出が静かに空振りして
+   * 終わっていた（verify-layoutで「検索直後に隠れている点が0件」として発覚）。
+   * スポット自体はある（_lastSpots等で保持済み）のにコンテナが未準備なだけの
+   * 場合は、後で地図タブが開かれたとき（layout-controller.jsのinvalidateMapSize()）
+   * に改めて波の演出をやり直せるよう、保留フラグを立てる。
+   */
+  _startWaveReveal() {
+    this._cancelWaveReveal();
+    this._pendingWaveReveal = false;
+    if (!this.departureLatLng) return;
+    const [depLat, depLon] = this.departureLatLng;
+    const entries = [];
+    let maxKm = 0;
+    this.markersBySpotId.forEach((marker, spotId) => {
+      const el = marker.getElement();
+      if (!el || el.style.display === 'none') return;
+      const latlng = this.spotsLatLngById.get(spotId);
+      if (!latlng) return;
+      const km = reachHaversineKm(depLat, depLon, latlng[0], latlng[1]);
+      maxKm = Math.max(maxKm, km);
+      entries.push({ el, km });
+    });
+    if (entries.length === 0) {
+      // コンテナが未準備（サイズ0）で要素が拾えなかった可能性がある場合だけ、
+      // 後で地図タブが開かれたときにやり直せるよう保留する（スポット自体が
+      // 0件のときは無意味なので、markersBySpotIdが空でない場合に限る）。
+      if (this.markersBySpotId.size > 0 && this.map && (this.map.getSize().x === 0 || this.map.getSize().y === 0)) {
+        this._pendingWaveReveal = true;
+      }
+      return;
+    }
+    if (reachPrefersReducedMotion() || maxKm <= 0) {
+      entries.forEach(({ el }) => el.classList.remove('pin-wave-hidden'));
+      return;
+    }
+    const token = ++this._waveToken;
+    entries.forEach(({ el }) => el.classList.add('pin-wave-hidden'));
+    entries.forEach(({ el, km }) => {
+      const delay = (km / maxKm) * WAVE_DURATION_MS;
+      const timer = setTimeout(() => {
+        if (token !== this._waveToken) return;
+        el.classList.remove('pin-wave-hidden');
+      }, delay);
+      this._waveTimers.push(timer);
+    });
+  }
+
+  _cancelWaveReveal() {
+    this._waveToken++;
+    this._waveTimers.forEach((t) => clearTimeout(t));
+    this._waveTimers = [];
   }
 
   /**

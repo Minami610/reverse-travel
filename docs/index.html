@@ -1330,7 +1330,7 @@ header p {
 .map-pin {
   display: block;
   box-sizing: border-box;
-  transition: transform 0.15s;
+  transition: transform 0.3s ease, opacity 0.3s ease;
 }
 
 /* スポットのピン：小さめの点にして密集時の重なりを軽減 */
@@ -1410,6 +1410,41 @@ header p {
 
 .map-departure-tooltip::before {
   border-top-color: var(--color-accent-deep);
+}
+
+/* 【2026-10-14、10本目②】予算の到達範囲の円のラベル（2D・3D共通の見た目）。
+   オレンジの点より目立たない青系にする（Minami指示）。 */
+.reach-circle-label {
+  background-color: rgba(47, 111, 178, 0.88);
+  color: white;
+  border: none;
+  font-weight: 600;
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.reach-circle-label::before {
+  display: none; /* Leafletの吹き出し用の三角形は不要（円のラベルなので） */
+}
+
+/* 【2026-10-14、10本目②】検索を押した直後、出発駅から近い順に点が波のように
+   広がって出る演出。pin-wave-hiddenが付いている間は見えない状態にしておき、
+   JS側がスポットごとに時間差でクラスを外すとこのtransitionで浮かび上がる。
+   prefers-reduced-motionのときはJS側がクラスを付けないため、常に即表示になる。
+   【不具合修正】当初は.map-pin-wrapper自身にtransform/opacityを付けていたが、
+   Leafletはこの同じ要素（marker.getElement()）のtransformを使ってピンを
+   地図上に位置決めしている（L.DomUtil.setPosition）。wrapper自身に
+   transitionを付けると、Leaflet自身の位置決め（transform書き換え）まで
+   アニメーションしてしまい、作成直後のboundingBox()が実際の位置とずれる
+   （verify-layoutの実クリック検証で「ポップアップが開かない」として発覚）。
+   地図上の位置決めに使われない内側の.map-pinへ対象を変えた。 */
+.map-pin-wrapper.pin-wave-hidden .map-pin {
+  opacity: 0;
+  transform: scale(0.3);
 }
 
 /* 地図ピンのポップアップ（スポット名・往復運賃・詳細ボタン。
@@ -4035,6 +4070,46 @@ const GSI_ATTRIBUTION =
 // バンドル後は同じスクリプトスコープに連結されるため、名前が衝突しないよう
 // このファイルだけMAP_BAND_WIDTHという別名にしている。
 const MAP_BAND_WIDTH = 200;
+// 【2026-10-14、10本目②】予算の到達範囲の円・波の演出用の定数・関数。
+// 同じ理由（バンドル後は同一スクリプトスコープ）で、他ファイル（onward-candidates.js
+// 等）の同種の関数と衝突しない名前にしている。
+const REACH_CIRCLE_LABEL_BEARING = 45; // ラベルを置く方位角（出発駅の吹き出しと重ならない向き）
+const WAVE_DURATION_MS = 1000; // Minami指示：検索後、点を波のように出す所要時間（全体で1秒前後）
+const EARTH_RADIUS_KM = 6371;
+const toRadReach = (d) => (d * Math.PI) / 180;
+const toDegReach = (r) => (r * 180) / Math.PI;
+
+function reachHaversineKm(lat1, lon1, lat2, lon2) {
+  const phi1 = toRadReach(lat1);
+  const phi2 = toRadReach(lat2);
+  const dPhi = toRadReach(lat2 - lat1);
+  const dLambda = toRadReach(lon2 - lon1);
+  const a = Math.sin(dPhi / 2) ** 2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLambda / 2) ** 2;
+  return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+function reachDestinationPoint(lat, lon, bearingDeg, distanceKm) {
+  const delta = distanceKm / EARTH_RADIUS_KM;
+  const theta = toRadReach(bearingDeg);
+  const phi1 = toRadReach(lat);
+  const lambda1 = toRadReach(lon);
+  const phi2 = Math.asin(Math.sin(phi1) * Math.cos(delta) + Math.cos(phi1) * Math.sin(delta) * Math.cos(theta));
+  const lambda2 = lambda1 + Math.atan2(
+    Math.sin(theta) * Math.sin(delta) * Math.cos(phi1),
+    Math.cos(delta) - Math.sin(phi1) * Math.sin(phi2)
+  );
+  return { lat: toDegReach(phi2), lon: toDegReach(lambda2) };
+}
+
+function formatReachRadiusKm(km) {
+  if (!(km > 0)) return '0km';
+  return km < 10 ? `${Math.round(km * 10) / 10}km` : `${Math.round(km)}km`;
+}
+
+function reachPrefersReducedMotion() {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
 
 class MapView {
   constructor(containerId) {
@@ -4046,6 +4121,17 @@ class MapView {
     this.spotsLatLngById = new Map(); // fitToBudget用
     this.selectedSpotId = null;
     this.lastBounds = [];
+    this._lastSpots = []; // 【2026-10-14、10本目②】到達円の半径計算用（出発駅からの距離はここから出す）
+    this._departureStation = null;
+    this._reachCircle = null;
+    this._reachCircleLabel = null;
+    this._reachCircleRadiusKm = 0;
+    this._circlePaintScheduled = false;
+    this._pendingCircleRadiusKm = null;
+    this._pendingCircleStyle = 'live';
+    this._waveToken = 0;
+    this._waveTimers = [];
+    this._pendingWaveReveal = false; // 【2026-10-14、10本目②】layout-controller.jsのinvalidateMapSize()参照
 
     this.onDetailRequest = null; // (spotId) => void … ポップアップの「詳細を見る」ボタン
     this.onSelectionChange = null; // (spotId) => void … ピン選択と一覧パネルの連動用
@@ -4062,6 +4148,10 @@ class MapView {
       maxZoom: 18,
     }).addTo(this.map);
     this.markersLayer = L.layerGroup().addTo(this.map);
+
+    // 検証用の参照（terrain-map-view.jsのwindow.__terrainViewForDebugと同じ考え方）。
+    // アプリ自体はこれを使わない。本番でも害はないため条件分岐は入れていない。
+    window.__mapViewForDebug = this;
 
     // ポップアップ内の「詳細を見る」ボタンはHTML文字列として渡すため、
     // 開いたタイミングでイベントを後付けする
@@ -4081,14 +4171,19 @@ class MapView {
    * @param {Array} spots - latitude/longitude を持つスポット配列（¥2000で一度取得したallSpots全体。
    *   予算の絞り込み・塗り分けはapplyBudget側で行うため、ここでは帯を絞らずそのまま渡す）
    * @param {number} [budget] - 初期表示の予算。省略時は2000
+   * @param {{reveal?: boolean}} [opts] - 【2026-10-14、10本目②】reveal:trueで、出発駅から
+   *   近い順に波が広がるように点を出す（Minami指示：「この条件で検索」を押したときだけ）。
    */
-  render(departureStation, spots, budget = 2000) {
+  render(departureStation, spots, budget = 2000, { reveal = false } = {}) {
     this.ensureMap();
+    this._cancelWaveReveal();
     this.markersLayer.clearLayers();
     this.markersBySpotId.clear();
     this.fareBySpotId.clear();
     this.spotsLatLngById.clear();
     this.selectedSpotId = null;
+    this._lastSpots = spots || [];
+    this._departureStation = departureStation || null;
 
     this.departureLatLng = null;
     if (departureStation && isFiniteNumber(departureStation.stop_lat) && isFiniteNumber(departureStation.stop_lon)) {
@@ -4125,6 +4220,8 @@ class MapView {
 
     this.applyBudget(budget);
     this.fitToBudget(budget, { animate: false });
+    this.updateReachCircle(budget, { style: 'settled' });
+    if (reveal) this._startWaveReveal();
 
     // PC/スマホの切り替えやタブが非表示（display:none）のタイミングで
     // 呼ばれるとコンテナ寸法が0のままfitBoundsが不正確になるため、
@@ -4213,6 +4310,137 @@ class MapView {
     if (this.map && this.lastBounds.length > 0) {
       this.map.fitBounds(this.lastBounds, { padding: [36, 36], maxZoom: 16 });
     }
+  }
+
+  /**
+   * 【2026-10-14、10本目②、Minami決定：A】予算の±・スライダーを動かしている間は
+   * 点を変えず、出発駅を中心にした到達範囲の円だけを広げる・縮める。
+   * 半径は「今の予算以内（往復）で行ける場所のうち、一番遠い場所までの直線距離」
+   * （¥2000で先に取得済みのallSpotsから実測。推測値にしない、Minami指示）。
+   * まだ検索していない（allSpots無し）ときは円を出さない。
+   * 塗り替えはrequestAnimationFrame 1コマに1回へ間引く（3D側のapplyBudget()と
+   * 同じ理由。スライダーのinputは連続発火するため）。
+   * @param {number} budget
+   * @param {{style?: 'live'|'settled'}} [opts] - settled:検索確定後（薄くする）
+   */
+  updateReachCircle(budget, { style = 'live' } = {}) {
+    if (!this.departureLatLng || !this._lastSpots || this._lastSpots.length === 0) {
+      this._pendingCircleRadiusKm = 0;
+    } else {
+      const [lat, lon] = this.departureLatLng;
+      this._pendingCircleRadiusKm = this._lastSpots.reduce((max, s) => {
+        if (!isFiniteNumber(s.latitude) || !isFiniteNumber(s.longitude)) return max;
+        if (s.source_round_trip_fare > budget) return max;
+        return Math.max(max, reachHaversineKm(lat, lon, s.latitude, s.longitude));
+      }, 0);
+    }
+    this._pendingCircleStyle = style;
+    if (this._circlePaintScheduled) return;
+    this._circlePaintScheduled = true;
+    requestAnimationFrame(() => {
+      this._circlePaintScheduled = false;
+      this._paintReachCircle(this._pendingCircleRadiusKm, this._pendingCircleStyle);
+    });
+  }
+
+  _paintReachCircle(radiusKm, style) {
+    this.ensureMap();
+    this._reachCircleRadiusKm = radiusKm; // 検証用（verify-layout.js参照）
+    if (!this.map || !radiusKm || radiusKm <= 0 || !this.departureLatLng) {
+      if (this._reachCircle) { this.map?.removeLayer(this._reachCircle); this._reachCircle = null; }
+      if (this._reachCircleLabel) { this.map?.removeLayer(this._reachCircleLabel); this._reachCircleLabel = null; }
+      return;
+    }
+    const opts = style === 'settled'
+      ? { color: '#2F6FB2', weight: 1.5, opacity: 0.35, fillColor: '#2F6FB2', fillOpacity: 0.07 }
+      : { color: '#2F6FB2', weight: 1.5, opacity: 0.55, fillColor: '#2F6FB2', fillOpacity: 0.12 };
+    const radiusMeters = radiusKm * 1000;
+    if (!this._reachCircle) {
+      this._reachCircle = L.circle(this.departureLatLng, { ...opts, radius: radiusMeters, interactive: false }).addTo(this.map);
+    } else {
+      this._reachCircle.setLatLng(this.departureLatLng);
+      this._reachCircle.setRadius(radiusMeters);
+      this._reachCircle.setStyle(opts);
+    }
+
+    const edge = reachDestinationPoint(this.departureLatLng[0], this.departureLatLng[1], REACH_CIRCLE_LABEL_BEARING, radiusKm);
+    const labelLatLng = [edge.lat, edge.lon];
+    if (!this._reachCircleLabel) {
+      this._reachCircleLabel = L.marker(labelLatLng, {
+        icon: L.divIcon({ className: 'reach-circle-label-anchor', html: '', iconSize: [0, 0] }),
+        interactive: false,
+        zIndexOffset: -1000,
+      })
+        .addTo(this.map)
+        .bindTooltip('', { permanent: true, direction: 'center', className: 'reach-circle-label' });
+    } else {
+      this._reachCircleLabel.setLatLng(labelLatLng);
+    }
+    this._reachCircleLabel.setTooltipContent(`最大${formatReachRadiusKm(radiusKm)}先まで`);
+  }
+
+  /**
+   * 【2026-10-14、10本目②】検索を押した直後、出発駅から近い順に点が波のように
+   * 広がって出る演出（Minami指示：全体で1秒前後）。帯内・帯外どちらの点も対象
+   * （applyBudget()が既に非表示にした予算超の点は対象外）。
+   * prefers-reduced-motionのときは即座に全部出す。
+   *
+   * 【不具合修正】スマホで「一覧」タブを見ながら検索した場合、地図のコンテナ
+   * （#spots-map）はdisplay:noneでサイズ0のまま。Leafletはコンテナが未初期化
+   * （サイズ0）の間はマーカーのアイコン要素を正しく生成しない
+   * （marker.getElement()がundefinedを返す。applyBudget()も同じ理由で既に
+   * コンテナサイズ0の間は塗り替えを保留する設計になっている）。この状態で
+   * 波の演出を試みても対象の要素が1つも見つからず、演出が静かに空振りして
+   * 終わっていた（verify-layoutで「検索直後に隠れている点が0件」として発覚）。
+   * スポット自体はある（_lastSpots等で保持済み）のにコンテナが未準備なだけの
+   * 場合は、後で地図タブが開かれたとき（layout-controller.jsのinvalidateMapSize()）
+   * に改めて波の演出をやり直せるよう、保留フラグを立てる。
+   */
+  _startWaveReveal() {
+    this._cancelWaveReveal();
+    this._pendingWaveReveal = false;
+    if (!this.departureLatLng) return;
+    const [depLat, depLon] = this.departureLatLng;
+    const entries = [];
+    let maxKm = 0;
+    this.markersBySpotId.forEach((marker, spotId) => {
+      const el = marker.getElement();
+      if (!el || el.style.display === 'none') return;
+      const latlng = this.spotsLatLngById.get(spotId);
+      if (!latlng) return;
+      const km = reachHaversineKm(depLat, depLon, latlng[0], latlng[1]);
+      maxKm = Math.max(maxKm, km);
+      entries.push({ el, km });
+    });
+    if (entries.length === 0) {
+      // コンテナが未準備（サイズ0）で要素が拾えなかった可能性がある場合だけ、
+      // 後で地図タブが開かれたときにやり直せるよう保留する（スポット自体が
+      // 0件のときは無意味なので、markersBySpotIdが空でない場合に限る）。
+      if (this.markersBySpotId.size > 0 && this.map && (this.map.getSize().x === 0 || this.map.getSize().y === 0)) {
+        this._pendingWaveReveal = true;
+      }
+      return;
+    }
+    if (reachPrefersReducedMotion() || maxKm <= 0) {
+      entries.forEach(({ el }) => el.classList.remove('pin-wave-hidden'));
+      return;
+    }
+    const token = ++this._waveToken;
+    entries.forEach(({ el }) => el.classList.add('pin-wave-hidden'));
+    entries.forEach(({ el, km }) => {
+      const delay = (km / maxKm) * WAVE_DURATION_MS;
+      const timer = setTimeout(() => {
+        if (token !== this._waveToken) return;
+        el.classList.remove('pin-wave-hidden');
+      }, delay);
+      this._waveTimers.push(timer);
+    });
+  }
+
+  _cancelWaveReveal() {
+    this._waveToken++;
+    this._waveTimers.forEach((t) => clearTimeout(t));
+    this._waveTimers = [];
   }
 
   /**
@@ -4498,6 +4726,13 @@ class LayoutController {
         // 保留していた場合（MapView.applyBudget参照）、実寸を得たここで
         // 改めて反映する。
         if (this.mapView.lastBudget != null) this.mapView.applyBudget(this.mapView.lastBudget);
+        // 【2026-10-14、10本目②】検索時に地図タブが非表示（コンテナ0×0）だった
+        // ため、波のように点を出す演出が空振りに終わっていた場合、実寸を得た
+        // ここで改めてやり直す（MapView._startWaveReveal参照）。
+        if (this.mapView._pendingWaveReveal) {
+          this.mapView._pendingWaveReveal = false;
+          this.mapView._startWaveReveal();
+        }
       }
       if (this.terrainMapView?.map) {
         this.terrainMapView.resize();
@@ -4917,6 +5152,10 @@ const BAND_WIDTH = 200;
 const MIN_BUDGET = 200;
 const MAX_BUDGET = 2000; // 2026-10-06、Minamiさんの判断により¥1000から変更
 const BUDGET_STEP = 100;
+// 【2026-10-14、10本目②】scheduleMaxBudgetPrefetch()参照。map-view.js・
+// terrain-map-view.jsのWAVE_DURATION_MS（1000ms、検索後に点が波のように出る
+// 演出の所要時間）より確実に後になるよう、裏取得の反映を遅らせるための余裕時間。
+const WAVE_REVEAL_SAFE_DELAY_MS = 1200;
 
 /** 予算→帯の表示ラベル（例: budget=1000 → "¥801〜¥1000"） */
 function formatBandLabel(budget) {
@@ -5144,17 +5383,15 @@ class ReverseTravel {
       this.stepBudget(100);
     });
 
-    // 予算スライダー（4本目③）。'input'はドラッグ中に連続発火＝地図の塗り替えのみ
-    // （カメラは動かさない、Minami指示）。'change'は指を離した時に1回だけ発火＝
-    // そのタイミングでカメラをなめらかに合わせる。
+    // 予算スライダー（4本目③、2026-10-14 10本目①で変更）。'input'はドラッグ中に
+    // 連続発火＝到達範囲の円だけ広げる（Minami決定：A。点・カメラは「この条件で
+    // 検索」を押すまで変えない）。指を離したとき（change）に別途行うことは
+    // 無くなったため、changeのリスナーは廃止した。
     this.elements.budgetSlider.addEventListener('input', () => {
       const value = parseInt(this.elements.budgetSlider.value, 10);
       this.elements.budgetInput.value = value;
       this.updateBudgetUI();
       this.updateMapBudgetLive(value);
-    });
-    this.elements.budgetSlider.addEventListener('change', () => {
-      this.commitMapBudgetFit(parseInt(this.elements.budgetSlider.value, 10));
     });
 
     this.updateBudgetUI();
@@ -5421,10 +5658,10 @@ class ReverseTravel {
 
     input.value = next;
     this.updateBudgetUI();
-    // ボタンは離散操作（ドラッグのような連続変化が無い）なので、スライダーの
-    // 「動かしている間」には当たらない。塗り替えとカメラ合わせを両方すぐ行う。
+    // 【2026-10-14、10本目①、Minami決定：A】±ボタンもスライダーと同じく
+    // 円だけを広げる。点・カメラは「この条件で検索」を押すまで変えない
+    // （Minami指示：点がすぐ変わると検索ボタンを押す動機が薄れるため）。
     this.updateMapBudgetLive(next);
-    this.commitMapBudgetFit(next);
   }
 
   updateBudgetUI() {
@@ -5441,26 +5678,22 @@ class ReverseTravel {
   }
 
   /**
-   * 予算スライダーの1コマ分（4本目③）。地図（2D・3D）の点をデータ再取得
-   * なしで塗り替え、帯の件数をその場で出す。まだ検索していない（this.currentAllSpots
-   * が空）ときは件数プレビューを出さない（Minami指示：点が無いので光らない）。
-   * カメラは動かさない（Minami指示：動かしている間はカクつき防止で固定）。
+   * 予算スライダー・±ボタンの1コマ分（4本目③、2026-10-14 10本目①で全面変更）。
+   * 【10本目、Minami決定：A】地図の点（光る点・薄い点）は変えない。点は、
+   * 最後に検索したときの状態のまま。代わりに、出発駅を中心にした到達範囲の円
+   * だけを広げる・縮める（2D・3D共通）。帯の件数プレビューはこれまでどおり
+   * 動かしながら変えてよい（検索の目安になるため、Minami指示）。
+   * まだ検索していない（this.currentAllSpotsが空）ときは円・件数プレビューとも出さない。
    */
   updateMapBudgetLive(budget) {
+    this.mapView.updateReachCircle(budget, { style: 'live' });
+    this.terrainMapView?.updateReachCircle(budget, { style: 'live' });
     if (!this.currentAllSpots || this.currentAllSpots.length === 0) {
       this.elements.budgetBandPreview.hidden = true;
       return;
     }
-    const count2d = this.mapView.applyBudget(budget);
-    this.terrainMapView?.applyBudget(budget);
-    this.updateBudgetBandPreview(budget, count2d);
-  }
-
-  /** スライダーを離した・±ボタンを押した直後に呼ぶ。帯＋それより安い点が収まるようカメラを合わせる。 */
-  commitMapBudgetFit(budget) {
-    if (!this.currentAllSpots || this.currentAllSpots.length === 0) return;
-    this.mapView.fitToBudget(budget);
-    this.terrainMapView?.fitToBudget(budget);
+    const { bandSpots } = this.filterBandFromAllSpots(this.currentAllSpots, budget);
+    this.updateBudgetBandPreview(budget, bandSpots.length);
   }
 
   updateBudgetBandPreview(budget, count) {
@@ -5862,16 +6095,29 @@ class ReverseTravel {
         const { allSpots } = await this.computeSearchResult(stationId, MAX_BUDGET);
         if (this.currentDepartureStationId !== stationId) return;
         this.currentAllSpots = allSpots;
-        const departureStation = this.data.stations?.[stationId];
-        // 裏の計算中にスライダーが動かされている場合があるため、検索時の予算
-        // （this.currentBudget）ではなく、スライダーの今の値を使う。
-        const liveBudget = parseInt(this.elements.budgetInput.value, 10);
-        this.mapView.render(departureStation, allSpots, liveBudget);
-        if (this.terrainMapView) this.terrainMapView.render(departureStation, allSpots, liveBudget);
-        const count = allSpots.filter(
-          (s) => s.source_round_trip_fare <= liveBudget && s.source_round_trip_fare > liveBudget - BAND_WIDTH
-        ).length;
-        this.updateBudgetBandPreview(liveBudget, count);
+        // 【2026-10-14、10本目②修正】ここで即render()し直すと、検索直後に
+        // 始まったばかりの「波のように出る」演出を、マーカーの作り直しで
+        // 無言のまま中断・リセットしてしまう（render()はwaveの進行中かどうかに
+        // 関わらず常に演出をキャンセルして作り直す設計のため）。requestIdleCallback
+        // は環境によってはほぼ即座に発火するため、波の所要時間（WAVE_DURATION_MS、
+        // map-view.js/terrain-map-view.js参照）より確実に後になるまで、
+        // 反映そのものを遅らせる（実機・verify-layoutで、検索直後に点の
+        // 隠れている数を見たらすでに0件＝演出が始まる前に終わっていたことで発覚）。
+        setTimeout(() => {
+          if (this.currentDepartureStationId !== stationId) return;
+          const departureStation = this.data.stations?.[stationId];
+          // 【2026-10-14、10本目①修正】裏の計算中にスライダーが動かされていても、
+          // 点は検索したときの予算（this.currentBudget）のまま据え置く（Minami指示：
+          // 点は「この条件で検索」を押すまで変えない。以前はスライダーの今の値を
+          // 使っていたが、それは「点がすぐ変わる」挙動そのものだった）。
+          this.mapView.render(departureStation, allSpots, this.currentBudget);
+          if (this.terrainMapView) this.terrainMapView.render(departureStation, allSpots, this.currentBudget);
+          // 円・帯の件数プレビューはスライダーの今の値で出してよい（動かしながら
+          // 変えてよい表示のため）。allSpotsが揃ったことで、半径・件数とも
+          // より正確になる。
+          const liveBudget = parseInt(this.elements.budgetInput.value, 10);
+          this.updateMapBudgetLive(liveBudget);
+        }, WAVE_REVEAL_SAFE_DELAY_MS);
       } catch (e) {
         console.warn('¥2000範囲の裏取得に失敗しました（一覧・現在の帯の表示には影響しません）:', e);
       }
@@ -5967,12 +6213,17 @@ class ReverseTravel {
       this.elements.bandHeading.hidden = false;
     }
 
+    // 【2026-10-14、10本目②】「この条件で検索」を押した結果の表示なので、
+    // 出発駅から近い順に点が波のように広がって出る演出を行う（Minami指示）。
     const departureStation = this.data.stations?.[departureStationId];
-    this.mapView.render(departureStation, this.currentAllSpots, budget);
+    this.mapView.render(departureStation, this.currentAllSpots, budget, { reveal: true });
     // 3D地図は3D切替が一度も行われるまでインスタンス自体が無い（遅延読込、4本目②）。
     // 作成済みならrender()を呼ぶ（未初期化でも座標だけ保持する設計のため、
     // activateTerrainMap()が後から呼ばれたときに自動で反映される）。
-    if (this.terrainMapView) this.terrainMapView.render(departureStation, this.currentAllSpots, budget);
+    if (this.terrainMapView) {
+      this.terrainMapView.render(departureStation, this.currentAllSpots, budget, { reveal: true });
+      this.terrainMapView.fitToBudget(budget);
+    }
 
     this.updateBudgetBandPreview(budget, spots.length);
 

@@ -80,15 +80,19 @@ const SPOT_FOCUS_DURATION_MS = 2600; // Minami指示：2〜3秒
 // 【2026-10-13、8本目③】真上(pitch0)から降りた後、傾けて立体にするまでの時間。
 const TILT_DURATION_MS = 2000; // Minami指示：2秒前後
 const REDUCED_MOTION_FLY_DURATION_MS = 300; // prefers-reduced-motion時：降りる・傾けるを1回の短い移動にまとめる
-// 寄ったあと操作が無ければゆっくり回る演出（Minami指示：1周40秒程度）。
-const AUTO_ROTATE_MS_PER_REV = 40000;
-const AUTO_ROTATE_START_DELAY_MS = 500; // flyTo完了後、少し間を置いてから回り始める
 
 const BAND_WIDTH = 200; // 予算の帯の幅（既存の2D検索・一覧と同じ定義）
 const SPOTS_SOURCE_ID = 'spots';
 const SPOTS_LAYER_ID = 'spots-circle';
 const DEM_SOURCE_ID = 'gsi-dem';
 const HILLSHADE_LAYER_ID = 'hillshade-layer';
+// 【2026-10-14、10本目②】予算の到達範囲の円（出発駅中心）。
+const REACH_CIRCLE_SOURCE_ID = 'reach-circle';
+const REACH_CIRCLE_FILL_LAYER_ID = 'reach-circle-fill';
+const REACH_CIRCLE_LINE_LAYER_ID = 'reach-circle-line';
+const REACH_CIRCLE_POINTS = 72; // 円を近似する多角形の頂点数（5°刻み）
+const REACH_CIRCLE_LABEL_BEARING = 45; // ラベルを置く方位角（出発駅の吹き出し・コンパスボタンと重ならない向き）
+const WAVE_DURATION_MS = 1000; // Minami指示：検索後、点を波のように出す所要時間（全体で1秒前後）
 
 // 帯に入る点＝明るいオレンジ＋光の輪、それより安い点＝緑がかった灰色の小さい点
 // （2026-10-10、Minami指摘：スクリーンショットで見分けづらかったため色を変更。
@@ -124,21 +128,38 @@ function inBandExpr(budget) {
   return ['>', ['get', 'fare'], budget - BAND_WIDTH];
 }
 
-/**
- * 2点間の方位角（北=0°、時計回り）を返す。地点1→地点2の向き。
- * MapLibreのbearingは「その方位が画面奥（遠景）に来る」向き（4本目④、立山方向
- * カメラの実機確認で確定済み）のため、出発駅→スポットの方位角をそのまま
- * bearingに使えば「出発駅が手前、スポットが奥」になる（Minami指示）。
- */
-function computeBearing(lat1, lon1, lat2, lon2) {
-  const toRad = (d) => (d * Math.PI) / 180;
-  const toDeg = (r) => (r * 180) / Math.PI;
+const EARTH_RADIUS_KM = 6371;
+const toRad = (d) => (d * Math.PI) / 180;
+const toDeg = (r) => (r * 180) / Math.PI;
+
+/** 2点間の直線距離（km）。円の半径・波の演出の遅延計算に使う（10本目）。 */
+function haversineKm(lat1, lon1, lat2, lon2) {
   const phi1 = toRad(lat1);
   const phi2 = toRad(lat2);
-  const deltaLambda = toRad(lon2 - lon1);
-  const y = Math.sin(deltaLambda) * Math.cos(phi2);
-  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLambda);
-  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+  const dPhi = toRad(lat2 - lat1);
+  const dLambda = toRad(lon2 - lon1);
+  const a = Math.sin(dPhi / 2) ** 2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLambda / 2) ** 2;
+  return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/** 始点から指定の方位角・距離(km)だけ進んだ地点を返す（円のリング描画・ラベル位置に使う）。 */
+function destinationPoint(lat, lon, bearingDeg, distanceKm) {
+  const delta = distanceKm / EARTH_RADIUS_KM;
+  const theta = toRad(bearingDeg);
+  const phi1 = toRad(lat);
+  const lambda1 = toRad(lon);
+  const phi2 = Math.asin(Math.sin(phi1) * Math.cos(delta) + Math.cos(phi1) * Math.sin(delta) * Math.cos(theta));
+  const lambda2 = lambda1 + Math.atan2(
+    Math.sin(theta) * Math.sin(delta) * Math.cos(phi1),
+    Math.cos(delta) - Math.sin(phi1) * Math.sin(phi2)
+  );
+  return { lat: toDeg(phi2), lon: toDeg(lambda2) };
+}
+
+/** 到達円のラベル表記（例: 0.8km, 12km）。10km未満は小数第1位まで、以上は整数に丸める。 */
+function formatRadiusKm(km) {
+  if (!(km > 0)) return '0km';
+  return km < 10 ? `${Math.round(km * 10) / 10}km` : `${Math.round(km)}km`;
 }
 
 function prefersReducedMotion() {
@@ -201,11 +222,14 @@ export class TerrainMapView {
     this._lastDepartureStation = null;
     this._lastSpots = null;
     this._lastBudget = null;
-    this._autoRotateFrame = null; // requestAnimationFrameのID（ゆっくり回る演出）
-    this._autoRotateStartTimer = null;
-    this._pendingMoveEndHandler = null; // 【2026-10-12、7本目】_scheduleAutoRotateAfterFlight()が登録したmoveendリスナー（_stopAutoRotate()で確実に外すため参照を保持）
-    this._autoRotateScheduleToken = 0; // 同上。保留中の非同期チェーン（settle待ち）を無効化するための世代カウンタ
     this._flySpotToken = 0; // 【2026-10-13、8本目】flyToSpot()の「降りる→傾ける」演出を、ユーザー操作や次のflyToSpot呼び出しで無効化するための世代カウンタ
+    this._reachCircleRadiusKm = 0; // 【2026-10-14、10本目②】現在描画中の円の半径（なめらかな変化の起点）
+    this._pendingCircleRadiusKm = null;
+    this._pendingCircleStyle = 'live';
+    this._circlePaintScheduled = false;
+    this._reachCircleLabelMarker = null;
+    this._waveFrame = null; // requestAnimationFrameのID（検索後の点の波の演出）
+    this._waveToken = 0; // 保留中の波の演出を無効化する世代カウンタ（新しい検索・render()で進める）
   }
 
   /**
@@ -269,6 +293,10 @@ export class TerrainMapView {
             type: 'geojson',
             data: { type: 'FeatureCollection', features: [] },
           },
+          [REACH_CIRCLE_SOURCE_ID]: {
+            type: 'geojson',
+            data: { type: 'FeatureCollection', features: [] },
+          },
         },
         layers: [
           // 淡色地図は常に不透明で下に敷く（航空写真の未読込部分はここが
@@ -296,6 +324,22 @@ export class TerrainMapView {
               'hillshade-shadow-color': HILLSHADE_SHADOW_COLOR_EXPR,
               'hillshade-highlight-color': HILLSHADE_HIGHLIGHT_COLOR_EXPR,
             },
+          },
+          // 【2026-10-14、10本目②】予算の到達範囲の円。地形の上に塗る通常のfill/line
+          // レイヤーのため、特別な指定なしに地形の起伏へ自然に貼り付く（MapLibreは
+          // fill/lineレイヤーを既定で地形にドレープする）。スポットの点より目立たない
+          // 色（青系）にし、点より下に描く。
+          {
+            id: REACH_CIRCLE_FILL_LAYER_ID,
+            type: 'fill',
+            source: REACH_CIRCLE_SOURCE_ID,
+            paint: { 'fill-color': '#2F6FB2', 'fill-opacity': 0.12 },
+          },
+          {
+            id: REACH_CIRCLE_LINE_LAYER_ID,
+            type: 'line',
+            source: REACH_CIRCLE_SOURCE_ID,
+            paint: { 'line-color': '#2F6FB2', 'line-opacity': 0.55, 'line-width': 1.5 },
           },
           {
             id: SPOTS_LAYER_ID,
@@ -326,17 +370,21 @@ export class TerrainMapView {
       pitch: DEFAULT_PITCH,
       bearing: 0,
       maxPitch: 75,
-      // 【2026-10-11、5本目】視点を回せるようにする（Minami指示：PC=右ドラッグ
-      // /Ctrl+ドラッグ、スマホ=2本指でひねって回転・2本指の上下で傾き、
-      // 1本指は今までどおり移動）。MapLibreの既定ハンドラがこの組み合わせを
-      // そのまま提供する（dragRotateが右ドラッグ/Ctrl+ドラッグ、
-      // touchZoomRotateが2本指ひねり、touchPitchが2本指上下）ため、明示的に
-      // 有効化するだけで追加の実装は不要。
+      // 【2026-10-14、10本目①、Minami決定：B】回転を減らす。PCの右ドラッグ
+      // （Ctrl＋ドラッグ）での回転・傾きは残す（dragRotate）。スマホの2本指で
+      // ひねる回転は、酔う・向きが分からなくなるとのMinami指摘により止める
+      // （下のtouchZoomRotate.disableRotation()参照）。2本指ズーム・2本指上下の
+      // 傾きは残すため、touchZoomRotate自体は有効のままにする。
       dragRotate: true,
       touchZoomRotate: true,
       touchPitch: true,
       pitchWithRotate: true,
     });
+
+    // 【2026-10-14、10本目①】touchZoomRotateは2本指ピンチズームと2本指回転の
+    // 両方を束ねたハンドラのため、有効のまま回転部分だけを無効化する
+    // （Minami指示：2本指ズームは残し、2本指でひねる回転だけ止める）。
+    this.map.touchZoomRotate.disableRotation();
 
     // 方角コンパス（Minami指示：地図右上、押すと北向きに戻る＝
     // NavigationControlの既定動作）。ズームボタンは出さない（+/-は別UIで
@@ -346,24 +394,15 @@ export class TerrainMapView {
       'top-right'
     );
 
-    // 【2026-10-11】ユーザーが手で地図を動かしたら、ゆっくり回る演出を止める
-    // （Minami指示）。dragstart・rotatestart・wheelはユーザー操作のハンドラ
-    // 起点でのみ発火し、プログラム側のjumpTo/easeTo/flyToでは発火しない
-    // （実装を確認して確定）。
-    // 【2026-10-13、8本目③で判明】ただしzoomstart・pitchstartは、ズーム/
-    // 傾きが変わる操作であれば発生源を問わず発火する＝flyTo()やeaseTo()での
-    // プログラム側のズーム・pitch変更でも発火することが、「降りる→傾ける」
-    // 演出の追加時に判明した（本番コードがflyTo直後にmoveendが一度も
-    // 届かない不具合として発覚：原因を調査したところ、flyTo自体が発火した
-    // zoomstart/pitchstartが_flySpotTokenを進め、同じflyTo完了時のmoveend
-    // ハンドラが「トークンが古い」と誤判定して処理を中断していた）。
-    // MapLibreのイベントは、ユーザー操作由来のときだけe.originalEvent
-    // （実際のDOMイベント）を持ち、プログラム側の変更では持たない
-    // （実機確認で確定）。これを使い、ユーザー操作由来のときだけ演出を
-    // 無効化する。
+    // 【2026-10-13、8本目③】ユーザーが手で地図を操作したら、「降りる→傾ける」
+    // 演出を止める（ユーザー操作を優先）。zoomstart・pitchstartは、flyTo()や
+    // easeTo()によるプログラム側の変更でも発火するため、e.originalEvent
+    // （実際のDOMイベント。ユーザー操作由来のときだけ存在する）で判別する
+    // （実機確認で確定）。
+    // 【2026-10-14、10本目①】Minami指示によりゆっくり回る演出（自動回転）を
+    // まるごと廃止したため、ここで止めていた_stopAutoRotate()呼び出しは削除した。
     ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart', 'wheel'].forEach((evt) => {
       this.map.on(evt, (e) => {
-        this._stopAutoRotate();
         if (e.originalEvent) this._flySpotToken++; // プログラム側（flyTo/easeTo由来）では「降りる→傾ける」演出を止めない
       });
     });
@@ -473,8 +512,11 @@ export class TerrainMapView {
    * @param {{display_name:string, stop_lat:number, stop_lon:number}} departureStation
    * @param {Array} spots - 予算¥2000で一度取得したallSpots全体（予算の絞り込みはapplyBudget側で行う）
    * @param {number} [budget] - 初期表示の予算。省略時は2000（全件が「少し薄い」状態で見える）
+   * @param {{reveal?: boolean}} [opts] - 【2026-10-14、10本目②】reveal:trueで、出発駅から
+   *   近い順に波が広がるように点を出す（Minami指示：「この条件で検索」を押したときだけ）。
+   *   それ以外（予算操作の裏取得・3D初回有効化など）は従来どおり即座に全部出す。
    */
-  render(departureStation, spots, budget) {
+  render(departureStation, spots, budget, { reveal = false } = {}) {
     this._lastDepartureStation = departureStation;
     this._lastSpots = spots;
     this._lastBudget = budget;
@@ -491,51 +533,68 @@ export class TerrainMapView {
         .addTo(this.map);
     }
 
+    // 出発駅からの直線距離（km）を各スポットに付与する。予算の到達円の半径
+    // （updateReachCircle）と、波の演出の遅延（nearest-first）の両方がこの値を使う。
+    const hasDeparture = departureStation
+      && isFiniteNumber(departureStation.stop_lat) && isFiniteNumber(departureStation.stop_lon);
     const features = (spots || [])
       .filter((spot) => isFiniteNumber(spot.latitude) && isFiniteNumber(spot.longitude))
       .map((spot) => ({
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [spot.longitude, spot.latitude] },
-        properties: { ...spot, fare: spot.source_round_trip_fare },
+        properties: {
+          ...spot,
+          fare: spot.source_round_trip_fare,
+          distance_km: hasDeparture
+            ? haversineKm(departureStation.stop_lat, departureStation.stop_lon, spot.latitude, spot.longitude)
+            : 0,
+        },
       }));
     const source = this.map.getSource(SPOTS_SOURCE_ID);
     if (source) source.setData({ type: 'FeatureCollection', features });
 
-    this.applyBudget(budget ?? 2000);
+    this.applyBudget(budget ?? 2000, { reveal });
+    this.updateReachCircle(budget ?? 2000, { style: 'settled' });
   }
 
   /**
-   * 予算スライダーの1コマ分。データの再取得は行わず、既存のGeoJSONソースに
-   * setFilter/setPaintPropertyを適用するだけ（Minami指示：計算は¥2000で
-   * 一度出したallSpotsから帯で絞るだけで足りる）。
+   * 予算を確定させる（検索実行・裏取得等）。データの再取得は行わず、既存の
+   * GeoJSONソースにsetFilter/setPaintPropertyを適用するだけ（Minami指示：計算は
+   * ¥2000で一度出したallSpotsから帯で絞るだけで足りる）。
+   * 【2026-10-14、10本目①】予算スライダー・±ボタンを動かしている間はこの
+   * メソッドを呼ばない（Minami決定：円だけ広げる。点は検索を押すまで変えない）。
+   * 呼ぶのは実際に検索した／裏で¥2000全域を取得し終えた／3Dを初めて有効化した
+   * ときだけ（main.js参照）。
    * 帯（budget-200〜budget）の件数は毎回同期的に計算して返す（軽い配列操作のため
    * 間引く必要はない）。実際の塗り替え（setFilter/setPaintProperty）はMinami指示で
    * requestAnimationFrame 1コマに1回へ間引く（CPU4倍下で最大85msかかっていた
-   * スライダー1コマを50ms以内に収めるため）。
+   * スライダー1コマを50ms以内に収めるため。10本目で予算操作自体がこのメソッドを
+   * 呼ばなくなった今も、検索直後の塗り替え自体は引き続きこの間引きの恩恵を受ける）。
    * @param {number} budget
+   * @param {{reveal?: boolean}} [opts]
    * @returns {number} 帯内の件数
    */
-  applyBudget(budget) {
+  applyBudget(budget, { reveal = false } = {}) {
     this._lastBudget = budget;
     const count = (this._lastSpots || []).filter(
       (s) => s.source_round_trip_fare <= budget && s.source_round_trip_fare > budget - BAND_WIDTH
     ).length;
 
     this._pendingPaintBudget = budget;
+    this._pendingPaintReveal = reveal;
     if (!this._paintScheduled) {
       this._paintScheduled = true;
       requestAnimationFrame(() => {
         this._paintScheduled = false;
-        this._paintBudget(this._pendingPaintBudget);
+        this._paintBudget(this._pendingPaintBudget, this._pendingPaintReveal);
       });
     }
     return count;
   }
 
-  _paintBudget(budget) {
+  _paintBudget(budget, reveal) {
     if (!this.map || !this.map.getLayer(SPOTS_LAYER_ID)) return;
     const inBand = inBandExpr(budget);
-    this.map.setFilter(SPOTS_LAYER_ID, ['<=', ['get', 'fare'], budget]);
     // 帯に入る点＝大きめ＋光の輪（ぼかし+白縁）、それより安い点＝緑がかった灰色の
     // 小さい点（Minami指摘：見分けづらかったため色・形とも区別を強めた）。
     this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-radius', ['case', inBand, 10, 4]);
@@ -544,6 +603,147 @@ export class TerrainMapView {
     this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-stroke-width', ['case', inBand, 3, 0]);
     this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-stroke-color', '#ffffff');
     this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-blur', ['case', inBand, 0.5, 0]);
+
+    if (reveal && !prefersReducedMotion()) {
+      this._startWaveReveal(budget);
+    } else {
+      this._cancelWaveReveal();
+      this.map.setFilter(SPOTS_LAYER_ID, ['<=', ['get', 'fare'], budget]);
+    }
+  }
+
+  /**
+   * 【2026-10-14、10本目②】検索を押した直後、出発駅から近い順に点が波のように
+   * 広がって出る演出（Minami指示：全体で1秒前後）。各スポットのdistance_km
+   * （render()で付与済み）を使い、「予算内で一番遠い点までの距離」を1秒かけて
+   * 0から広げるのと同じ考え方で、filterの距離条件を毎フレーム広げていく
+   * （updateReachCircle()の半径計算と同じ最大距離を使うため、円が広がる速さと
+   * 点が出る速さが自然に揃う）。prefers-reduced-motionのときは呼ばれない
+   * （_paintBudget側で分岐済み）。
+   */
+  _startWaveReveal(budget) {
+    this._cancelWaveReveal();
+    const maxKm = (this._lastSpots || []).reduce((max, s) => {
+      if (!isFiniteNumber(s.latitude) || !isFiniteNumber(s.longitude)) return max;
+      if (s.source_round_trip_fare > budget) return max;
+      const dep = this._lastDepartureStation;
+      if (!dep || !isFiniteNumber(dep.stop_lat) || !isFiniteNumber(dep.stop_lon)) return max;
+      return Math.max(max, haversineKm(dep.stop_lat, dep.stop_lon, s.latitude, s.longitude));
+    }, 0);
+    if (maxKm <= 0) {
+      this.map.setFilter(SPOTS_LAYER_ID, ['<=', ['get', 'fare'], budget]);
+      return;
+    }
+    const token = ++this._waveToken;
+    const startTime = performance.now();
+    const step = (now) => {
+      if (token !== this._waveToken || !this.map) return;
+      const elapsed = now - startTime;
+      const progress = Math.min(1, elapsed / WAVE_DURATION_MS);
+      const revealedKm = maxKm * progress;
+      this.map.setFilter(SPOTS_LAYER_ID, [
+        'all',
+        ['<=', ['get', 'fare'], budget],
+        ['<=', ['get', 'distance_km'], revealedKm],
+      ]);
+      if (progress < 1) {
+        this._waveFrame = requestAnimationFrame(step);
+      } else {
+        this._waveFrame = null;
+        // 浮動小数点の端数で最遠点が漏れないよう、仕上げに距離条件を外す。
+        this.map.setFilter(SPOTS_LAYER_ID, ['<=', ['get', 'fare'], budget]);
+      }
+    };
+    this._waveFrame = requestAnimationFrame(step);
+  }
+
+  _cancelWaveReveal() {
+    this._waveToken = (this._waveToken || 0) + 1;
+    if (this._waveFrame) {
+      cancelAnimationFrame(this._waveFrame);
+      this._waveFrame = null;
+    }
+  }
+
+  /**
+   * 【2026-10-14、10本目②、Minami決定：A】予算の±・スライダーを動かしている間は
+   * 点を変えず、出発駅を中心にした到達範囲の円だけを広げる・縮める。
+   * 半径は「今の予算以内（往復）で行ける場所のうち、一番遠い場所までの直線距離」
+   * （¥2000で先に取得済みのallSpotsから実測。推測値にしない、Minami指示）。
+   * まだ検索していない（allSpots無し）ときは円を出さない。
+   * @param {number} budget
+   * @param {{style?: 'live'|'settled'}} [opts] - settled:検索確定後（薄くする）
+   */
+  updateReachCircle(budget, { style = 'live' } = {}) {
+    const dep = this._lastDepartureStation;
+    if (!dep || !isFiniteNumber(dep.stop_lat) || !isFiniteNumber(dep.stop_lon)
+      || !this._lastSpots || this._lastSpots.length === 0) {
+      this._pendingCircleRadiusKm = 0;
+      this._pendingCircleStyle = style;
+      this._scheduleCirclePaint();
+      return;
+    }
+    const maxKm = this._lastSpots.reduce((max, s) => {
+      if (!isFiniteNumber(s.latitude) || !isFiniteNumber(s.longitude)) return max;
+      if (s.source_round_trip_fare > budget) return max;
+      return Math.max(max, haversineKm(dep.stop_lat, dep.stop_lon, s.latitude, s.longitude));
+    }, 0);
+    this._pendingCircleRadiusKm = maxKm;
+    this._pendingCircleStyle = style;
+    this._scheduleCirclePaint();
+  }
+
+  _scheduleCirclePaint() {
+    if (this._circlePaintScheduled) return;
+    this._circlePaintScheduled = true;
+    requestAnimationFrame(() => {
+      this._circlePaintScheduled = false;
+      this._paintReachCircle(this._pendingCircleRadiusKm, this._pendingCircleStyle);
+    });
+  }
+
+  _paintReachCircle(radiusKm, style) {
+    if (!this.map) return;
+    this._reachCircleRadiusKm = radiusKm;
+    const source = this.map.getSource(REACH_CIRCLE_SOURCE_ID);
+    const dep = this._lastDepartureStation;
+    if (!source || !dep || !radiusKm || radiusKm <= 0) {
+      if (source) source.setData({ type: 'FeatureCollection', features: [] });
+      if (this._reachCircleLabelMarker) this._reachCircleLabelMarker.remove();
+      this._reachCircleLabelMarker = null;
+      return;
+    }
+    const ring = [];
+    for (let i = 0; i <= REACH_CIRCLE_POINTS; i++) {
+      const bearingDeg = (360 / REACH_CIRCLE_POINTS) * i;
+      const { lat, lon } = destinationPoint(dep.stop_lat, dep.stop_lon, bearingDeg, radiusKm);
+      ring.push([lon, lat]);
+    }
+    source.setData({
+      type: 'FeatureCollection',
+      features: [{ type: 'Feature', geometry: { type: 'Polygon', coordinates: [ring] }, properties: {} }],
+    });
+    const opacities = style === 'settled'
+      ? { fill: 0.07, line: 0.35 }
+      : { fill: 0.12, line: 0.55 };
+    this.map.setPaintProperty(REACH_CIRCLE_FILL_LAYER_ID, 'fill-opacity', opacities.fill);
+    this.map.setPaintProperty(REACH_CIRCLE_LINE_LAYER_ID, 'line-opacity', opacities.line);
+
+    const labelPoint = destinationPoint(dep.stop_lat, dep.stop_lon, REACH_CIRCLE_LABEL_BEARING, radiusKm);
+    if (!this._reachCircleLabelMarker) {
+      const el = document.createElement('div');
+      el.className = 'reach-circle-label';
+      // 【不具合修正】setLngLat()より先にaddTo()すると、_lngLatが未設定のまま
+      // マーカーが地図に登録され、後続のカメラ移動（moveイベント）のたびに
+      // マーカーの再配置処理がundefined.lngを読んで例外を投げていた
+      // （実機・verify-layoutで"Cannot read properties of undefined (reading 'lng')"
+      // として発覚）。setLngLat()を先に呼んでからaddTo()する。
+      this._reachCircleLabelMarker = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat([labelPoint.lon, labelPoint.lat])
+        .addTo(this.map);
+    }
+    this._reachCircleLabelMarker.getElement().textContent = `最大${formatRadiusKm(radiusKm)}先まで`;
+    this._reachCircleLabelMarker.setLngLat([labelPoint.lon, labelPoint.lat]);
   }
 
   /**
@@ -590,15 +790,20 @@ export class TerrainMapView {
       ? [this._lastDepartureStation.stop_lon, this._lastDepartureStation.stop_lat]
       : camera.center;
 
-    this._stopAutoRotate();
+    // 【2026-10-14、10本目①】向き（bearing）は変えない（Minami指示）。現在の
+    // bearingをそのまま渡すことで、実質「変えない」になる。
     this.map.easeTo({ center, zoom, pitch: DEFAULT_PITCH, bearing: this.map.getBearing(), duration: 600 });
   }
 
   /**
    * 指定したスポットへ寄る（Minami指示、5本目：地図の点をタップした/一覧の
-   * カードを選んだ/詳細画面を開いたとき）。向き（bearing）は出発駅→スポットの
-   * 方位角そのまま（出発駅が手前、スポットが奥になる。4本目④の立山方向
-   * カメラで確定済みのbearingの向き）。
+   * カードを選んだ/詳細画面を開いたとき）。
+   *
+   * 【2026-10-14、10本目①、Minami決定：B】向き（bearing）は変えない。以前は
+   * 出発駅→スポットの方位角に合わせて回転していたが、「地図が勝手に回る・
+   * 向きが大きく変わるのが無駄な動きに感じる、触り続けると酔う」という
+   * Minami指摘により、回転をまるごと廃止した（自動回転・flyToSpotでの
+   * bearing変更の両方）。寄るときは今のbearingのまま。
    *
    * 【2026-10-13、8本目③】7本目の調査で「寄ってから景色が見えるまで」の
    * 遅さの主因は背景タイルの読み込み量と判明した（原因そのものの深追いは
@@ -610,20 +815,16 @@ export class TerrainMapView {
    * 傾けている最中・傾け終わった後に地平線側の遠いタイルが遅れて出るのは
    * 許容する（Minami指示）。
    * 降りている途中でユーザーが地図を操作すると、_flySpotTokenが進んで
-   * 以降の演出（傾け・自動回転の開始）を行わない（上のdragstart等の
-   * 購読箇所を参照。ユーザー操作を優先）。
+   * 以降の演出（傾け）を行わない（上のdragstart等の購読箇所を参照。
+   * ユーザー操作を優先）。
    * prefers-reduced-motionのときは、降りる・傾けるを1回の短い移動に
    * まとめる（Minami指示）。
    * @param {{latitude:number, longitude:number}} spot
-   * @param {{stop_lat:number, stop_lon:number}} [departureStation]
+   * @param {{stop_lat:number, stop_lon:number}} [departureStation] - 10本目で
+   *   bearing計算に使わなくなったが、呼び出し元との互換のため引数は残す。
    */
   flyToSpot(spot, departureStation) {
     if (!this.map || !isFiniteNumber(spot?.latitude) || !isFiniteNumber(spot?.longitude)) return;
-    let bearing = this.map.getBearing();
-    if (departureStation && isFiniteNumber(departureStation.stop_lat) && isFiniteNumber(departureStation.stop_lon)) {
-      bearing = computeBearing(departureStation.stop_lat, departureStation.stop_lon, spot.latitude, spot.longitude);
-    }
-    this._stopAutoRotate();
     const token = ++this._flySpotToken;
 
     if (prefersReducedMotion()) {
@@ -631,13 +832,11 @@ export class TerrainMapView {
         center: [spot.longitude, spot.latitude],
         zoom: SPOT_FOCUS_ZOOM,
         pitch: SPOT_FOCUS_PITCH,
-        bearing,
         duration: REDUCED_MOTION_FLY_DURATION_MS,
         essential: true,
       });
       if (this.onOverheadSettled) this.onOverheadSettled(spot);
       if (this.onTiltComplete) this.onTiltComplete(spot);
-      this._scheduleAutoRotateAfterFlight();
       return;
     }
 
@@ -645,7 +844,6 @@ export class TerrainMapView {
       center: [spot.longitude, spot.latitude],
       zoom: SPOT_FOCUS_ZOOM,
       pitch: 0,
-      bearing,
       duration: SPOT_FOCUS_DURATION_MS,
       essential: true,
     });
@@ -673,109 +871,10 @@ export class TerrainMapView {
           this.waitForSceneSettled().then(() => {
             if (token !== this._flySpotToken || !this.map) return;
             if (this.onTiltComplete) this.onTiltComplete(spot);
-            // このmoveendハンドラの中＝既に静止済みのため、次のmoveendを
-            // 待たせない（alreadyAtRest=true。上のメソッドのコメント参照）。
-            this._scheduleAutoRotateAfterFlight(true);
           });
         });
       });
     });
-  }
-
-  /**
-   * flyTo完了（'moveend'）後、中央付近の地形・背景が落ち着いてから少し間を
-   * 置いてゆっくり回る演出を始める。
-   *
-   * 【2026-10-12、7本目②・③】2つの問題を直した。
-   * 1. 【6本目で未解決だった競合】旧実装はmap.once('moveend', ...)の
-   *    リスナーを_stopAutoRotate()から外せなかった。flyTo開始直後（まだ
-   *    moveendが来る前）にユーザー操作やテストコードが_stopAutoRotate()を
-   *    呼んでも、このリスナー自体は残り続け、後からmoveend（ユーザー操作に
-   *    よる中断分も含む）が来るたびに新しいタイマーを仕込み直してしまい、
-   *    「止めたはずなのに後で勝手に回り出す」不具合になっていた（6本目の
-   *    Playwright検証で、ポップアップの画面座標が数百px単位で動き続ける
-   *    形で発覚）。_pendingMoveEndHandlerに参照を保持し、_stopAutoRotate()
-   *    側でmap.off()する。
-   * 2. 【7本目②の調査結果】自動回転それ自体が「寄ってから地形が見えるまで
-   *    20秒」の主因ではなかった（回転を無効化しても25.3秒→19.7秒と2割弱の
-   *    短縮に留まった。詳しくはこのファイルの変更に対応するコミットの
-   *    説明・報告を参照）。ただし回転が続く間は新しい背景タイルを要求し
-   *    続けるため、無関係ではない。影響を無くすため、固定500ms待つのでは
-   *    なく、中央付近の読み込みが落ち着く（waitForSceneSettled()）まで
-   *    そもそも回転を始めない設計にした（Minami指示の対策案）。
-   * 世代カウンタ（_autoRotateScheduleToken）で、settle待ちの途中に
-   * _stopAutoRotate()が呼ばれた場合はその後のstartを無効化する。
-   *
-   * 【2026-10-13、8本目③修正】呼び出し元が増えたことで判明した不具合：
-   * このメソッドは元々「flyTo/easeToを開始した直後（まだ動いている最中）」
-   * に呼ぶ前提で、次に来る1回の'moveend'を待っていた。ところが「降りる→
-   * 傾ける」演出では、傾けのeaseToが完了した'moveend'ハンドラの中から
-   * このメソッドを呼ぶ（＝呼ばれた時点で既に静止済み、カメラは次に動く
-   * 予定が無い）。この状態でmap.once('moveend', ...)を登録すると、
-   * 二度と来ないイベントを待ち続け、自動回転が永久に始まらなかった
-   * （実機・Playwright検証で、40秒待っても回転が始まらないことで発覚）。
-   * @param {boolean} [alreadyAtRest] - trueなら「既に静止済み（直前の
-   *   moveendハンドラ内から呼ばれた等）」とみなし、次のmoveendを待たずに
-   *   即座にsettle確認へ進む。
-   */
-  _scheduleAutoRotateAfterFlight(alreadyAtRest = false) {
-    if (!this.map || prefersReducedMotion()) return;
-    const token = this._autoRotateScheduleToken;
-    const proceedToSettleCheck = () => {
-      this.waitForSceneSettled().then(() => {
-        if (token !== this._autoRotateScheduleToken || !this.map) return;
-        this._autoRotateStartTimer = setTimeout(() => {
-          if (token !== this._autoRotateScheduleToken) return;
-          this._startAutoRotate();
-        }, AUTO_ROTATE_START_DELAY_MS);
-      });
-    };
-    if (alreadyAtRest) {
-      proceedToSettleCheck();
-      return;
-    }
-    this._pendingMoveEndHandler = () => {
-      this._pendingMoveEndHandler = null;
-      proceedToSettleCheck();
-    };
-    this.map.once('moveend', this._pendingMoveEndHandler);
-  }
-
-  _startAutoRotate() {
-    if (!this.map || this._autoRotateFrame || prefersReducedMotion()) return;
-    let previousTime = null;
-    const step = (time) => {
-      if (!this.map) { this._autoRotateFrame = null; return; }
-      if (previousTime != null) {
-        const deltaMs = time - previousTime;
-        this.map.setBearing(this.map.getBearing() + (360 / AUTO_ROTATE_MS_PER_REV) * deltaMs);
-      }
-      previousTime = time;
-      this._autoRotateFrame = requestAnimationFrame(step);
-    };
-    this._autoRotateFrame = requestAnimationFrame(step);
-  }
-
-  /**
-   * ユーザー操作（ドラッグ・ズーム・回転・傾き・ホイール）で呼ばれ、演出を
-   * 止める。【2026-10-12修正】世代カウンタを進めて保留中のsettle待ち
-   * （_scheduleAutoRotateAfterFlight()のPromiseチェーン）を無効化し、
-   * 登録済みのmoveendリスナーも確実に外す（上のコメント参照）。
-   */
-  _stopAutoRotate() {
-    this._autoRotateScheduleToken++;
-    if (this._pendingMoveEndHandler) {
-      if (this.map) this.map.off('moveend', this._pendingMoveEndHandler);
-      this._pendingMoveEndHandler = null;
-    }
-    if (this._autoRotateStartTimer) {
-      clearTimeout(this._autoRotateStartTimer);
-      this._autoRotateStartTimer = null;
-    }
-    if (this._autoRotateFrame) {
-      cancelAnimationFrame(this._autoRotateFrame);
-      this._autoRotateFrame = null;
-    }
   }
 
   /**
@@ -921,12 +1020,13 @@ export class TerrainMapView {
 
   /** 2D切替時・再試行時にWebGLコンテキストを確実に解放する（上限超過による失敗を防ぐ） */
   destroy() {
-    this._stopAutoRotate();
+    this._cancelWaveReveal();
     if (this.map) {
       this.map.remove();
       this.map = null;
     }
     this.departureMarker = null;
     this.popup = null;
+    this._reachCircleLabelMarker = null;
   }
 }

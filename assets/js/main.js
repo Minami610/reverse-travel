@@ -24,6 +24,10 @@ const BAND_WIDTH = 200;
 const MIN_BUDGET = 200;
 const MAX_BUDGET = 2000; // 2026-10-06、Minamiさんの判断により¥1000から変更
 const BUDGET_STEP = 100;
+// 【2026-10-14、10本目②】scheduleMaxBudgetPrefetch()参照。map-view.js・
+// terrain-map-view.jsのWAVE_DURATION_MS（1000ms、検索後に点が波のように出る
+// 演出の所要時間）より確実に後になるよう、裏取得の反映を遅らせるための余裕時間。
+const WAVE_REVEAL_SAFE_DELAY_MS = 1200;
 
 /** 予算→帯の表示ラベル（例: budget=1000 → "¥801〜¥1000"） */
 function formatBandLabel(budget) {
@@ -251,17 +255,15 @@ class ReverseTravel {
       this.stepBudget(100);
     });
 
-    // 予算スライダー（4本目③）。'input'はドラッグ中に連続発火＝地図の塗り替えのみ
-    // （カメラは動かさない、Minami指示）。'change'は指を離した時に1回だけ発火＝
-    // そのタイミングでカメラをなめらかに合わせる。
+    // 予算スライダー（4本目③、2026-10-14 10本目①で変更）。'input'はドラッグ中に
+    // 連続発火＝到達範囲の円だけ広げる（Minami決定：A。点・カメラは「この条件で
+    // 検索」を押すまで変えない）。指を離したとき（change）に別途行うことは
+    // 無くなったため、changeのリスナーは廃止した。
     this.elements.budgetSlider.addEventListener('input', () => {
       const value = parseInt(this.elements.budgetSlider.value, 10);
       this.elements.budgetInput.value = value;
       this.updateBudgetUI();
       this.updateMapBudgetLive(value);
-    });
-    this.elements.budgetSlider.addEventListener('change', () => {
-      this.commitMapBudgetFit(parseInt(this.elements.budgetSlider.value, 10));
     });
 
     this.updateBudgetUI();
@@ -528,10 +530,10 @@ class ReverseTravel {
 
     input.value = next;
     this.updateBudgetUI();
-    // ボタンは離散操作（ドラッグのような連続変化が無い）なので、スライダーの
-    // 「動かしている間」には当たらない。塗り替えとカメラ合わせを両方すぐ行う。
+    // 【2026-10-14、10本目①、Minami決定：A】±ボタンもスライダーと同じく
+    // 円だけを広げる。点・カメラは「この条件で検索」を押すまで変えない
+    // （Minami指示：点がすぐ変わると検索ボタンを押す動機が薄れるため）。
     this.updateMapBudgetLive(next);
-    this.commitMapBudgetFit(next);
   }
 
   updateBudgetUI() {
@@ -548,26 +550,22 @@ class ReverseTravel {
   }
 
   /**
-   * 予算スライダーの1コマ分（4本目③）。地図（2D・3D）の点をデータ再取得
-   * なしで塗り替え、帯の件数をその場で出す。まだ検索していない（this.currentAllSpots
-   * が空）ときは件数プレビューを出さない（Minami指示：点が無いので光らない）。
-   * カメラは動かさない（Minami指示：動かしている間はカクつき防止で固定）。
+   * 予算スライダー・±ボタンの1コマ分（4本目③、2026-10-14 10本目①で全面変更）。
+   * 【10本目、Minami決定：A】地図の点（光る点・薄い点）は変えない。点は、
+   * 最後に検索したときの状態のまま。代わりに、出発駅を中心にした到達範囲の円
+   * だけを広げる・縮める（2D・3D共通）。帯の件数プレビューはこれまでどおり
+   * 動かしながら変えてよい（検索の目安になるため、Minami指示）。
+   * まだ検索していない（this.currentAllSpotsが空）ときは円・件数プレビューとも出さない。
    */
   updateMapBudgetLive(budget) {
+    this.mapView.updateReachCircle(budget, { style: 'live' });
+    this.terrainMapView?.updateReachCircle(budget, { style: 'live' });
     if (!this.currentAllSpots || this.currentAllSpots.length === 0) {
       this.elements.budgetBandPreview.hidden = true;
       return;
     }
-    const count2d = this.mapView.applyBudget(budget);
-    this.terrainMapView?.applyBudget(budget);
-    this.updateBudgetBandPreview(budget, count2d);
-  }
-
-  /** スライダーを離した・±ボタンを押した直後に呼ぶ。帯＋それより安い点が収まるようカメラを合わせる。 */
-  commitMapBudgetFit(budget) {
-    if (!this.currentAllSpots || this.currentAllSpots.length === 0) return;
-    this.mapView.fitToBudget(budget);
-    this.terrainMapView?.fitToBudget(budget);
+    const { bandSpots } = this.filterBandFromAllSpots(this.currentAllSpots, budget);
+    this.updateBudgetBandPreview(budget, bandSpots.length);
   }
 
   updateBudgetBandPreview(budget, count) {
@@ -969,16 +967,29 @@ class ReverseTravel {
         const { allSpots } = await this.computeSearchResult(stationId, MAX_BUDGET);
         if (this.currentDepartureStationId !== stationId) return;
         this.currentAllSpots = allSpots;
-        const departureStation = this.data.stations?.[stationId];
-        // 裏の計算中にスライダーが動かされている場合があるため、検索時の予算
-        // （this.currentBudget）ではなく、スライダーの今の値を使う。
-        const liveBudget = parseInt(this.elements.budgetInput.value, 10);
-        this.mapView.render(departureStation, allSpots, liveBudget);
-        if (this.terrainMapView) this.terrainMapView.render(departureStation, allSpots, liveBudget);
-        const count = allSpots.filter(
-          (s) => s.source_round_trip_fare <= liveBudget && s.source_round_trip_fare > liveBudget - BAND_WIDTH
-        ).length;
-        this.updateBudgetBandPreview(liveBudget, count);
+        // 【2026-10-14、10本目②修正】ここで即render()し直すと、検索直後に
+        // 始まったばかりの「波のように出る」演出を、マーカーの作り直しで
+        // 無言のまま中断・リセットしてしまう（render()はwaveの進行中かどうかに
+        // 関わらず常に演出をキャンセルして作り直す設計のため）。requestIdleCallback
+        // は環境によってはほぼ即座に発火するため、波の所要時間（WAVE_DURATION_MS、
+        // map-view.js/terrain-map-view.js参照）より確実に後になるまで、
+        // 反映そのものを遅らせる（実機・verify-layoutで、検索直後に点の
+        // 隠れている数を見たらすでに0件＝演出が始まる前に終わっていたことで発覚）。
+        setTimeout(() => {
+          if (this.currentDepartureStationId !== stationId) return;
+          const departureStation = this.data.stations?.[stationId];
+          // 【2026-10-14、10本目①修正】裏の計算中にスライダーが動かされていても、
+          // 点は検索したときの予算（this.currentBudget）のまま据え置く（Minami指示：
+          // 点は「この条件で検索」を押すまで変えない。以前はスライダーの今の値を
+          // 使っていたが、それは「点がすぐ変わる」挙動そのものだった）。
+          this.mapView.render(departureStation, allSpots, this.currentBudget);
+          if (this.terrainMapView) this.terrainMapView.render(departureStation, allSpots, this.currentBudget);
+          // 円・帯の件数プレビューはスライダーの今の値で出してよい（動かしながら
+          // 変えてよい表示のため）。allSpotsが揃ったことで、半径・件数とも
+          // より正確になる。
+          const liveBudget = parseInt(this.elements.budgetInput.value, 10);
+          this.updateMapBudgetLive(liveBudget);
+        }, WAVE_REVEAL_SAFE_DELAY_MS);
       } catch (e) {
         console.warn('¥2000範囲の裏取得に失敗しました（一覧・現在の帯の表示には影響しません）:', e);
       }
@@ -1074,12 +1085,17 @@ class ReverseTravel {
       this.elements.bandHeading.hidden = false;
     }
 
+    // 【2026-10-14、10本目②】「この条件で検索」を押した結果の表示なので、
+    // 出発駅から近い順に点が波のように広がって出る演出を行う（Minami指示）。
     const departureStation = this.data.stations?.[departureStationId];
-    this.mapView.render(departureStation, this.currentAllSpots, budget);
+    this.mapView.render(departureStation, this.currentAllSpots, budget, { reveal: true });
     // 3D地図は3D切替が一度も行われるまでインスタンス自体が無い（遅延読込、4本目②）。
     // 作成済みならrender()を呼ぶ（未初期化でも座標だけ保持する設計のため、
     // activateTerrainMap()が後から呼ばれたときに自動で反映される）。
-    if (this.terrainMapView) this.terrainMapView.render(departureStation, this.currentAllSpots, budget);
+    if (this.terrainMapView) {
+      this.terrainMapView.render(departureStation, this.currentAllSpots, budget, { reveal: true });
+      this.terrainMapView.fitToBudget(budget);
+    }
 
     this.updateBudgetBandPreview(budget, spots.length);
 

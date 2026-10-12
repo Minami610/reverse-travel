@@ -650,7 +650,7 @@ header p {
 .map-pin {
   display: block;
   box-sizing: border-box;
-  transition: transform 0.15s;
+  transition: transform 0.3s ease, opacity 0.3s ease;
 }
 
 /* スポットのピン：小さめの点にして密集時の重なりを軽減 */
@@ -730,6 +730,41 @@ header p {
 
 .map-departure-tooltip::before {
   border-top-color: var(--color-accent-deep);
+}
+
+/* 【2026-10-14、10本目②】予算の到達範囲の円のラベル（2D・3D共通の見た目）。
+   オレンジの点より目立たない青系にする（Minami指示）。 */
+.reach-circle-label {
+  background-color: rgba(47, 111, 178, 0.88);
+  color: white;
+  border: none;
+  font-weight: 600;
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.reach-circle-label::before {
+  display: none; /* Leafletの吹き出し用の三角形は不要（円のラベルなので） */
+}
+
+/* 【2026-10-14、10本目②】検索を押した直後、出発駅から近い順に点が波のように
+   広がって出る演出。pin-wave-hiddenが付いている間は見えない状態にしておき、
+   JS側がスポットごとに時間差でクラスを外すとこのtransitionで浮かび上がる。
+   prefers-reduced-motionのときはJS側がクラスを付けないため、常に即表示になる。
+   【不具合修正】当初は.map-pin-wrapper自身にtransform/opacityを付けていたが、
+   Leafletはこの同じ要素（marker.getElement()）のtransformを使ってピンを
+   地図上に位置決めしている（L.DomUtil.setPosition）。wrapper自身に
+   transitionを付けると、Leaflet自身の位置決め（transform書き換え）まで
+   アニメーションしてしまい、作成直後のboundingBox()が実際の位置とずれる
+   （verify-layoutの実クリック検証で「ポップアップが開かない」として発覚）。
+   地図上の位置決めに使われない内側の.map-pinへ対象を変えた。 */
+.map-pin-wrapper.pin-wave-hidden .map-pin {
+  opacity: 0;
+  transform: scale(0.3);
 }
 
 /* 地図ピンのポップアップ（スポット名・往復運賃・詳細ボタン。

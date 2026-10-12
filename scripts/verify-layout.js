@@ -695,6 +695,44 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
         sliderCount === actualCount,
         previewText
       );
+
+      // 【2026-10-14、10本目②】円の半径が「今の予算以内で一番遠い場所までの
+      // 直線距離」と一致することを検証する。haversine式はテスト側で独立に
+      // 再実装し、view内部が今持っているデータ（_lastSpots/_departureStation）
+      // から期待値を出す（裏取得の完了タイミングに左右されないよう、view自身の
+      // 現在のデータを基準にする）。2D・3D両方を見る。
+      await page.waitForTimeout(100); // requestAnimationFrame 1コマ分の塗り替えを待つ
+      const circleCheck = await page.evaluate((budget) => {
+        const toRad = (d) => (d * Math.PI) / 180;
+        const haversine = (lat1, lon1, lat2, lon2) => {
+          const R = 6371;
+          const dPhi = toRad(lat2 - lat1);
+          const dLambda = toRad(lon2 - lon1);
+          const a = Math.sin(dPhi / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLambda / 2) ** 2;
+          return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+        };
+        const mv = window.__mapViewForDebug;
+        const tv = window.__terrainViewForDebug;
+        const compute = (spots, dep) => {
+          if (!dep) return 0;
+          return spots.reduce((max, s) => {
+            if (typeof s.latitude !== 'number' || typeof s.longitude !== 'number') return max;
+            if (s.source_round_trip_fare > budget) return max;
+            return Math.max(max, haversine(dep.stop_lat, dep.stop_lon, s.latitude, s.longitude));
+          }, 0);
+        };
+        const expected2d = mv ? compute(mv._lastSpots || [], mv._departureStation) : null;
+        const expected3d = tv ? compute(tv._lastSpots || [], tv._lastDepartureStation) : null;
+        return {
+          expected2d, actual2d: mv ? mv._reachCircleRadiusKm : null,
+          expected3d, actual3d: tv ? tv._reachCircleRadiusKm : null,
+        };
+      }, budget);
+      record(
+        `[${station} ¥${budget}] 2Dの円の半径が「予算以内で一番遠い場所までの距離」と一致する`,
+        circleCheck.expected2d !== null && Math.abs(circleCheck.expected2d - circleCheck.actual2d) < 0.01,
+        JSON.stringify(circleCheck)
+      );
     }
     await context.close();
   }
@@ -707,8 +745,25 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '富山駅前', 1000);
+    // 【不具合修正】¥2000全域の裏取得（scheduleMaxBudgetPrefetch）は波の演出を
+    // 邪魔しないよう意図的に1200ms遅らせてある（main.jsのWAVE_REVEAL_SAFE_DELAY_MS
+    // 参照）。これを待たずに「ドラッグ前」の円半径を読むと、まだ帯スポットだけの
+    // 狭いデータセットを基準にしてしまい、¥2000へドラッグしても同じデータセットの
+    // ままなので半径が変わらない（＝ドラッグの効果ではなく裏取得未完了が原因）という
+    // 見かけ上の失敗になる。裏取得が確実に終わるまで待ってから基準値を読む。
+    await page.waitForTimeout(1500);
 
     const cardsBefore = await page.locator('.spot-card h3').allTextContents();
+    // 【2026-10-14、10本目①②、Minami決定：A】地図の点（2D）は変えず、円の半径だけ
+    // 変わることを検証する。
+    const markersBeforeDrag = await page.evaluate(() => {
+      const mv = window.__mapViewForDebug;
+      return {
+        count: mv.markersBySpotId.size,
+        visible: Array.from(mv.markersBySpotId.values()).filter((m) => m.getElement()?.style.display !== 'none').length,
+        circleKm: mv._reachCircleRadiusKm,
+      };
+    });
     await page.evaluate(() => {
       const el = document.getElementById('budget-slider');
       el.value = 2000;
@@ -720,6 +775,24 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
       'スライダーを動かしている間（input）は一覧が変わらない',
       JSON.stringify(cardsBefore) === JSON.stringify(cardsDuringDrag),
       `変更前${cardsBefore.length}件 → ドラッグ中${cardsDuringDrag.length}件`
+    );
+    const markersDuringDrag = await page.evaluate(() => {
+      const mv = window.__mapViewForDebug;
+      return {
+        count: mv.markersBySpotId.size,
+        visible: Array.from(mv.markersBySpotId.values()).filter((m) => m.getElement()?.style.display !== 'none').length,
+        circleKm: mv._reachCircleRadiusKm,
+      };
+    });
+    record(
+      'スライダーを動かしている間、地図の点（2D）の数・表示状態は変わらない',
+      markersBeforeDrag.count === markersDuringDrag.count && markersBeforeDrag.visible === markersDuringDrag.visible,
+      `変更前${JSON.stringify(markersBeforeDrag)} → ドラッグ中${JSON.stringify(markersDuringDrag)}`
+    );
+    record(
+      'スライダーを動かしている間、円の半径は変わる（¥1000→¥2000）',
+      markersDuringDrag.circleKm > markersBeforeDrag.circleKm,
+      `変更前${markersBeforeDrag.circleKm}km → ドラッグ中${markersDuringDrag.circleKm}km`
     );
 
     const pendingClass = await page.evaluate(() => document.getElementById('search-btn').classList.contains('search-btn-pending'));
@@ -755,7 +828,10 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
     record('スクリーンショット撮影用の3D化に成功', became3d);
 
     if (became3d) {
-      // 地形の読み込みを待ってから撮る（Minami指示4本目④）
+      // 地形の読み込みを待ってから撮る（Minami指示4本目④）。
+      // 【2026-10-14、10本目①②】検索を挟まずスライダーだけ動かしているため、
+      // 地図の点は検索時（¥1000）のまま変わらず、到達範囲の円だけが
+      // 400/1000/2000の順に変わる（Minami決定：A）。
       await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(20000));
       await page.waitForTimeout(300);
       for (const budget of [400, 1000, 2000]) {
@@ -787,6 +863,232 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
     }
 
     await context.close();
+  }
+}
+
+/**
+ * 【2026-10-14、10本目②③】検索後の波の演出（出発駅から近い順に点が出る）と、
+ * 「検索前はスライダーが円だけを動かす」ことを合わせて検証する。
+ * - 通常時：検索直後は一部の点がまだ隠れていて、1.5秒待つと全部出る（2D）。
+ *   3Dは「filterに距離条件が一時的に入り、1.5秒後に外れる」ことで同じ現象を見る。
+ * - prefers-reduced-motionのときは検索直後から隠れている点が無い（即座に全部出る）。
+ * - スクリーンショット：富山駅前・2D/3D・PC/スマホで、¥600と¥1600（検索前、
+ *   円だけ変わる）、検索を押した直後、1秒後。
+ */
+async function checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths) {
+  console.log('\n=== 検索後の波の演出・到達円の検証（10本目②③） ===');
+
+  // --- 1) 通常時：地図タブを見ながら検索すると、直後は一部が隠れていて、
+  // 1.5秒待つと全部出る ---
+  {
+    const context = await browser.newContext({ viewport: VIEWPORTS.sp });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await page.fill('#departure-input', '富山駅前');
+    await page.waitForTimeout(400);
+    await page.locator('.suggestion-item', { hasText: '富山駅前' }).first().click();
+    for (let i = 0; i < 20; i++) {
+      const value = parseInt(await page.inputValue('#budget-input'), 10);
+      if (value === 1000) break;
+      if (value < 1000) await page.click('#budget-increment'); else await page.click('#budget-decrement');
+    }
+    // 【不具合修正】地図タブが非表示（一覧タブ側）のままだと#spots-mapのコンテナが
+    // 0×0のままで、Leafletがマーカーのアイコン要素をまだ作らない
+    // （marker.getElement()がundefinedを返す。MapView.applyBudget()が同じ理由で
+    // コンテナサイズ0の間は塗り替えを保留するのと同じ制約）。地図タブを検索前に
+    // 開いておき、コンテナに実寸がある状態で検索する。
+    await page.click('.tab-btn[data-tab="map"]');
+    await page.waitForTimeout(200);
+    await page.click('#search-btn');
+    // 一覧タブが非表示のため.spot-cardは「存在するが不可視」になりうる。
+    // 存在だけを待つ（visible待ちのwaitForSelectorは使わない）。
+    await page.waitForFunction(
+      () => document.querySelector('.spot-card, .no-results') !== null,
+      { timeout: 15000 }
+    );
+    const countHidden = () => page.evaluate(() => {
+      const mv = window.__mapViewForDebug;
+      return Array.from(mv.markersBySpotId.values()).filter((m) => m.getElement()?.classList.contains('pin-wave-hidden')).length;
+    });
+    const hiddenSoonAfter = await countHidden();
+    record('[波の演出/2D] 検索直後は一部の点がまだ隠れている', hiddenSoonAfter > 0, `直後に隠れている点=${hiddenSoonAfter}件`);
+    await page.waitForTimeout(1500);
+    const hiddenAfterWait = await countHidden();
+    record('[波の演出/2D] 1.5秒待つと全部の点が出る', hiddenAfterWait === 0, `1.5秒後に隠れている点=${hiddenAfterWait}件`);
+    await context.close();
+  }
+
+  // --- 1b) 【不具合修正の検証】一覧タブを見ながら検索した場合（地図コンテナが
+  // 検索時点では0×0）でも、後で地図タブを開くと波の演出が改めて行われる ---
+  {
+    const context = await browser.newContext({ viewport: VIEWPORTS.sp });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await page.fill('#departure-input', '富山駅前');
+    await page.waitForTimeout(400);
+    await page.locator('.suggestion-item', { hasText: '富山駅前' }).first().click();
+    for (let i = 0; i < 20; i++) {
+      const value = parseInt(await page.inputValue('#budget-input'), 10);
+      if (value === 1000) break;
+      if (value < 1000) await page.click('#budget-increment'); else await page.click('#budget-decrement');
+    }
+    // 一覧タブのまま（地図タブへは切り替えない）検索する。
+    await page.click('#search-btn');
+    await page.waitForSelector('.spot-card, .no-results', { timeout: 15000 });
+    const pendingFlag = await page.evaluate(() => window.__mapViewForDebug._pendingWaveReveal);
+    record('[波の演出/2D/一覧タブのまま検索] 波の演出が保留扱いになる（コンテナ未準備のため）', pendingFlag === true, `_pendingWaveReveal=${pendingFlag}`);
+    // ここで初めて地図タブを開く＝invalidateMapSize()が波の演出をやり直すはず。
+    // layout-controller.jsのinvalidateMapSize()はrequestAnimationFrame 1コマ分
+    // 遅れて実行されるため、クリック直後ではなく、保留フラグが落ちる
+    // （＝やり直しが実行された）のをポーリングで待つ。
+    await page.click('.tab-btn[data-tab="map"]');
+    await page.waitForFunction(
+      () => window.__mapViewForDebug._pendingWaveReveal === false,
+      { timeout: 2000 }
+    ).catch(() => {});
+    const hiddenRightAfterTabOpen = await page.evaluate(() => {
+      const mv = window.__mapViewForDebug;
+      return Array.from(mv.markersBySpotId.values()).filter((m) => m.getElement()?.classList.contains('pin-wave-hidden')).length;
+    });
+    record('[波の演出/2D/一覧タブのまま検索] 地図タブを開くと波の演出が改めて始まる', hiddenRightAfterTabOpen > 0, `隠れている点=${hiddenRightAfterTabOpen}件`);
+    await context.close();
+  }
+
+  // --- 2) prefers-reduced-motion：検索直後から隠れている点が無い ---
+  {
+    const context = await browser.newContext({ viewport: VIEWPORTS.sp, reducedMotion: 'reduce' });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '富山駅前', 1000);
+    const hiddenImmediately = await page.evaluate(() => {
+      const mv = window.__mapViewForDebug;
+      return Array.from(mv.markersBySpotId.values()).filter((m) => m.getElement()?.classList.contains('pin-wave-hidden')).length;
+    });
+    record(
+      '[波の演出/reduced-motion] 検索直後から隠れている点が無い（即座に全部出る）',
+      hiddenImmediately === 0,
+      `隠れている点=${hiddenImmediately}件`
+    );
+    await context.close();
+  }
+
+  // --- 3) 3D：検索直後はfilterに距離条件が入っており、1.5秒待つと外れる ---
+  {
+    const context = await browser.newContext({ viewport: VIEWPORTS.pc });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '富山駅前', 1000);
+    await page.click('#map-dimension-toggle');
+    const became3d = await page.waitForFunction(
+      () => document.getElementById('map-area').classList.contains('mode-3d'),
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
+    if (became3d) {
+      await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(30000));
+      // 別の予算に変えてから検索し直し、波の演出を新たに発生させる。
+      for (let i = 0; i < 20; i++) {
+        const value = parseInt(await page.inputValue('#budget-input'), 10);
+        if (value === 1600) break;
+        if (value < 1600) await page.click('#budget-increment'); else await page.click('#budget-decrement');
+      }
+      await page.click('#search-btn');
+      await page.waitForSelector('.spot-card, .no-results', { timeout: 15000 });
+      // 【不具合修正、3回目】_waveFrameも、実はapplyBudget()自体が
+      // requestAnimationFrame 1コマ分、実際の塗り替え（_paintBudget→
+      // _startWaveReveal）を間引いている（スライダー連打対策、7本目からの
+      // 既存の仕組み）ため、_startWaveReveal()が呼ばれるタイミング自体が
+      // 1フレーム遅れうる。フルスイートの重いGPU負荷下ではこの1フレームの
+      // 遅れが実測で無視できない長さになり、「検索直後」の時点ではまだ
+      // _startWaveReveal()自体が呼ばれていないことがあった。render()の
+      // 呼び出しスタック内でrAFを一切介さず同期的に設定される
+      // _pendingPaintReveal（applyBudget()参照）を見れば、「検索によって
+      // reveal:trueのrender()が実際に呼ばれたか」をレンダリングの遅延に
+      // 影響されず確認できる。
+      const pendingRevealRequested = await page.evaluate(() => window.__terrainViewForDebug._pendingPaintReveal);
+      record(
+        '[波の演出/3D] 検索によって波の演出（reveal）が要求されている',
+        pendingRevealRequested === true,
+        `_pendingPaintReveal=${pendingRevealRequested}`
+      );
+      await page.waitForTimeout(1500);
+      const filterAfterWait = await page.evaluate(() => window.__terrainMapForDebug.getFilter('spots-circle'));
+      record(
+        '[波の演出/3D] 1.5秒待つと距離条件が外れる（予算の条件だけになる＝波が終わる）',
+        Array.isArray(filterAfterWait) && filterAfterWait[0] === '<=',
+        JSON.stringify(filterAfterWait)
+      );
+    } else {
+      record('[波の演出/3D] 3D化（検証の前提）', false);
+    }
+    await context.close();
+  }
+
+  // --- 4) スクリーンショット：富山駅前・2D/3D・PC/スマホで、¥600・¥1600（検索前）、
+  // 検索直後、1秒後 ---
+  for (const dim of ['2d', '3d']) {
+    for (const [label, viewport] of Object.entries(VIEWPORTS)) {
+      const context = await browser.newContext({ viewport });
+      const page = await context.newPage();
+      await page.goto(baseUrl, { waitUntil: 'load' });
+      await page.waitForSelector('#departure-input');
+      await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+      await searchAt(page, '富山駅前', 1000);
+      if (label === 'sp') await page.click('.tab-btn[data-tab="map"]').catch(() => {});
+      if (dim === '3d') {
+        await page.click('#map-dimension-toggle');
+        const became3d = await page.waitForFunction(
+          () => document.getElementById('map-area').classList.contains('mode-3d'),
+          { timeout: 30000 }
+        ).then(() => true).catch(() => false);
+        record(`[円のスクリーンショット/${dim}/${label}] 3D化に成功`, became3d);
+        if (!became3d) { await context.close(); continue; }
+        await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(30000));
+      }
+      const mapAreaBox = () => page.locator('#map-area').boundingBox();
+
+      for (const budget of [600, 1600]) {
+        await page.evaluate((v) => {
+          const el = document.getElementById('budget-slider');
+          el.value = v;
+          el.dispatchEvent(new Event('input'));
+        }, budget);
+        await page.waitForTimeout(250);
+        const shotPath = path.join(screenshotDir, `budget-circle-${dim}-${budget}-presearch-${label}.png`);
+        await page.screenshot({ path: shotPath, clip: await mapAreaBox() });
+        savedPaths.push(shotPath);
+        console.log(`  保存: budget-circle-${dim}-${budget}-presearch-${label}.png`);
+      }
+
+      await page.click('#search-btn');
+      // 【不具合修正】spではこの時点で地図タブへ切り替え済み（一覧タブが
+      // display:none）のため、waitForSelectorの既定（visible待ち）は
+      // .spot-cardが「存在するが不可視」の状態で永遠にタイムアウトする。
+      // 存在だけを待つwaitForFunctionに替える。
+      await page.waitForFunction(
+        () => document.querySelector('.spot-card, .no-results') !== null,
+        { timeout: 15000 }
+      );
+      const immediatePath = path.join(screenshotDir, `budget-circle-${dim}-search-immediate-${label}.png`);
+      await page.screenshot({ path: immediatePath, clip: await mapAreaBox() });
+      savedPaths.push(immediatePath);
+      console.log(`  保存: budget-circle-${dim}-search-immediate-${label}.png`);
+
+      await page.waitForTimeout(1000);
+      const plus1sPath = path.join(screenshotDir, `budget-circle-${dim}-search-plus1s-${label}.png`);
+      await page.screenshot({ path: plus1sPath, clip: await mapAreaBox() });
+      savedPaths.push(plus1sPath);
+      console.log(`  保存: budget-circle-${dim}-search-plus1s-${label}.png`);
+
+      await context.close();
+    }
   }
 }
 
@@ -1097,13 +1399,19 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
     }
     await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
 
-    // 1. 回転が有効・コンパスがある（budgetやカード選択と無関係なので最初に見る）
-    const rotateEnabled = await page.evaluate(() => ({
+    // 1. 回転・コンパス（budgetやカード選択と無関係なので最初に見る）。
+    // 【2026-10-14、10本目①、Minami決定：B】PCの右ドラッグ回転は残すが、
+    // スマホの2本指でひねる回転は止める（2本指ズーム・2本指上下の傾きは残す）。
+    const rotateState = await page.evaluate(() => ({
       dragRotate: window.__terrainMapForDebug.dragRotate.isEnabled(),
-      touchZoomRotate: window.__terrainMapForDebug.touchZoomRotate.isEnabled(),
+      touchZoomRotateEnabled: window.__terrainMapForDebug.touchZoomRotate.isEnabled(),
+      touchRotationDisabled: window.__terrainMapForDebug.touchZoomRotate._rotationDisabled === true,
+      touchPitch: window.__terrainMapForDebug.touchPitch.isEnabled(),
     }));
-    record(`[${label}] 回転の操作が有効（dragRotate）`, rotateEnabled.dragRotate);
-    record(`[${label}] 回転の操作が有効（touchZoomRotate）`, rotateEnabled.touchZoomRotate);
+    record(`[${label}] PCの右ドラッグ回転が有効（dragRotate）`, rotateState.dragRotate);
+    record(`[${label}] スマホの2本指ズームは有効のまま（touchZoomRotate）`, rotateState.touchZoomRotateEnabled);
+    record(`[${label}] スマホの2本指回転だけ無効化されている`, rotateState.touchRotationDisabled);
+    record(`[${label}] スマホの2本指上下の傾きは有効のまま（touchPitch）`, rotateState.touchPitch);
     const hasCompass = await page.evaluate(() => !!document.querySelector('.maplibregl-ctrl-compass'));
     record(`[${label}] コンパス（方角ボタン）が表示されている`, hasCompass);
 
@@ -1144,12 +1452,12 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
 
       // 【2026-10-11修正】locator.screenshot()は撮影前に要素の「安定」を
       // ポーリングで待つが、3D地図はWebGLキャンバスを常に再描画しており、
-      // ゆっくり回る演出を止めた後・setBearing()の直後でも度々タイムアウト
-      // した（原因不明、他のmap-area撮影箇所との違いを調べたが特定できな
-      // かった）。このファイルの他の箇所（行130）と同じ、boundingBox()を
-      // 取ってpage.screenshot({clip})で撮る方式に変え、要素の安定待ち
-      // そのものを回避する。
-      await page.evaluate(() => window.__terrainViewForDebug._stopAutoRotate());
+      // setBearing()の直後でも度々タイムアウトした（原因不明、他のmap-area
+      // 撮影箇所との違いを調べたが特定できなかった）。このファイルの他の
+      // 箇所（行130）と同じ、boundingBox()を取ってpage.screenshot({clip})で
+      // 撮る方式に変え、要素の安定待ちそのものを回避する。
+      // 【2026-10-14、10本目①】自動回転をまるごと廃止したため、ここで
+      // 止めていた_stopAutoRotate()呼び出しは不要になった（削除）。
       const mapAreaBox = await page.locator('#map-area').boundingBox();
       const focusedPath = path.join(screenshotDir, `terrain-3d-spot-focus-${label}.png`);
       await page.screenshot({ path: focusedPath, clip: mapAreaBox });
@@ -1329,6 +1637,10 @@ async function checkDefaultStyleD(browser, baseUrl, savedPaths) {
   const station = await page.evaluate(() => window.__terrainViewForDebug._lastDepartureStation);
 
   if (coords) {
+    // 【2026-10-14、10本目①】寄る前後でbearingが変わらないことを見るため、
+    // flyToSpot()を呼ぶ直前のbearingを控えておく（Minami決定：B、回転を
+    // まるごと廃止。以前は出発駅→スポットの方位角に合わせて回転していた）。
+    const bearingBeforeFly = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
     // 【2026-10-13、8本目③】flyToSpot()は「真上(pitch0)から降りる→読み込み
     // 落ち着いたら傾ける」の2段階になったため、onTiltCompleteで両方終わる
     // のを待ってから以降の確認に進む（旧：waitForSceneSettled()を外から
@@ -1356,37 +1668,24 @@ async function checkDefaultStyleD(browser, baseUrl, savedPaths) {
       JSON.stringify(zoomAndOpacity)
     );
 
-    // 自動回転：場所に寄ったあと、ゆっくり回る演出が始まることを確認。
-    // 【2026-10-13修正】傾け終わった後、_scheduleAutoRotateAfterFlight()は
-    // 傾けた先（ズーム14・pitch60）であらためてwaitForSceneSettled()を
-    // 呼んでからAUTO_ROTATE_START_DELAY_MS待つため、傾け演出の追加分に加えて
-    // この2回目のsettle待ちの時間も読めない（7本目の調査どおり、背景タイルの
-    // 競合で数秒〜十数秒ぶれる）。固定時間を待ってから1回だけ比較するのでは
-    // なく、bearingの変化をポーリングで待つ（実際に回り始めた時点で成功と
-    // わかり、無駄な固定待機もしない）。
-    const bearingBeforeRotate = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
-    const rotationStarted = await page.waitForFunction(
-      (initial) => Math.abs(window.__terrainMapForDebug.getBearing() - initial) > 0.01,
-      bearingBeforeRotate,
-      { timeout: 40000, polling: 500 }
-    ).then(() => true).catch(() => false);
+    // 【2026-10-14、10本目①、Minami決定：B】回転をまるごと廃止した検証。
+    // 1. 寄る前後でbearingが変わらないこと（以前は出発駅→スポットの方位角に
+    //    合わせて回転していたが、「地図が勝手に回る・向きが大きく変わるのが
+    //    無駄な動きに感じる」というMinami指摘で廃止した）。
+    const bearingAfterFly = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
     record(
-      '[自動回転] 場所に寄ったあと、ゆっくり回る演出が始まる',
-      rotationStarted,
-      `開始時bearing=${bearingBeforeRotate}`
+      '[回転] 寄る前後でbearingが変わらない',
+      Math.abs(bearingAfterFly - bearingBeforeFly) < 0.01,
+      `寄る前=${bearingBeforeFly} / 寄った後=${bearingAfterFly}`
     );
-
-    // 【2026-10-12、7本目③】止めたら再始動しないこと（6本目で残っていた
-    // 競合の本番修正。_stopAutoRotate()が保留中のmoveendリスナーも
-    // 確実に外すようになったかを見る）。
-    await page.evaluate(() => window.__terrainViewForDebug._stopAutoRotate());
-    const bearingStoppedAt = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
-    await page.waitForTimeout(5000);
+    // 2. 何も操作しなくても、ゆっくり回る演出（自動回転）が起きないこと。
+    //    10秒待ってもbearingが変わらないことで確認する。
+    await page.waitForTimeout(10000);
     const bearingAfterWait = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
     record(
-      '[自動回転] 止めると、その後も再始動しない（6本目で残っていた競合の本番修正）',
-      Math.abs(bearingAfterWait - bearingStoppedAt) < 0.01,
-      `停止時=${bearingStoppedAt} / 5秒後=${bearingAfterWait}`
+      '[回転] 自動回転が廃止されている（10秒待ってもbearingが変わらない）',
+      Math.abs(bearingAfterWait - bearingAfterFly) < 0.01,
+      `寄った直後=${bearingAfterFly} / 10秒後=${bearingAfterWait}`
     );
 
     const mapAreaBox = await page.locator('#map-area').boundingBox();
@@ -1541,8 +1840,18 @@ async function checkDescendTiltChoreography(browser, baseUrl, savedPaths) {
       // 降りている途中（真上から降りる演出はSPOT_FOCUS_DURATION_MS=2600msかかる）に
       // 本物のホイール操作で割り込む（page.mouse.wheelは実際のDOMイベントを発生させる
       // ため、MapLibreのe.originalEventが付く＝プログラム操作と区別できる）。
+      // 【不具合修正】固定座標(960,540)はビューポート中央だが、PCのこのレイアウトでは
+      // #map-areaが画面幅いっぱいではなく左寄りの一部（実測x:376〜867程度）のため、
+      // 中央座標だと一覧側のボタンにホイールイベントが当たってしまい、地図側の
+      // wheelハンドラに届いていなかった（verify-layoutで「傾け演出が行われない」が
+      // 失敗＝実際には傾け演出が止まらずに最後まで進んでいたことで発覚）。
+      // #map-areaの実際の矩形の中心を使う。
       await page.waitForTimeout(800);
-      await page.mouse.move(960, 540);
+      const mapAreaBoxForWheel = await page.locator('#map-area').boundingBox();
+      await page.mouse.move(
+        mapAreaBoxForWheel.x + mapAreaBoxForWheel.width / 2,
+        mapAreaBoxForWheel.y + mapAreaBoxForWheel.height / 2
+      );
       await page.mouse.wheel(0, -100);
       await page.waitForTimeout(5000); // 本来傾け終わるはずの時間を過ぎても待つ
       const events = await page.evaluate(() => window.__events);
@@ -1742,7 +2051,6 @@ async function checkPopupDetailButtonClick(browser, baseUrl, savedPaths) {
       continue;
     }
     await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
-    await page.evaluate(() => window.__terrainViewForDebug._stopAutoRotate());
 
     // 円（circle-layer）は実DOM要素を持たないため、project()で実際の画面座標を
     // 求めてからmouse.click()で押す（このファイルの他のピン検証箇所と同じ方式）。
@@ -1759,23 +2067,15 @@ async function checkPopupDetailButtonClick(browser, baseUrl, savedPaths) {
     if (pinScreenPos) {
       const mapBox = await page.locator('#map-area').boundingBox();
       await page.mouse.click(mapBox.x + pinScreenPos.x, mapBox.y + pinScreenPos.y);
-      // 【2026-10-11発見】最初の_stopAutoRotate()呼び出しが、初期fitBoundsの
-      // flyTo完了（'moveend'）より前に実行されると、flyTo完了時に改めて
-      // _scheduleAutoRotateAfterFlight()が走り、500ms後に自動回転が再始動
-      // してしまう（実測：ポップアップの画面座標がx=500→649→595→482→413と
-      // 数百px単位で動き続け、boundingBox()のたびに別の場所を指していた）。
-      // クリック後・ポップアップが開いた直後にもう一度止めることで、
-      // スクリーンショット・ボタン座標の計算を安定させる。
-      await page.evaluate(() => window.__terrainViewForDebug._stopAutoRotate());
+      // 【2026-10-14、10本目①】自動回転をまるごと廃止したため、ここで行って
+      // いた「ポップアップの画面座標が自動回転で動き続けるのを止める」ための
+      // _stopAutoRotate()呼び出しは不要になった（削除。メソッド自体も無い）。
       const popupVisible = await page.locator('.maplibregl-popup').isVisible().catch(() => false);
       record(`[3D/${label}] ピンをクリックするとポップアップが開く`, popupVisible);
 
       if (popupVisible) {
         // 2D側と同じ理由（フェードイン途中の矩形を拾わないため）で少し待つ。
         await page.waitForTimeout(300);
-        // スクリーンショット直前にもう一度止める（上のコメント参照：
-        // 自動回転の再始動タイミングとの競合を最小化する）。
-        await page.evaluate(() => window.__terrainViewForDebug._stopAutoRotate());
         const descCount = await page.locator('.maplibregl-popup p:not(.map-popup-fare)').count();
         record(`[3D/${label}] ポップアップに説明文が無い（名前・運賃・ボタンのみ）`, descCount === 0, `余分な<p>の数: ${descCount}`);
 
@@ -2021,6 +2321,7 @@ async function main() {
     await checkPopupDetailButtonClick(browser, baseUrl, savedPaths);
     await checkBreadcrumbTrail(browser, baseUrl, savedPaths);
     await checkBudgetSlider(browser, baseUrl, savedPaths);
+    await checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths);
   } finally {
     await browser.close();
     server.close();
