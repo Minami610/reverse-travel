@@ -77,6 +77,9 @@ const OVERVIEW_MIN_ZOOM = 9.5;
 const SPOT_FOCUS_ZOOM = 14;
 const SPOT_FOCUS_PITCH = 60;
 const SPOT_FOCUS_DURATION_MS = 2600; // Minami指示：2〜3秒
+// 【2026-10-13、8本目③】真上(pitch0)から降りた後、傾けて立体にするまでの時間。
+const TILT_DURATION_MS = 2000; // Minami指示：2秒前後
+const REDUCED_MOTION_FLY_DURATION_MS = 300; // prefers-reduced-motion時：降りる・傾けるを1回の短い移動にまとめる
 // 寄ったあと操作が無ければゆっくり回る演出（Minami指示：1周40秒程度）。
 const AUTO_ROTATE_MS_PER_REV = 40000;
 const AUTO_ROTATE_START_DELAY_MS = 500; // flyTo完了後、少し間を置いてから回り始める
@@ -193,6 +196,8 @@ export class TerrainMapView {
     this.popup = null;
     this.onDetailRequest = null;
     this.onSelectionChange = null; // 【2026-10-11、6本目B】地図の点をタップしたとき、一覧のカードをスクロール＋光らせるため（2Dのmap-view.jsと同じ役割）
+    this.onOverheadSettled = null; // 【2026-10-13、8本目】(spot) => void、真上から見た状態の読み込みが済んだ瞬間（計測・テスト用）
+    this.onTiltComplete = null; // 同上。傾け終わった瞬間（計測・テスト用）
     this._lastDepartureStation = null;
     this._lastSpots = null;
     this._lastBudget = null;
@@ -200,6 +205,7 @@ export class TerrainMapView {
     this._autoRotateStartTimer = null;
     this._pendingMoveEndHandler = null; // 【2026-10-12、7本目】_scheduleAutoRotateAfterFlight()が登録したmoveendリスナー（_stopAutoRotate()で確実に外すため参照を保持）
     this._autoRotateScheduleToken = 0; // 同上。保留中の非同期チェーン（settle待ち）を無効化するための世代カウンタ
+    this._flySpotToken = 0; // 【2026-10-13、8本目】flyToSpot()の「降りる→傾ける」演出を、ユーザー操作や次のflyToSpot呼び出しで無効化するための世代カウンタ
   }
 
   /**
@@ -341,12 +347,25 @@ export class TerrainMapView {
     );
 
     // 【2026-10-11】ユーザーが手で地図を動かしたら、ゆっくり回る演出を止める
-    // （Minami指示）。*startイベントはユーザー操作（ドラッグ・ピンチ等）の
-    // ハンドラ起点でのみ発火し、プログラム側のjumpTo/easeTo/flyToや
-    // このクラス自身のsetBearing()連打（_runAutoRotateStep）では発火しない
-    // （MapLibreの既定動作。実装を確認して確定）。
+    // （Minami指示）。dragstart・rotatestart・wheelはユーザー操作のハンドラ
+    // 起点でのみ発火し、プログラム側のjumpTo/easeTo/flyToでは発火しない
+    // （実装を確認して確定）。
+    // 【2026-10-13、8本目③で判明】ただしzoomstart・pitchstartは、ズーム/
+    // 傾きが変わる操作であれば発生源を問わず発火する＝flyTo()やeaseTo()での
+    // プログラム側のズーム・pitch変更でも発火することが、「降りる→傾ける」
+    // 演出の追加時に判明した（本番コードがflyTo直後にmoveendが一度も
+    // 届かない不具合として発覚：原因を調査したところ、flyTo自体が発火した
+    // zoomstart/pitchstartが_flySpotTokenを進め、同じflyTo完了時のmoveend
+    // ハンドラが「トークンが古い」と誤判定して処理を中断していた）。
+    // MapLibreのイベントは、ユーザー操作由来のときだけe.originalEvent
+    // （実際のDOMイベント）を持ち、プログラム側の変更では持たない
+    // （実機確認で確定）。これを使い、ユーザー操作由来のときだけ演出を
+    // 無効化する。
     ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart', 'wheel'].forEach((evt) => {
-      this.map.on(evt, () => this._stopAutoRotate());
+      this.map.on(evt, (e) => {
+        this._stopAutoRotate();
+        if (e.originalEvent) this._flySpotToken++; // プログラム側（flyTo/easeTo由来）では「降りる→傾ける」演出を止めない
+      });
     });
 
     this.map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
@@ -580,6 +599,21 @@ export class TerrainMapView {
    * カードを選んだ/詳細画面を開いたとき）。向き（bearing）は出発駅→スポットの
    * 方位角そのまま（出発駅が手前、スポットが奥になる。4本目④の立山方向
    * カメラで確定済みのbearingの向き）。
+   *
+   * 【2026-10-13、8本目③】7本目の調査で「寄ってから景色が見えるまで」の
+   * 遅さの主因は背景タイルの読み込み量と判明した（原因そのものの深追いは
+   * 今回せず、Minami指示で見せ方・読み込み量側の対策に切り替えた）。
+   * 真上から見た向き（pitch0）はpitch60に比べ画面に地平線側の遠いタイルが
+   * 入らないため、読み込む量が少なく航空写真がすぐ見える。そこでまず
+   * pitch0・ズーム14へ降り、画面中央付近の地形・背景の読み込みが落ち着いたら
+   * （waitForSceneSettled()）、pitch0→60へ2秒ほどで傾けて立体にする。
+   * 傾けている最中・傾け終わった後に地平線側の遠いタイルが遅れて出るのは
+   * 許容する（Minami指示）。
+   * 降りている途中でユーザーが地図を操作すると、_flySpotTokenが進んで
+   * 以降の演出（傾け・自動回転の開始）を行わない（上のdragstart等の
+   * 購読箇所を参照。ユーザー操作を優先）。
+   * prefers-reduced-motionのときは、降りる・傾けるを1回の短い移動に
+   * まとめる（Minami指示）。
    * @param {{latitude:number, longitude:number}} spot
    * @param {{stop_lat:number, stop_lon:number}} [departureStation]
    */
@@ -590,15 +624,62 @@ export class TerrainMapView {
       bearing = computeBearing(departureStation.stop_lat, departureStation.stop_lon, spot.latitude, spot.longitude);
     }
     this._stopAutoRotate();
+    const token = ++this._flySpotToken;
+
+    if (prefersReducedMotion()) {
+      this.map.flyTo({
+        center: [spot.longitude, spot.latitude],
+        zoom: SPOT_FOCUS_ZOOM,
+        pitch: SPOT_FOCUS_PITCH,
+        bearing,
+        duration: REDUCED_MOTION_FLY_DURATION_MS,
+        essential: true,
+      });
+      if (this.onOverheadSettled) this.onOverheadSettled(spot);
+      if (this.onTiltComplete) this.onTiltComplete(spot);
+      this._scheduleAutoRotateAfterFlight();
+      return;
+    }
+
     this.map.flyTo({
       center: [spot.longitude, spot.latitude],
       zoom: SPOT_FOCUS_ZOOM,
-      pitch: SPOT_FOCUS_PITCH,
+      pitch: 0,
       bearing,
       duration: SPOT_FOCUS_DURATION_MS,
       essential: true,
     });
-    this._scheduleAutoRotateAfterFlight();
+
+    this.map.once('moveend', () => {
+      if (token !== this._flySpotToken || !this.map) return; // ユーザー操作・次のflyToSpotで無効化済み
+      this.waitForSceneSettled().then(() => {
+        if (token !== this._flySpotToken || !this.map) return;
+        if (this.onOverheadSettled) this.onOverheadSettled(spot);
+        this.map.easeTo({ pitch: SPOT_FOCUS_PITCH, duration: TILT_DURATION_MS });
+        this.map.once('moveend', () => {
+          if (token !== this._flySpotToken || !this.map) return;
+          // 【2026-10-13、8本目③修正】傾け終わった直後にそのまま
+          // onTiltCompleteを呼ぶと、画面がぼやけたまま「傾け終わった」と
+          // 報告してしまう不具合があった。isCenterTileReady()は「現時点で
+          // キャッシュにある、中央点を覆う最高ズームのタイル」を見るため、
+          // pitch0の時点では中央付近に必要な低いズームのタイルしか要求
+          // されておらず、それが読込済みというだけでwaitForSceneSettled()が
+          // trueを返していた。ところがpitch60へ傾けると、同じ中央点でも
+          // 遠近感補正のためより高いズームのタイルが新たに必要になり
+          // （7本目の調査で確認済み：pitch0時より高いズームのタイルを要求
+          // する）、傾け終わった時点ではまだそれらが読込中のことがある。
+          // 傾けた後の視点に必要なタイルを改めて待つため、ここでも
+          // waitForSceneSettled()を呼ぶ（降りた後と同じ理由）。
+          this.waitForSceneSettled().then(() => {
+            if (token !== this._flySpotToken || !this.map) return;
+            if (this.onTiltComplete) this.onTiltComplete(spot);
+            // このmoveendハンドラの中＝既に静止済みのため、次のmoveendを
+            // 待たせない（alreadyAtRest=true。上のメソッドのコメント参照）。
+            this._scheduleAutoRotateAfterFlight(true);
+          });
+        });
+      });
+    });
   }
 
   /**
@@ -624,12 +705,23 @@ export class TerrainMapView {
    *    そもそも回転を始めない設計にした（Minami指示の対策案）。
    * 世代カウンタ（_autoRotateScheduleToken）で、settle待ちの途中に
    * _stopAutoRotate()が呼ばれた場合はその後のstartを無効化する。
+   *
+   * 【2026-10-13、8本目③修正】呼び出し元が増えたことで判明した不具合：
+   * このメソッドは元々「flyTo/easeToを開始した直後（まだ動いている最中）」
+   * に呼ぶ前提で、次に来る1回の'moveend'を待っていた。ところが「降りる→
+   * 傾ける」演出では、傾けのeaseToが完了した'moveend'ハンドラの中から
+   * このメソッドを呼ぶ（＝呼ばれた時点で既に静止済み、カメラは次に動く
+   * 予定が無い）。この状態でmap.once('moveend', ...)を登録すると、
+   * 二度と来ないイベントを待ち続け、自動回転が永久に始まらなかった
+   * （実機・Playwright検証で、40秒待っても回転が始まらないことで発覚）。
+   * @param {boolean} [alreadyAtRest] - trueなら「既に静止済み（直前の
+   *   moveendハンドラ内から呼ばれた等）」とみなし、次のmoveendを待たずに
+   *   即座にsettle確認へ進む。
    */
-  _scheduleAutoRotateAfterFlight() {
+  _scheduleAutoRotateAfterFlight(alreadyAtRest = false) {
     if (!this.map || prefersReducedMotion()) return;
     const token = this._autoRotateScheduleToken;
-    this._pendingMoveEndHandler = () => {
-      this._pendingMoveEndHandler = null;
+    const proceedToSettleCheck = () => {
       this.waitForSceneSettled().then(() => {
         if (token !== this._autoRotateScheduleToken || !this.map) return;
         this._autoRotateStartTimer = setTimeout(() => {
@@ -637,6 +729,14 @@ export class TerrainMapView {
           this._startAutoRotate();
         }, AUTO_ROTATE_START_DELAY_MS);
       });
+    };
+    if (alreadyAtRest) {
+      proceedToSettleCheck();
+      return;
+    }
+    this._pendingMoveEndHandler = () => {
+      this._pendingMoveEndHandler = null;
+      proceedToSettleCheck();
     };
     this.map.once('moveend', this._pendingMoveEndHandler);
   }

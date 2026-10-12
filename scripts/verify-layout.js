@@ -1329,8 +1329,17 @@ async function checkDefaultStyleD(browser, baseUrl, savedPaths) {
   const station = await page.evaluate(() => window.__terrainViewForDebug._lastDepartureStation);
 
   if (coords) {
-    await page.evaluate(({ spot, station }) => window.__terrainViewForDebug.flyToSpot(spot, station), { spot: coords, station });
-    await page.evaluate(() => window.__terrainViewForDebug.waitForSceneSettled(30000));
+    // 【2026-10-13、8本目③】flyToSpot()は「真上(pitch0)から降りる→読み込み
+    // 落ち着いたら傾ける」の2段階になったため、onTiltCompleteで両方終わる
+    // のを待ってから以降の確認に進む（旧：waitForSceneSettled()を外から
+    // 1回呼ぶだけだった。今は内部で2回呼ばれるため、外から呼ぶ意味が無い）。
+    await page.evaluate(({ spot, station }) => {
+      return new Promise((resolve) => {
+        window.__terrainViewForDebug.onTiltComplete = () => resolve();
+        window.__terrainViewForDebug.flyToSpot(spot, station);
+        setTimeout(resolve, 30000);
+      });
+    }, { spot: coords, station });
     const zoomAndOpacity = await page.evaluate(() => {
       const map = window.__terrainMapForDebug;
       const zoom = map.getZoom();
@@ -1347,16 +1356,24 @@ async function checkDefaultStyleD(browser, baseUrl, savedPaths) {
       JSON.stringify(zoomAndOpacity)
     );
 
-    // 自動回転：場所に寄ったあと、ゆっくり回る演出が始まることを確認
-    // （settle＋AUTO_ROTATE_START_DELAY_MSぶん待つ必要があるため、余裕を見て6秒待つ）。
-    await page.waitForTimeout(6000);
-    const bearingRotating1 = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
-    await page.waitForTimeout(1000);
-    const bearingRotating2 = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
+    // 自動回転：場所に寄ったあと、ゆっくり回る演出が始まることを確認。
+    // 【2026-10-13修正】傾け終わった後、_scheduleAutoRotateAfterFlight()は
+    // 傾けた先（ズーム14・pitch60）であらためてwaitForSceneSettled()を
+    // 呼んでからAUTO_ROTATE_START_DELAY_MS待つため、傾け演出の追加分に加えて
+    // この2回目のsettle待ちの時間も読めない（7本目の調査どおり、背景タイルの
+    // 競合で数秒〜十数秒ぶれる）。固定時間を待ってから1回だけ比較するのでは
+    // なく、bearingの変化をポーリングで待つ（実際に回り始めた時点で成功と
+    // わかり、無駄な固定待機もしない）。
+    const bearingBeforeRotate = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
+    const rotationStarted = await page.waitForFunction(
+      (initial) => Math.abs(window.__terrainMapForDebug.getBearing() - initial) > 0.01,
+      bearingBeforeRotate,
+      { timeout: 40000, polling: 500 }
+    ).then(() => true).catch(() => false);
     record(
       '[自動回転] 場所に寄ったあと、ゆっくり回る演出が始まる',
-      Math.abs(bearingRotating2 - bearingRotating1) > 0.01,
-      `${bearingRotating1} -> ${bearingRotating2}`
+      rotationStarted,
+      `開始時bearing=${bearingBeforeRotate}`
     );
 
     // 【2026-10-12、7本目③】止めたら再始動しないこと（6本目で残っていた
@@ -1380,6 +1397,244 @@ async function checkDefaultStyleD(browser, baseUrl, savedPaths) {
 
   if (pageErrors.length > 0) record('[D既定] 検証中にページエラーが発生していない', false, pageErrors.join('; '));
   await context.close();
+}
+
+/**
+ * 【2026-10-13、8本目③】場所に寄るとき、まず真上（pitch0）から降りて、
+ * 画面中央付近の読み込みが落ち着いたら傾けて立体にする（pitch0→60）演出を
+ * 検証する。あわせて、降りている途中でユーザーが操作すると演出が止まること、
+ * prefers-reduced-motionのときは短く（一度に）なることを確認する。
+ */
+async function checkDescendTiltChoreography(browser, baseUrl, savedPaths) {
+  console.log('\n=== 真上から降りて傾ける演出の検証（8本目③） ===');
+
+  async function findSpotAndStation(page, spotName) {
+    return page.evaluate((name) => {
+      const feats = window.__terrainMapForDebug.querySourceFeatures('spots');
+      const f = feats.find((x) => x.properties.name === name);
+      const spot = f ? { latitude: f.geometry.coordinates[1], longitude: f.geometry.coordinates[0] } : null;
+      const station = window.__terrainViewForDebug._lastDepartureStation;
+      return { spot, station };
+    }, spotName);
+  }
+
+  // --- 1. 降りるときpitch0、読み込み後にpitch50〜60になること ---
+  {
+    const context = await browser.newContext({ viewport: VIEWPORTS.pc });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '八尾駅', 400);
+    await page.click('#map-dimension-toggle');
+    const became3d = await page.waitForFunction(
+      () => document.getElementById('map-area').classList.contains('mode-3d'),
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
+    record('[降下→傾け] 3D化（検証の前提）', became3d);
+    if (became3d) {
+      await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+      const { spot, station } = await findSpotAndStation(page, '城生城');
+      record('[降下→傾け] 検証用スポット「城生城」が見つかる', !!spot);
+      if (spot) {
+        await page.evaluate(() => {
+          window.__events = [];
+          window.__t0 = performance.now();
+          window.__terrainViewForDebug.onOverheadSettled = () => window.__events.push({ t: performance.now() - window.__t0, type: 'overhead', pitch: window.__terrainMapForDebug.getPitch() });
+          window.__terrainViewForDebug.onTiltComplete = () => window.__events.push({ t: performance.now() - window.__t0, type: 'tilt', pitch: window.__terrainMapForDebug.getPitch() });
+        });
+        await page.evaluate(({ spot, station }) => window.__terrainViewForDebug.flyToSpot(spot, station), { spot, station });
+
+        // 【2026-10-13修正】flyTo中のpitch補間は一定速度ではなく（実測：
+        // 2600ms中の1500ms時点でもまだ49.9°、ほぼ終盤まで大きく変わらない）、
+        // 任意の中間時点で判定すると不安定になる。「真上から降りる」の確認は
+        // 降下完了後・傾け始める前（onOverheadSettledの時点）のpitchを見る
+        // 方が実装のイージング挙動に左右されず安定する。
+        await page.waitForFunction(() => window.__events.some((e) => e.type === 'overhead'), { timeout: 30000 }).catch(() => {});
+        const overheadEvent = await page.evaluate(() => window.__events.find((e) => e.type === 'overhead'));
+        record(
+          '[降下→傾け] 降り終えた時点（傾け始める前）はpitchが0に近い',
+          !!overheadEvent && overheadEvent.pitch < 5,
+          overheadEvent ? `pitch=${overheadEvent.pitch.toFixed(1)}` : 'overheadイベントが発生しなかった'
+        );
+        const popupBox1 = await page.locator('#map-area').boundingBox();
+        const overheadShotPath = path.join(screenshotDir, 'descend-overhead-jonojo-pc.png');
+        await page.screenshot({ path: overheadShotPath, clip: popupBox1 });
+        savedPaths.push(overheadShotPath);
+
+        await page.waitForFunction(() => window.__events.some((e) => e.type === 'tilt'), { timeout: 15000 }).catch(() => {});
+        const events = await page.evaluate(() => window.__events);
+        const tiltEvent = events.find((e) => e.type === 'tilt');
+        record(
+          '[降下→傾け] 読み込み後、pitchが50〜60になる',
+          !!tiltEvent && tiltEvent.pitch >= 50 && tiltEvent.pitch <= 60.5,
+          JSON.stringify(events)
+        );
+        await page.waitForTimeout(500);
+        const tiltedShotPath = path.join(screenshotDir, 'descend-tilted-jonojo-pc.png');
+        await page.screenshot({ path: tiltedShotPath, clip: popupBox1 });
+        savedPaths.push(tiltedShotPath);
+      }
+    }
+    await context.close();
+  }
+
+  // --- 1b. 同じ構図（八尾駅→城生城）のスマホ幅スクリーンショット ---
+  {
+    const context = await browser.newContext({ viewport: VIEWPORTS.sp });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '八尾駅', 400);
+    await page.click('.tab-btn[data-tab="map"]').catch(() => {});
+    await page.click('#map-dimension-toggle');
+    const became3dSp = await page.waitForFunction(
+      () => document.getElementById('map-area').classList.contains('mode-3d'),
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
+    if (became3dSp) {
+      await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+      const { spot, station } = await findSpotAndStation(page, '城生城');
+      if (spot) {
+        await page.evaluate(() => {
+          window.__events = [];
+          window.__t0 = performance.now();
+          window.__terrainViewForDebug.onOverheadSettled = () => window.__events.push({ t: performance.now() - window.__t0, type: 'overhead' });
+          window.__terrainViewForDebug.onTiltComplete = () => window.__events.push({ t: performance.now() - window.__t0, type: 'tilt' });
+        });
+        await page.evaluate(({ spot, station }) => window.__terrainViewForDebug.flyToSpot(spot, station), { spot, station });
+        await page.waitForFunction(() => window.__events.some((e) => e.type === 'overhead'), { timeout: 30000 }).catch(() => {});
+        const mapBox = await page.locator('#map-area').boundingBox();
+        const overheadShotSp = path.join(screenshotDir, 'descend-overhead-jonojo-sp.png');
+        await page.screenshot({ path: overheadShotSp, clip: mapBox });
+        savedPaths.push(overheadShotSp);
+        await page.waitForFunction(() => window.__events.some((e) => e.type === 'tilt'), { timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(500);
+        const tiltedShotSp = path.join(screenshotDir, 'descend-tilted-jonojo-sp.png');
+        await page.screenshot({ path: tiltedShotSp, clip: mapBox });
+        savedPaths.push(tiltedShotSp);
+      }
+    }
+    await context.close();
+  }
+
+  // --- 2. 降りている途中でユーザーが操作すると演出が止まること ---
+  {
+    const context = await browser.newContext({ viewport: VIEWPORTS.pc });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '八尾駅', 400);
+    await page.click('#map-dimension-toggle');
+    await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).catch(() => {});
+    await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+    const { spot, station } = await findSpotAndStation(page, '城生城');
+    if (spot) {
+      await page.evaluate(() => {
+        window.__events = [];
+        window.__t0 = performance.now();
+        window.__terrainViewForDebug.onTiltComplete = () => window.__events.push({ t: performance.now() - window.__t0, type: 'tilt' });
+      });
+      await page.evaluate(({ spot, station }) => window.__terrainViewForDebug.flyToSpot(spot, station), { spot, station });
+      // 降りている途中（真上から降りる演出はSPOT_FOCUS_DURATION_MS=2600msかかる）に
+      // 本物のホイール操作で割り込む（page.mouse.wheelは実際のDOMイベントを発生させる
+      // ため、MapLibreのe.originalEventが付く＝プログラム操作と区別できる）。
+      await page.waitForTimeout(800);
+      await page.mouse.move(960, 540);
+      await page.mouse.wheel(0, -100);
+      await page.waitForTimeout(5000); // 本来傾け終わるはずの時間を過ぎても待つ
+      const events = await page.evaluate(() => window.__events);
+      record('[降下→傾け] 降りている途中で操作すると、傾け演出が行われない', events.length === 0, JSON.stringify(events));
+    } else {
+      record('[降下→傾け] 操作による中断の検証用スポットが見つかる', false);
+    }
+    await context.close();
+  }
+
+  // --- 3. prefers-reduced-motionのときは短く（一度に）なること ---
+  {
+    const context = await browser.newContext({ viewport: VIEWPORTS.pc, reducedMotion: 'reduce' });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '八尾駅', 400);
+    await page.click('#map-dimension-toggle');
+    await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).catch(() => {});
+    await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+    const { spot, station } = await findSpotAndStation(page, '城生城');
+    if (spot) {
+      const reducedMotionDetected = await page.evaluate(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+      record('[降下→傾け] reduced-motionがブラウザ側で有効になっている（検証の前提）', reducedMotionDetected);
+
+      const result = await page.evaluate(({ spot, station }) => {
+        return new Promise((resolve) => {
+          const t0 = performance.now();
+          let overheadAt = null, tiltAt = null;
+          window.__terrainViewForDebug.onOverheadSettled = () => { overheadAt = performance.now() - t0; };
+          window.__terrainViewForDebug.onTiltComplete = () => { tiltAt = performance.now() - t0; resolve({ overheadAt, tiltAt }); };
+          window.__terrainViewForDebug.flyToSpot(spot, station);
+          setTimeout(() => resolve({ overheadAt, tiltAt, timedOut: true }), 5000);
+        });
+      }, { spot, station });
+      record(
+        '[降下→傾け] reduced-motionのときは短時間（1秒未満）で傾け終わる',
+        !result.timedOut && result.tiltAt < 1000,
+        JSON.stringify(result)
+      );
+      const finalPitch = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
+      record('[降下→傾け] reduced-motionでも最終的にpitchが50〜60になる', finalPitch >= 50 && finalPitch <= 60.5, `pitch=${finalPitch.toFixed(1)}`);
+    } else {
+      record('[降下→傾け] reduced-motion検証用スポットが見つかる', false);
+    }
+    await context.close();
+  }
+
+  // --- 4. スクリーンショット：富山駅前→立山方面、真上から見えた瞬間／立体になったあと（PC・スマホ） ---
+  const TATEYAMA_SPOT = { name: '国立登山研修所', lat: 36.66346190359144, lon: 137.31365203857422 };
+  for (const [label, viewport] of Object.entries(VIEWPORTS)) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '富山駅前', 2000);
+    if (label === 'sp') await page.click('.tab-btn[data-tab="map"]').catch(() => {});
+    await page.click('#map-dimension-toggle');
+    const became3d = await page.waitForFunction(
+      () => document.getElementById('map-area').classList.contains('mode-3d'),
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
+    if (!became3d) { await context.close(); continue; }
+    await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+    const station = await page.evaluate(() => window.__terrainViewForDebug._lastDepartureStation);
+
+    await page.evaluate(() => {
+      window.__events = [];
+      window.__t0 = performance.now();
+      window.__terrainViewForDebug.onOverheadSettled = () => window.__events.push({ t: performance.now() - window.__t0, type: 'overhead' });
+      window.__terrainViewForDebug.onTiltComplete = () => window.__events.push({ t: performance.now() - window.__t0, type: 'tilt' });
+    });
+    await page.evaluate(({ spot, station }) => window.__terrainViewForDebug.flyToSpot(spot, station), {
+      spot: { latitude: TATEYAMA_SPOT.lat, longitude: TATEYAMA_SPOT.lon },
+      station,
+    });
+    await page.waitForFunction(() => window.__events.some((e) => e.type === 'overhead'), { timeout: 30000 }).catch(() => {});
+    const mapBox = await page.locator('#map-area').boundingBox();
+    const overheadShot = path.join(screenshotDir, `descend-overhead-tateyama-${label}.png`);
+    await page.screenshot({ path: overheadShot, clip: mapBox });
+    savedPaths.push(overheadShot);
+
+    await page.waitForFunction(() => window.__events.some((e) => e.type === 'tilt'), { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(500);
+    const tiltedShot = path.join(screenshotDir, `descend-tilted-tateyama-${label}.png`);
+    await page.screenshot({ path: tiltedShot, clip: mapBox });
+    savedPaths.push(tiltedShot);
+
+    await context.close();
+  }
 }
 
 /**
@@ -1762,6 +2017,7 @@ async function main() {
     await checkTerrainMapOpensForBaselineStations(browser, baseUrl);
     await checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths);
     await checkDefaultStyleD(browser, baseUrl, savedPaths);
+    await checkDescendTiltChoreography(browser, baseUrl, savedPaths);
     await checkPopupDetailButtonClick(browser, baseUrl, savedPaths);
     await checkBreadcrumbTrail(browser, baseUrl, savedPaths);
     await checkBudgetSlider(browser, baseUrl, savedPaths);
