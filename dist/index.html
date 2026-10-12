@@ -1322,6 +1322,116 @@ header p {
   font-weight: 600;
 }
 
+/* 【2026-10-15、11本目①】地図の下中央に固定で出す情報枠（Minami決定：A、
+   吹き出し廃止の代わり）。左下の2D/3D切替ボタン・右下の出典ボタンと重ならない
+   よう、十分な余白（bottom）を取る（verify-layoutの重なりチェック対象）。 */
+.spot-info-panel {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 52px;
+  z-index: 1200;
+  width: calc(100% - 24px);
+  max-width: 420px;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  background-color: rgba(255, 255, 255, 0.97);
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  padding: 0.5rem 2.1rem 0.5rem 0.8rem;
+}
+
+.spot-info-close {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: none;
+  color: var(--color-text-sub);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.spot-info-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.spot-info-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.spot-info-name {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.spot-info-heart {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  color: var(--color-accent-deep); /* カード・この先へと同じ色に揃える */
+}
+
+.spot-info-heart svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.spot-info-fare {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--color-text-sub);
+}
+
+.spot-info-detail-btn {
+  flex-shrink: 0;
+  padding: 0.4rem 0.75rem;
+  border: none;
+  border-radius: 999px;
+  background-color: var(--color-main);
+  color: white;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* 【2026-10-15、11本目②】「全体を見る」ボタン（Minami決定：C）。右上の方角
+   ボタン（3Dのみ、MapLibreのNavigationControl）の下に重ならない位置に置く。 */
+.view-all-btn {
+  position: absolute;
+  top: 54px;
+  right: 8px;
+  z-index: 1000;
+  padding: 0.35rem 0.7rem;
+  border: none;
+  border-radius: 999px;
+  background-color: rgba(255, 255, 255, 0.92);
+  color: var(--color-text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+}
+
 .map-pin-wrapper {
   background: none;
   border: none;
@@ -1379,12 +1489,17 @@ header p {
   border-width: 2px;
 }
 
+/* 【2026-10-15、11本目①】選んだピンを目立たせる：一回り大きく＋白い縁取り＋
+   光の輪（Minami指示）。白い縁取りは.map-pin-spotの基本スタイル（border:白）を
+   そのまま引き継ぐため、ここではサイズと光の輪（box-shadowの二重glow）だけ
+   足す。 */
 .map-pin-spot.map-pin-selected {
   width: 24px;
   height: 24px;
   margin: -5px 0 0 -5px;
   background-color: var(--color-selected);
   border-width: 2.5px;
+  box-shadow: 0 0 0 4px rgba(27, 94, 158, 0.35), 0 0 10px 4px rgba(27, 94, 158, 0.75), 0 1px 3px rgba(0, 0, 0, 0.5);
 }
 
 /* 出発駅のピン：大きめのダイヤ形＋常時ラベルで一目で分かるように */
@@ -1445,40 +1560,6 @@ header p {
 .map-pin-wrapper.pin-wave-hidden .map-pin {
   opacity: 0;
   transform: scale(0.3);
-}
-
-/* 地図ピンのポップアップ（スポット名・往復運賃・詳細ボタン。
-   2026-10-11、6本目B：説明文ははみ出すためMinami決定で廃止） */
-.map-popup {
-  min-width: 160px;
-}
-
-.map-popup-title {
-  display: block;
-  margin-bottom: 0.25rem;
-  color: var(--color-text);
-}
-
-.map-popup-fare {
-  font-size: 0.85rem;
-  color: var(--color-text-sub);
-  margin-bottom: 0.5rem;
-}
-
-.popup-detail-btn {
-  width: 100%;
-  padding: 0.4rem;
-  background-color: var(--color-main);
-  color: white;
-  border: none;
-  border-radius: 4px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.popup-detail-btn:hover {
-  background-color: var(--color-main-deep);
 }
 
 /* 固定ブレークポイントではなく実際のカラム幅（＝右カラムの実効幅）に
@@ -2640,6 +2721,16 @@ header p {
       <!-- 3D切替中だけ表示。2Dの地図は消さずに裏で残したまま、準備ができたら
            #map-area.mode-3dが付いて3Dに切り替わる（4本目②、Minami指示）。 -->
       <p id="terrain-loading-indicator" hidden>3D地図を準備しています…</p>
+      <!-- 【2026-10-15、11本目①】地図の吹き出し（ポップアップ）の代わりに、
+           地図の下中央に固定で出す情報枠（Minami決定：A）。2D・3D共通、
+           どちらのピンを押しても同じ枠を使い回す。 -->
+      <div id="spot-info-panel" class="spot-info-panel" hidden>
+        <button type="button" id="spot-info-close" class="spot-info-close" aria-label="閉じる">×</button>
+        <div id="spot-info-content" class="spot-info-content"></div>
+      </div>
+      <!-- 【2026-10-15、11本目②】寄っているときだけ出す「全体を見る」ボタン
+           （Minami決定：C）。右上の方角ボタン（3Dのみ）の下に重ならないよう配置。 -->
+      <button type="button" id="view-all-btn" class="view-all-btn" hidden>全体を見る</button>
     </div>
   </div>
 
@@ -4132,9 +4223,10 @@ class MapView {
     this._waveToken = 0;
     this._waveTimers = [];
     this._pendingWaveReveal = false; // 【2026-10-14、10本目②】layout-controller.jsのinvalidateMapSize()参照
+    this._overviewZoom = null; // 【2026-10-15、11本目②】直近のfitToBudget()が合わせたズーム（寄っているか判定用）
 
-    this.onDetailRequest = null; // (spotId) => void … ポップアップの「詳細を見る」ボタン
     this.onSelectionChange = null; // (spotId) => void … ピン選択と一覧パネルの連動用
+    this.onFocusChange = null; // 【2026-10-15、11本目②】(focused: boolean) => void … 「全体を見る」ボタンの表示切替用
   }
 
   ensureMap() {
@@ -4153,16 +4245,10 @@ class MapView {
     // アプリ自体はこれを使わない。本番でも害はないため条件分岐は入れていない。
     window.__mapViewForDebug = this;
 
-    // ポップアップ内の「詳細を見る」ボタンはHTML文字列として渡すため、
-    // 開いたタイミングでイベントを後付けする
-    this.map.on('popupopen', (e) => {
-      const el = e.popup.getElement();
-      const btn = el && el.querySelector('.popup-detail-btn');
-      if (!btn) return;
-      btn.addEventListener('click', () => {
-        const spotId = btn.getAttribute('data-spot-id');
-        if (this.onDetailRequest) this.onDetailRequest(spotId);
-      });
+    // 【2026-10-15、11本目②】ユーザーが手でズームした結果、全体（_overviewZoom）
+    // より寄った状態になったかを「全体を見る」ボタンの表示判定に使う。
+    this.map.on('zoomend', () => {
+      if (this.onFocusChange) this.onFocusChange(this.isZoomedInPastOverview());
     });
   }
 
@@ -4187,6 +4273,9 @@ class MapView {
 
     this.departureLatLng = null;
     if (departureStation && isFiniteNumber(departureStation.stop_lat) && isFiniteNumber(departureStation.stop_lon)) {
+      // 【2026-10-15、11本目①】吹き出し（ポップアップ）は廃止（Minami決定：A、
+      // 地図の下の固定枠に統一）。出発駅名は常時表示の吹き出し型ツールチップ
+      // （permanent、ポップアップとは別物）のまま残す。
       L.marker([departureStation.stop_lat, departureStation.stop_lon], {
         icon: createPinIcon('departure'),
         zIndexOffset: 2000,
@@ -4197,8 +4286,7 @@ class MapView {
           direction: 'top',
           offset: [0, -16],
           className: 'map-departure-tooltip',
-        })
-        .bindPopup(`${departureStation.display_name}（出発駅）`);
+        });
       this.departureLatLng = [departureStation.stop_lat, departureStation.stop_lon];
     }
 
@@ -4207,9 +4295,7 @@ class MapView {
 
       const marker = L.marker([spot.latitude, spot.longitude], {
         icon: createPinIcon('spot'),
-      })
-        .addTo(this.markersLayer)
-        .bindPopup(buildSpotPopupHtml(spot));
+      }).addTo(this.markersLayer);
 
       marker.on('click', () => this.setSelected(spot.id));
 
@@ -4278,11 +4364,14 @@ class MapView {
    * 予算以下（帯＋それより安い点）が全部入るよう、地図をなめらかに引く/寄せる。
    * スライダーを指から離したときに呼ぶ想定（Minami指示：動かしている間は
    * カメラを動かさない）。新規検索時（animate:false）は瞬時に合わせる。
+   * 【2026-10-15、11本目②】この「全体の位置」をreturnToOverview()・
+   * isZoomedInPastOverview()の基準として_overviewZoomに覚えておく。
    * @param {number} budget
-   * @param {{animate?: boolean}} [opts]
+   * @param {{animate?: boolean, durationSec?: number}} [opts]
    */
-  fitToBudget(budget, { animate = true } = {}) {
+  fitToBudget(budget, { animate = true, durationSec = 0.6 } = {}) {
     if (!this.map) return;
+    this.lastBudget = budget;
     const bounds = [];
     if (this.departureLatLng) bounds.push(this.departureLatLng);
     this.fareBySpotId.forEach((fare, spotId) => {
@@ -4297,11 +4386,15 @@ class MapView {
     // 【2026-10-10】¥2000選択時に点が画面端からはみ出る不具合をMinamiが
     // スクリーンショットで発見（主に3D側だったが、余白は2Dも合わせて広げる）。
     const options = { padding: [48, 48], maxZoom: 16 };
-    if (animate) {
-      this.map.flyToBounds(bounds, { ...options, duration: 0.6 });
+    this._overviewZoom = Math.min(this.map.getBoundsZoom(bounds, false, L.point(48, 48)), options.maxZoom);
+    if (reachPrefersReducedMotion()) {
+      this.map.fitBounds(bounds, options);
+    } else if (animate) {
+      this.map.flyToBounds(bounds, { ...options, duration: durationSec });
     } else {
       this.map.fitBounds(bounds, options);
     }
+    if (this.onFocusChange) this.onFocusChange(false);
   }
 
   /** 直近のbounds（出発駅＋スポット）に再フィットする。地図が非表示の間に
@@ -4310,6 +4403,26 @@ class MapView {
     if (this.map && this.lastBounds.length > 0) {
       this.map.fitBounds(this.lastBounds, { padding: [36, 36], maxZoom: 16 });
     }
+  }
+
+  /**
+   * 【2026-10-15、11本目②、Minami決定：C】ユーザーが手でズームして、
+   * 全体の位置（_overviewZoom）より寄っているかどうか。
+   * 「全体を見る」ボタンの表示判定・予算操作時の自動復帰判定に使う。
+   */
+  isZoomedInPastOverview() {
+    if (!this.map || this._overviewZoom == null) return false;
+    return this.map.getZoom() > this._overviewZoom + 0.3;
+  }
+
+  /**
+   * 「全体を見る」ボタン・予算操作時の自動復帰（Minami決定：C）。寄っている
+   * ときに全体の位置へなめらかに引く。向き（bearing）は2Dに無いため変更不要。
+   * @param {{durationSec?: number}} [opts]
+   */
+  returnToOverview({ durationSec = 1.5 } = {}) {
+    if (!this.map || this.lastBudget == null || !this.isZoomedInPastOverview()) return;
+    this.fitToBudget(this.lastBudget, { animate: true, durationSec });
   }
 
   /**
@@ -4457,6 +4570,17 @@ class MapView {
     if (this.onSelectionChange) this.onSelectionChange(spotId);
   }
 
+  /**
+   * 【2026-10-15、11本目①】情報枠を閉じたとき・検索し直したとき・予算を
+   * 触ったときに、ピンの強調だけを外す（新しい選択はしない）。
+   */
+  clearSelected() {
+    if (this.selectedSpotId) {
+      this.setMarkerState(this.selectedSpotId, 'selected', false);
+    }
+    this.selectedSpotId = null;
+  }
+
   /** ホバー時の一時ハイライト。選択状態（map-pin-selected）とは
    * 別クラス（map-pin-hover）を使うため、互いに競合・上書きしない。 */
   highlightSpot(spotId) {
@@ -4504,21 +4628,6 @@ function createPinIcon(kind) {
   });
 }
 
-/**
- * 【2026-10-11、6本目B】説明文は出さない（Minami決定：長いとはみ出すため）。
- * 名前・往復運賃・「詳細を見る」だけにする（3D側のterrain-map-view.jsと同じ）。
- */
-function buildSpotPopupHtml(spot) {
-  const fare = spot.source_round_trip_fare;
-  const fareText = typeof fare === 'number' ? `往復¥${fare.toLocaleString('ja-JP')}` : '運賃不明';
-  return `
-    <div class="map-popup">
-      <strong class="map-popup-title">${spot.name}</strong>
-      <p class="map-popup-fare">${fareText}</p>
-      <button type="button" class="popup-detail-btn" data-spot-id="${spot.id}">詳細を見る</button>
-    </div>
-  `;
-}
 
 
 // ----- terrain-loader.js -----
@@ -5219,8 +5328,11 @@ class ReverseTravel {
     this.spotFinder = null;
     this.routeFormatter = null;
     this.mapView = new MapView('spots-map');
-    this.mapView.onDetailRequest = (spotId) => this.openSpotDetailById(spotId);
-    this.mapView.onSelectionChange = (spotId) => this.highlightCard(spotId);
+    // 【2026-10-15、11本目①】吹き出し（ポップアップ）を廃止し、地図の下の
+    // 固定情報枠に統一した（Minami決定：A）。ピン選択の通知（onSelectionChange）
+    // は既存のまま流用し、一覧のハイライトに加えて情報枠も開く。
+    this.mapView.onSelectionChange = (spotId) => { this.highlightCard(spotId); this.showSpotInfoPanel(spotId); };
+    this.mapView.onFocusChange = () => this.updateViewAllButton();
     // 3D地図のインスタンスは3D切替が実際に行われるまで作らない（4本目②：
     // terrain-map-view.jsはMapLibre本体と同じく遅延読込のため、クラス自体が
     // まだ存在しない。activateTerrainMap()がloadTerrainModule()経由で
@@ -5263,6 +5375,10 @@ class ReverseTravel {
       searchForm: document.getElementById('search-form'),
       mapDimensionToggle: document.getElementById('map-dimension-toggle'),
       terrainLoadingIndicator: document.getElementById('terrain-loading-indicator'),
+      spotInfoPanel: document.getElementById('spot-info-panel'),
+      spotInfoContent: document.getElementById('spot-info-content'),
+      spotInfoClose: document.getElementById('spot-info-close'),
+      viewAllBtn: document.getElementById('view-all-btn'),
       departureInput: document.getElementById('departure-input'),
       departureSuggestions: document.getElementById('departure-suggestions'),
       budgetInput: document.getElementById('budget-input'),
@@ -5342,6 +5458,13 @@ class ReverseTravel {
     // 無いため3Dを開始できない。起動時に前回3Dだった場合の自動復元は、
     // 最初の検索結果が出た直後（renderSearchResults）で行う。
     this.elements.mapDimensionToggle?.addEventListener('click', () => this.toggleMapDimension());
+    // 【2026-10-15、11本目①②】地図の下の固定情報枠の閉じるボタン・
+    // 「全体を見る」ボタン（Minami決定：A・C）。
+    this.elements.spotInfoClose?.addEventListener('click', () => this.hideSpotInfoPanel());
+    this.elements.viewAllBtn?.addEventListener('click', () => {
+      if (this.mapMode === '3d') this.terrainMapView?.returnToOverview();
+      else this.mapView.returnToOverview();
+    });
     // 【4本目②】前回3Dを選んだ端末でだけ、ページの読み込みが落ち着いたあと
     // MapLibre一式を先読みする（2Dの人には一切先読みしない。Minami指示）。
     if (this.mapMode === '3d') preloadTerrainModuleWhenIdle();
@@ -5684,8 +5807,19 @@ class ReverseTravel {
    * だけを広げる・縮める（2D・3D共通）。帯の件数プレビューはこれまでどおり
    * 動かしながら変えてよい（検索の目安になるため、Minami指示）。
    * まだ検索していない（this.currentAllSpotsが空）ときは円・件数プレビューとも出さない。
+   * 【2026-10-15、11本目②、Minami決定：C】実際にユーザーが予算を触った
+   * （userTouch:true、既定）ときだけ、情報枠を閉じる・寄っていれば全体に戻す。
+   * scheduleMaxBudgetPrefetch()の裏取得はこのメソッドを円・件数更新だけの目的で
+   * 呼ぶため、userTouch:falseを渡してユーザー操作と誤認しないようにする。
+   * @param {number} budget
+   * @param {{userTouch?: boolean}} [opts]
    */
-  updateMapBudgetLive(budget) {
+  updateMapBudgetLive(budget, { userTouch = true } = {}) {
+    if (userTouch) {
+      this.hideSpotInfoPanel();
+      this.mapView.returnToOverview();
+      this.terrainMapView?.returnToOverview();
+    }
     this.mapView.updateReachCircle(budget, { style: 'live' });
     this.terrainMapView?.updateReachCircle(budget, { style: 'live' });
     if (!this.currentAllSpots || this.currentAllSpots.length === 0) {
@@ -6116,7 +6250,9 @@ class ReverseTravel {
           // 変えてよい表示のため）。allSpotsが揃ったことで、半径・件数とも
           // より正確になる。
           const liveBudget = parseInt(this.elements.budgetInput.value, 10);
-          this.updateMapBudgetLive(liveBudget);
+          // 【2026-10-15、11本目②】裏取得はユーザーの予算操作ではないため、
+          // 情報枠を閉じたり全体に戻したりしない（userTouch:false）。
+          this.updateMapBudgetLive(liveBudget, { userTouch: false });
         }, WAVE_REVEAL_SAFE_DELAY_MS);
       } catch (e) {
         console.warn('¥2000範囲の裏取得に失敗しました（一覧・現在の帯の表示には影響しません）:', e);
@@ -6213,6 +6349,11 @@ class ReverseTravel {
       this.elements.bandHeading.hidden = false;
     }
 
+    // 【2026-10-15、11本目①】検索し直したら情報枠を閉じる・ピンの強調も外す
+    // （Minami指示）。render()自体も内部でピン選択をクリアするが、枠のDOMは
+    // main.js側にあるため、ここで明示的に閉じる必要がある。
+    this.hideSpotInfoPanel();
+
     // 【2026-10-14、10本目②】「この条件で検索」を押した結果の表示なので、
     // 出発駅から近い順に点が波のように広がって出る演出を行う（Minami指示）。
     const departureStation = this.data.stations?.[departureStationId];
@@ -6272,11 +6413,12 @@ class ReverseTravel {
       if (!this.terrainMapView) {
         const { TerrainMapView } = await loadTerrainModule();
         this.terrainMapView = new TerrainMapView('spots-map-3d');
-        this.terrainMapView.onDetailRequest = (spotId) => this.openSpotDetailById(spotId);
         // 【2026-10-11、6本目B】2Dと同じ動き：地図の点を押したら該当カードを
         // スクロール＋光らせる（highlightCardはスマホで一覧が非表示のときは
-        // 自然に何もしない）。
-        this.terrainMapView.onSelectionChange = (spotId) => this.highlightCard(spotId);
+        // 自然に何もしない）。【2026-10-15、11本目①】吹き出しは廃止し、
+        // 同じ通知で情報枠も開く。
+        this.terrainMapView.onSelectionChange = (spotId) => { this.highlightCard(spotId); this.showSpotInfoPanel(spotId); };
+        this.terrainMapView.onFocusChange = () => this.updateViewAllButton();
         this.layoutController.terrainMapView = this.terrainMapView; // 遅延生成のため後から差し替える
       }
       await this.terrainMapView.ensureMap({ lat: station.stop_lat, lon: station.stop_lon });
@@ -6289,6 +6431,22 @@ class ReverseTravel {
       this.mapMode = '3d';
       saveMapModePreference('3d');
       this.applyMapMode();
+      // 【2026-10-15、11本目②で検討】当初はここでfitToBudget()も呼び、3Dを
+      // 開いた直後から「全体」をきちんと計算済みの位置にしていた。しかし
+      // これが原因で、立山方向への検証用jumpTo()の直後にqueryTerrainElevationが
+      // 低い値を返す不具合が起きた（verify-layoutで標高2000m以上の地点が
+      // 入っているはずの画面で1902m程度しか読めなかったことで発覚。
+      // fitToBudgetを無効化すると再現しなくなることを実機で確認済み）。
+      // 原因はDEMタイルの取得競合と見られる：fitToBudget()が「全体」領域の
+      // 標高タイルを先に要求し始め、直後のjumpTo()が立山方向に必要な高ズーム
+      // タイルを要求しても、取得待ちの列で後回しにされ、waitForTerrainLoaded()
+      // 自体は（別の低優先度タイルの完了をもって）先に「完了」と報告してしまう
+      // ため、実際にはまだ粗いタイルのまま標高を読んでいた。
+      // returnToOverview()は呼ばれるたびに_lastSpots/_lastDepartureStationから
+      // 毎回その場でbounds・ズームを計算し直す設計（キャッシュに依存しない）
+      // ため、3Dを開いた時点で前もってfitToBudget()しておく必要は無いと判断し、
+      // この呼び出し自体を削除した（render()だけ行い、カメラは触らない。
+      // 寄る前の初期位置がズーム9・出発駅中心のままなのは10本目以前と同じ）。
       return true;
     } catch (e) {
       console.warn('3D地図の有効化に失敗したため2Dのまま継続します:', e);
@@ -6317,6 +6475,9 @@ class ReverseTravel {
       if (this.mapMode === '3d') this.terrainMapView?.resize();
       else if (this.mapView.map) this.mapView.map.invalidateSize();
     });
+    // 【2026-10-15、11本目②】「全体を見る」ボタンの表示判定は2D/3Dそれぞれ
+    // 独立して持っているため、切り替えのたびに今表示中の側の状態に合わせ直す。
+    this.updateViewAllButton();
   }
 
   // ========================================
@@ -6978,6 +7139,53 @@ class ReverseTravel {
       history.pushState({}, ''); // スマホの戻る操作で一覧に戻れるよう、履歴を1つ積む
       this.showSpotDetail(spot);
     }
+  }
+
+  /**
+   * 【2026-10-15、11本目①、Minami決定：A】地図のピンを押したとき、下の固定
+   * 情報枠に名前・往復運賃・「詳細を見る」を出す（吹き出しの代わり）。
+   * 応援マーク対象なら名前の横に小さい塗りハートを添える（カードと同じ基準）。
+   */
+  showSpotInfoPanel(spotId) {
+    const spot = this.currentAllSpots?.find((s) => s.id === spotId);
+    if (!spot || !this.elements.spotInfoPanel) return;
+    const fare = spot.source_round_trip_fare;
+    const fareText = typeof fare === 'number' ? `往復¥${fare.toLocaleString('ja-JP')}` : '運賃不明';
+    const freqInfo = this.buildFrequencyDisplay(spot);
+    const heart = freqInfo?.isBadgeEligible ? `<span class="spot-info-heart">${HEART_FILLED_SVG}</span>` : '';
+    this.elements.spotInfoContent.innerHTML = `
+      <div class="spot-info-text">
+        <strong class="spot-info-name">${heart}${spot.name}</strong>
+        <p class="spot-info-fare">${fareText}</p>
+      </div>
+      <button type="button" class="spot-info-detail-btn" data-spot-id="${spot.id}">詳細を見る</button>
+    `;
+    this.elements.spotInfoContent.querySelector('.spot-info-detail-btn')
+      ?.addEventListener('click', () => this.openSpotDetailById(spot.id));
+    this.elements.spotInfoPanel.hidden = false;
+  }
+
+  /**
+   * 情報枠を閉じる（×ボタン・検索し直し・予算操作のいずれからも呼ぶ）。
+   * ピンの強調（2D・3D両方）も合わせて外す（Minami指示）。
+   */
+  hideSpotInfoPanel() {
+    if (this.elements.spotInfoPanel) this.elements.spotInfoPanel.hidden = true;
+    if (this.elements.spotInfoContent) this.elements.spotInfoContent.innerHTML = '';
+    this.mapView.clearSelected();
+    this.terrainMapView?.clearSelected();
+  }
+
+  /**
+   * 【2026-10-15、11本目②、Minami決定：C】現在表示中の地図（2D/3D）が
+   * 寄っているときだけ「全体を見る」ボタンを出す。
+   */
+  updateViewAllButton() {
+    if (!this.elements.viewAllBtn) return;
+    const focused = this.mapMode === '3d'
+      ? !!this.terrainMapView?._focusedOnSpot
+      : this.mapView.isZoomedInPastOverview();
+    this.elements.viewAllBtn.hidden = !focused;
   }
 
   /**

@@ -91,8 +91,11 @@ class ReverseTravel {
     this.spotFinder = null;
     this.routeFormatter = null;
     this.mapView = new MapView('spots-map');
-    this.mapView.onDetailRequest = (spotId) => this.openSpotDetailById(spotId);
-    this.mapView.onSelectionChange = (spotId) => this.highlightCard(spotId);
+    // 【2026-10-15、11本目①】吹き出し（ポップアップ）を廃止し、地図の下の
+    // 固定情報枠に統一した（Minami決定：A）。ピン選択の通知（onSelectionChange）
+    // は既存のまま流用し、一覧のハイライトに加えて情報枠も開く。
+    this.mapView.onSelectionChange = (spotId) => { this.highlightCard(spotId); this.showSpotInfoPanel(spotId); };
+    this.mapView.onFocusChange = () => this.updateViewAllButton();
     // 3D地図のインスタンスは3D切替が実際に行われるまで作らない（4本目②：
     // terrain-map-view.jsはMapLibre本体と同じく遅延読込のため、クラス自体が
     // まだ存在しない。activateTerrainMap()がloadTerrainModule()経由で
@@ -135,6 +138,10 @@ class ReverseTravel {
       searchForm: document.getElementById('search-form'),
       mapDimensionToggle: document.getElementById('map-dimension-toggle'),
       terrainLoadingIndicator: document.getElementById('terrain-loading-indicator'),
+      spotInfoPanel: document.getElementById('spot-info-panel'),
+      spotInfoContent: document.getElementById('spot-info-content'),
+      spotInfoClose: document.getElementById('spot-info-close'),
+      viewAllBtn: document.getElementById('view-all-btn'),
       departureInput: document.getElementById('departure-input'),
       departureSuggestions: document.getElementById('departure-suggestions'),
       budgetInput: document.getElementById('budget-input'),
@@ -214,6 +221,13 @@ class ReverseTravel {
     // 無いため3Dを開始できない。起動時に前回3Dだった場合の自動復元は、
     // 最初の検索結果が出た直後（renderSearchResults）で行う。
     this.elements.mapDimensionToggle?.addEventListener('click', () => this.toggleMapDimension());
+    // 【2026-10-15、11本目①②】地図の下の固定情報枠の閉じるボタン・
+    // 「全体を見る」ボタン（Minami決定：A・C）。
+    this.elements.spotInfoClose?.addEventListener('click', () => this.hideSpotInfoPanel());
+    this.elements.viewAllBtn?.addEventListener('click', () => {
+      if (this.mapMode === '3d') this.terrainMapView?.returnToOverview();
+      else this.mapView.returnToOverview();
+    });
     // 【4本目②】前回3Dを選んだ端末でだけ、ページの読み込みが落ち着いたあと
     // MapLibre一式を先読みする（2Dの人には一切先読みしない。Minami指示）。
     if (this.mapMode === '3d') preloadTerrainModuleWhenIdle();
@@ -556,8 +570,19 @@ class ReverseTravel {
    * だけを広げる・縮める（2D・3D共通）。帯の件数プレビューはこれまでどおり
    * 動かしながら変えてよい（検索の目安になるため、Minami指示）。
    * まだ検索していない（this.currentAllSpotsが空）ときは円・件数プレビューとも出さない。
+   * 【2026-10-15、11本目②、Minami決定：C】実際にユーザーが予算を触った
+   * （userTouch:true、既定）ときだけ、情報枠を閉じる・寄っていれば全体に戻す。
+   * scheduleMaxBudgetPrefetch()の裏取得はこのメソッドを円・件数更新だけの目的で
+   * 呼ぶため、userTouch:falseを渡してユーザー操作と誤認しないようにする。
+   * @param {number} budget
+   * @param {{userTouch?: boolean}} [opts]
    */
-  updateMapBudgetLive(budget) {
+  updateMapBudgetLive(budget, { userTouch = true } = {}) {
+    if (userTouch) {
+      this.hideSpotInfoPanel();
+      this.mapView.returnToOverview();
+      this.terrainMapView?.returnToOverview();
+    }
     this.mapView.updateReachCircle(budget, { style: 'live' });
     this.terrainMapView?.updateReachCircle(budget, { style: 'live' });
     if (!this.currentAllSpots || this.currentAllSpots.length === 0) {
@@ -988,7 +1013,9 @@ class ReverseTravel {
           // 変えてよい表示のため）。allSpotsが揃ったことで、半径・件数とも
           // より正確になる。
           const liveBudget = parseInt(this.elements.budgetInput.value, 10);
-          this.updateMapBudgetLive(liveBudget);
+          // 【2026-10-15、11本目②】裏取得はユーザーの予算操作ではないため、
+          // 情報枠を閉じたり全体に戻したりしない（userTouch:false）。
+          this.updateMapBudgetLive(liveBudget, { userTouch: false });
         }, WAVE_REVEAL_SAFE_DELAY_MS);
       } catch (e) {
         console.warn('¥2000範囲の裏取得に失敗しました（一覧・現在の帯の表示には影響しません）:', e);
@@ -1085,6 +1112,11 @@ class ReverseTravel {
       this.elements.bandHeading.hidden = false;
     }
 
+    // 【2026-10-15、11本目①】検索し直したら情報枠を閉じる・ピンの強調も外す
+    // （Minami指示）。render()自体も内部でピン選択をクリアするが、枠のDOMは
+    // main.js側にあるため、ここで明示的に閉じる必要がある。
+    this.hideSpotInfoPanel();
+
     // 【2026-10-14、10本目②】「この条件で検索」を押した結果の表示なので、
     // 出発駅から近い順に点が波のように広がって出る演出を行う（Minami指示）。
     const departureStation = this.data.stations?.[departureStationId];
@@ -1144,11 +1176,12 @@ class ReverseTravel {
       if (!this.terrainMapView) {
         const { TerrainMapView } = await loadTerrainModule();
         this.terrainMapView = new TerrainMapView('spots-map-3d');
-        this.terrainMapView.onDetailRequest = (spotId) => this.openSpotDetailById(spotId);
         // 【2026-10-11、6本目B】2Dと同じ動き：地図の点を押したら該当カードを
         // スクロール＋光らせる（highlightCardはスマホで一覧が非表示のときは
-        // 自然に何もしない）。
-        this.terrainMapView.onSelectionChange = (spotId) => this.highlightCard(spotId);
+        // 自然に何もしない）。【2026-10-15、11本目①】吹き出しは廃止し、
+        // 同じ通知で情報枠も開く。
+        this.terrainMapView.onSelectionChange = (spotId) => { this.highlightCard(spotId); this.showSpotInfoPanel(spotId); };
+        this.terrainMapView.onFocusChange = () => this.updateViewAllButton();
         this.layoutController.terrainMapView = this.terrainMapView; // 遅延生成のため後から差し替える
       }
       await this.terrainMapView.ensureMap({ lat: station.stop_lat, lon: station.stop_lon });
@@ -1161,6 +1194,22 @@ class ReverseTravel {
       this.mapMode = '3d';
       saveMapModePreference('3d');
       this.applyMapMode();
+      // 【2026-10-15、11本目②で検討】当初はここでfitToBudget()も呼び、3Dを
+      // 開いた直後から「全体」をきちんと計算済みの位置にしていた。しかし
+      // これが原因で、立山方向への検証用jumpTo()の直後にqueryTerrainElevationが
+      // 低い値を返す不具合が起きた（verify-layoutで標高2000m以上の地点が
+      // 入っているはずの画面で1902m程度しか読めなかったことで発覚。
+      // fitToBudgetを無効化すると再現しなくなることを実機で確認済み）。
+      // 原因はDEMタイルの取得競合と見られる：fitToBudget()が「全体」領域の
+      // 標高タイルを先に要求し始め、直後のjumpTo()が立山方向に必要な高ズーム
+      // タイルを要求しても、取得待ちの列で後回しにされ、waitForTerrainLoaded()
+      // 自体は（別の低優先度タイルの完了をもって）先に「完了」と報告してしまう
+      // ため、実際にはまだ粗いタイルのまま標高を読んでいた。
+      // returnToOverview()は呼ばれるたびに_lastSpots/_lastDepartureStationから
+      // 毎回その場でbounds・ズームを計算し直す設計（キャッシュに依存しない）
+      // ため、3Dを開いた時点で前もってfitToBudget()しておく必要は無いと判断し、
+      // この呼び出し自体を削除した（render()だけ行い、カメラは触らない。
+      // 寄る前の初期位置がズーム9・出発駅中心のままなのは10本目以前と同じ）。
       return true;
     } catch (e) {
       console.warn('3D地図の有効化に失敗したため2Dのまま継続します:', e);
@@ -1189,6 +1238,9 @@ class ReverseTravel {
       if (this.mapMode === '3d') this.terrainMapView?.resize();
       else if (this.mapView.map) this.mapView.map.invalidateSize();
     });
+    // 【2026-10-15、11本目②】「全体を見る」ボタンの表示判定は2D/3Dそれぞれ
+    // 独立して持っているため、切り替えのたびに今表示中の側の状態に合わせ直す。
+    this.updateViewAllButton();
   }
 
   // ========================================
@@ -1850,6 +1902,53 @@ class ReverseTravel {
       history.pushState({}, ''); // スマホの戻る操作で一覧に戻れるよう、履歴を1つ積む
       this.showSpotDetail(spot);
     }
+  }
+
+  /**
+   * 【2026-10-15、11本目①、Minami決定：A】地図のピンを押したとき、下の固定
+   * 情報枠に名前・往復運賃・「詳細を見る」を出す（吹き出しの代わり）。
+   * 応援マーク対象なら名前の横に小さい塗りハートを添える（カードと同じ基準）。
+   */
+  showSpotInfoPanel(spotId) {
+    const spot = this.currentAllSpots?.find((s) => s.id === spotId);
+    if (!spot || !this.elements.spotInfoPanel) return;
+    const fare = spot.source_round_trip_fare;
+    const fareText = typeof fare === 'number' ? `往復¥${fare.toLocaleString('ja-JP')}` : '運賃不明';
+    const freqInfo = this.buildFrequencyDisplay(spot);
+    const heart = freqInfo?.isBadgeEligible ? `<span class="spot-info-heart">${HEART_FILLED_SVG}</span>` : '';
+    this.elements.spotInfoContent.innerHTML = `
+      <div class="spot-info-text">
+        <strong class="spot-info-name">${heart}${spot.name}</strong>
+        <p class="spot-info-fare">${fareText}</p>
+      </div>
+      <button type="button" class="spot-info-detail-btn" data-spot-id="${spot.id}">詳細を見る</button>
+    `;
+    this.elements.spotInfoContent.querySelector('.spot-info-detail-btn')
+      ?.addEventListener('click', () => this.openSpotDetailById(spot.id));
+    this.elements.spotInfoPanel.hidden = false;
+  }
+
+  /**
+   * 情報枠を閉じる（×ボタン・検索し直し・予算操作のいずれからも呼ぶ）。
+   * ピンの強調（2D・3D両方）も合わせて外す（Minami指示）。
+   */
+  hideSpotInfoPanel() {
+    if (this.elements.spotInfoPanel) this.elements.spotInfoPanel.hidden = true;
+    if (this.elements.spotInfoContent) this.elements.spotInfoContent.innerHTML = '';
+    this.mapView.clearSelected();
+    this.terrainMapView?.clearSelected();
+  }
+
+  /**
+   * 【2026-10-15、11本目②、Minami決定：C】現在表示中の地図（2D/3D）が
+   * 寄っているときだけ「全体を見る」ボタンを出す。
+   */
+  updateViewAllButton() {
+    if (!this.elements.viewAllBtn) return;
+    const focused = this.mapMode === '3d'
+      ? !!this.terrainMapView?._focusedOnSpot
+      : this.mapView.isZoomedInPastOverview();
+    this.elements.viewAllBtn.hidden = !focused;
   }
 
   /**

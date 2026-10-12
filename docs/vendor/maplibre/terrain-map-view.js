@@ -5,10 +5,9 @@
  * 【2026-10-10、4本目②】このファイル自体はdist/index.htmlにインライン化せず、
  * MapLibre本体と同じくvendor/maplibre/配下の別ファイルとして3D切替時にのみ
  * 動的importされる（terrain-loader.js参照。2Dの人のページを重くしないため）。
- * そのため、他のアプリJS（inlined）が使うmap-view.jsのbuildSpotPopupHtml等は
- * importせず、同等のものをこのファイル内に小さく複製している
- * （inline化されたバンドルとこのファイルは実行時に別スコープのため、
- * importで繋ぐとどちらかが二重に読み込まれる・束ねられない）。
+ * そのため、他のアプリJS（inlined）が使うmap-view.jsとは実行時に別スコープで、
+ * importで繋ぐとどちらかが二重に読み込まれる・束ねられないため、共通処理が
+ * 必要な場合はこのファイル内に小さく複製する方針にしている。
  *
  * 標高タイルはgsi-dem-protocol.js（maplibregl.addProtocol）経由で読み、
  * 本来の区分式で標高を復元した上でterrarium符号化に変換してMapLibreへ渡す。
@@ -93,34 +92,27 @@ const REACH_CIRCLE_LINE_LAYER_ID = 'reach-circle-line';
 const REACH_CIRCLE_POINTS = 72; // 円を近似する多角形の頂点数（5°刻み）
 const REACH_CIRCLE_LABEL_BEARING = 45; // ラベルを置く方位角（出発駅の吹き出し・コンパスボタンと重ならない向き）
 const WAVE_DURATION_MS = 1000; // Minami指示：検索後、点を波のように出す所要時間（全体で1秒前後）
+// 【2026-10-15、11本目①】選んだピンの強調（吹き出し廃止の代わり）。circleレイヤーは
+// 単一のpaintプロパティしか持てないため、選択中の1件だけ別ソース・別レイヤーで
+// 上から重ねて描く（到達範囲の円と同じ考え方）。
+const SELECTED_SOURCE_ID = 'selected-spot';
+const SELECTED_LAYER_ID = 'selected-spot-circle';
+const SELECTED_GLOW_LAYER_ID = 'selected-spot-glow';
+// 【2026-10-15、11本目②】「全体を見る」ボタン・予算操作時の自動復帰に使う
+// なめらかな引きの所要時間（Minami指示：1.5秒前後）。
+const RETURN_TO_OVERVIEW_DURATION_MS = 1500;
 
 // 帯に入る点＝明るいオレンジ＋光の輪、それより安い点＝緑がかった灰色の小さい点
 // （2026-10-10、Minami指摘：スクリーンショットで見分けづらかったため色を変更。
 // 2D(map-view.js)と揃える）。
 const COLOR_IN_BAND = '#FF6B2B';
 const COLOR_CHEAPER = '#8a9a86';
+const COLOR_SELECTED = '#1B5E9E'; // 2D(map-view.js)の--color-selectedと揃える
 
 let protocolRegistered = false; // addProtocolは多重登録を避ける（2回目以降は上書きになるだけだが、意図を明示するためフラグで一度だけに絞る）
 
 function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
-}
-
-/**
- * map-view.js（inlined側）のbuildSpotPopupHtmlと同内容の複製（上部コメント参照）。
- * 【2026-10-11、6本目B】説明文は出さない（Minami決定：長いとはみ出すため）。
- * 名前・往復運賃・「詳細を見る」だけにする。
- */
-function buildSpotPopupHtml(spot) {
-  const fare = spot.source_round_trip_fare ?? spot.fare;
-  const fareText = typeof fare === 'number' ? `往復¥${fare.toLocaleString('ja-JP')}` : '運賃不明';
-  return `
-    <div class="map-popup">
-      <strong class="map-popup-title">${spot.name}</strong>
-      <p class="map-popup-fare">${fareText}</p>
-      <button type="button" class="popup-detail-btn" data-spot-id="${spot.id}">詳細を見る</button>
-    </div>
-  `;
 }
 
 /** 現在の予算に応じた塗り分け式（circle-radius等）。予算を超える点はfilter側で出さない。 */
@@ -214,15 +206,16 @@ export class TerrainMapView {
     this.containerId = containerId;
     this.map = null;
     this.departureMarker = null;
-    this.popup = null;
-    this.onDetailRequest = null;
     this.onSelectionChange = null; // 【2026-10-11、6本目B】地図の点をタップしたとき、一覧のカードをスクロール＋光らせるため（2Dのmap-view.jsと同じ役割）
     this.onOverheadSettled = null; // 【2026-10-13、8本目】(spot) => void、真上から見た状態の読み込みが済んだ瞬間（計測・テスト用）
     this.onTiltComplete = null; // 同上。傾け終わった瞬間（計測・テスト用）
+    this.onFocusChange = null; // 【2026-10-15、11本目②】(focused: boolean) => void … 「全体を見る」ボタンの表示切替用
+    this.selectedSpotId = null; // 【2026-10-15、11本目①】情報枠・PC一覧ハイライトとの連動用
     this._lastDepartureStation = null;
     this._lastSpots = null;
     this._lastBudget = null;
     this._flySpotToken = 0; // 【2026-10-13、8本目】flyToSpot()の「降りる→傾ける」演出を、ユーザー操作や次のflyToSpot呼び出しで無効化するための世代カウンタ
+    this._focusedOnSpot = false; // 【2026-10-15、11本目②】flyToSpot()で寄っている間true。fitToBudget()で全体に戻るとfalse
     this._reachCircleRadiusKm = 0; // 【2026-10-14、10本目②】現在描画中の円の半径（なめらかな変化の起点）
     this._pendingCircleRadiusKm = null;
     this._pendingCircleStyle = 'live';
@@ -297,6 +290,10 @@ export class TerrainMapView {
             type: 'geojson',
             data: { type: 'FeatureCollection', features: [] },
           },
+          [SELECTED_SOURCE_ID]: {
+            type: 'geojson',
+            data: { type: 'FeatureCollection', features: [] },
+          },
         },
         layers: [
           // 淡色地図は常に不透明で下に敷く（航空写真の未読込部分はここが
@@ -352,6 +349,33 @@ export class TerrainMapView {
               'circle-stroke-width': 0,
               'circle-stroke-color': '#ffffff',
               'circle-blur': 0,
+            },
+          },
+          // 【2026-10-15、11本目①】選んだピンの強調（吹き出し廃止の代わり、
+          // Minami指示：一回り大きく＋白い縁取り＋光の輪）。spotsレイヤーより
+          // 後ろ（＝画面上は上）に描くことで、帯の塗り分けより目立たせる。
+          // 光の輪はぼかした少し大きい円を先に敷き、本体の円を上に重ねて作る。
+          {
+            id: SELECTED_GLOW_LAYER_ID,
+            type: 'circle',
+            source: SELECTED_SOURCE_ID,
+            paint: {
+              'circle-radius': 18,
+              'circle-color': COLOR_SELECTED,
+              'circle-opacity': 0.45,
+              'circle-blur': 1,
+            },
+          },
+          {
+            id: SELECTED_LAYER_ID,
+            type: 'circle',
+            source: SELECTED_SOURCE_ID,
+            paint: {
+              'circle-radius': 10,
+              'circle-color': COLOR_SELECTED,
+              'circle-opacity': 1,
+              'circle-stroke-width': 2.5,
+              'circle-stroke-color': '#ffffff',
             },
           },
         ],
@@ -442,33 +466,14 @@ export class TerrainMapView {
     window.__terrainMapForDebug = this.map;
     window.__terrainViewForDebug = this; // waitForTerrainLoaded()等、ラッパー側のメソッドの検証用
 
-    this.popup = new maplibregl.Popup({ offset: 12, closeButton: true });
-    // 【2026-10-11、6本目A修正】'popupopen'はMapLibreに存在しないイベント名
-    // だった（vendor/maplibre/maplibre-gl.jsを grep して確認：'popupopen'・
-    // 'popupclose'は0件）。Leaflet（2D側のmap-view.jsが使う地図ライブラリ）の
-    // map.on('popupopen', ...)パターンを、API が異なるMapLibreにそのまま
-    // 持ち込んでしまっていたのが原因で、「詳細を見る」ボタンへのクリック
-    // リスナーが一度も付いていなかった（Minami実機確認：押しても動かない）。
-    // MapLibreのPopupは自分自身がイベントを発行する
-    // （this.fire(new Event("open"))をソースで確認済み）ため、
-    // popup.on('open', ...)で購読する。addTo()のたびに毎回'open'が発火する
-    // ことを実機で確認済み（同じPopupインスタンスを使い回しても、クリック
-    // するたびに新しいボタン要素にリスナーを付け直せる）。
-    this.popup.on('open', () => {
-      const el = this.popup.getElement();
-      const btn = el && el.querySelector('.popup-detail-btn');
-      if (!btn) return;
-      btn.addEventListener('click', () => {
-        const spotId = btn.getAttribute('data-spot-id');
-        if (this.onDetailRequest) this.onDetailRequest(spotId);
-      });
-    });
+    // 【2026-10-15、11本目①、Minami決定：A】地図の吹き出し（ポップアップ）は
+    // 廃止し、地図の下の固定情報枠（main.js側のDOM）に統一した。ここでは
+    // ピンの強調（setSelectedSpot）とmain.js連携用のコールバックだけ行う。
     this.map.on('click', SPOTS_LAYER_ID, (e) => {
       const feature = e.features && e.features[0];
       if (!feature) return;
-      this.popup.setLngLat(e.lngLat).setHTML(buildSpotPopupHtml(feature.properties)).addTo(this.map);
-      // 【2026-10-11、5本目】地図の点をタップしたら、その場所へ寄る
-      // （Minami指示）。ポップアップ自体は従来どおり出す（「詳細を見る」導線は残す）。
+      this.setSelectedSpot(feature.properties);
+      // 【2026-10-11、5本目】地図の点をタップしたら、その場所へ寄る（Minami指示）。
       this.flyToSpot(feature.properties, this._lastDepartureStation);
       // 【2026-10-11、6本目B】2Dと同じ動き：PCでは対応する一覧のカードまで
       // スクロールして光らせる（main.js側のhighlightCard）。スマホは
@@ -522,14 +527,16 @@ export class TerrainMapView {
     this._lastBudget = budget;
     if (!this.map) return; // ensureMap前に呼ばれた場合は、座標だけ保持して後でensureMapから反映する
 
+    this.clearSelected(); // 【2026-10-15、11本目①】検索し直したら枠・強調を外す
+
     if (this.departureMarker) {
       this.departureMarker.remove();
       this.departureMarker = null;
     }
     if (departureStation && isFiniteNumber(departureStation.stop_lat) && isFiniteNumber(departureStation.stop_lon)) {
+      // 【2026-10-15、11本目①】吹き出し（ポップアップ）は廃止（Minami決定：A）。
       this.departureMarker = new maplibregl.Marker({ color: '#e06c2c' })
         .setLngLat([departureStation.stop_lon, departureStation.stop_lat])
-        .setPopup(new maplibregl.Popup({ offset: 20 }).setText(`${departureStation.display_name}（出発駅）`))
         .addTo(this.map);
     }
 
@@ -555,6 +562,31 @@ export class TerrainMapView {
 
     this.applyBudget(budget ?? 2000, { reveal });
     this.updateReachCircle(budget ?? 2000, { style: 'settled' });
+  }
+
+  /**
+   * 【2026-10-15、11本目①】ピンの選択状態（吹き出し廃止の代わりの強調表示）。
+   * 別ソース（selected-spot）に選択中の1件だけを描くことで、他の点の塗り分け
+   * （spots-circleレイヤーの帯内/帯外）には触れずに済む。
+   * @param {{id:string, latitude:number, longitude:number}} spot
+   */
+  setSelectedSpot(spot) {
+    if (!this.map || !spot || !isFiniteNumber(spot.latitude) || !isFiniteNumber(spot.longitude)) return;
+    this.selectedSpotId = spot.id;
+    const source = this.map.getSource(SELECTED_SOURCE_ID);
+    if (source) {
+      source.setData({
+        type: 'FeatureCollection',
+        features: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [spot.longitude, spot.latitude] }, properties: {} }],
+      });
+    }
+  }
+
+  /** 情報枠を閉じたとき・検索し直したとき・予算を触ったときに、ピンの強調だけを外す。 */
+  clearSelected() {
+    this.selectedSpotId = null;
+    const source = this.map && this.map.getSource(SELECTED_SOURCE_ID);
+    if (source) source.setData({ type: 'FeatureCollection', features: [] });
   }
 
   /**
@@ -760,8 +792,13 @@ export class TerrainMapView {
    * 上限専用）ため、cameraForBounds()で計算だけ行い、結果のズームが下限を
    * 下回ったら9.5に引き上げてeaseToで適用する。下限で全点が入りきらない
    * 場合は出発駅を中心にする（Minami指示：入りきらない点は画面の外に出てよい）。
+   * 【2026-10-15、11本目②】この「全体の位置」に戻すたびに_focusedOnSpotを
+   * falseにし、onFocusChangeで「全体を見る」ボタンの表示を更新する。
+   * @param {number} budget
+   * @param {{durationMs?: number}} [opts] - 既定600ms。予算操作時の自動復帰・
+   *   「全体を見る」ボタンではMinami指示の1.5秒前後（RETURN_TO_OVERVIEW_DURATION_MS）を渡す。
    */
-  fitToBudget(budget) {
+  fitToBudget(budget, { durationMs = 600 } = {}) {
     if (!this.map) return;
     const visible = (this._lastSpots || []).filter(
       (s) => isFiniteNumber(s.latitude) && isFiniteNumber(s.longitude) && s.source_round_trip_fare <= budget
@@ -792,7 +829,23 @@ export class TerrainMapView {
 
     // 【2026-10-14、10本目①】向き（bearing）は変えない（Minami指示）。現在の
     // bearingをそのまま渡すことで、実質「変えない」になる。
-    this.map.easeTo({ center, zoom, pitch: DEFAULT_PITCH, bearing: this.map.getBearing(), duration: 600 });
+    this.map.easeTo({
+      center, zoom, pitch: DEFAULT_PITCH, bearing: this.map.getBearing(),
+      duration: prefersReducedMotion() ? 0 : durationMs,
+    });
+    this._focusedOnSpot = false;
+    if (this.onFocusChange) this.onFocusChange(false);
+  }
+
+  /**
+   * 【2026-10-15、11本目②、Minami決定：C】「全体を見る」ボタン・予算操作時の
+   * 自動復帰。場所に寄っている（_focusedOnSpot）ときだけ全体の位置へなめらかに
+   * 引く（1.5秒前後）。航空写真→淡色地図の切り替えは既存のズーム連動式
+   * （AERIAL_OPACITY_EXPR）がそのまま効くため、ここで特別な処理は不要。
+   */
+  returnToOverview() {
+    if (!this._focusedOnSpot || this._lastBudget == null) return;
+    this.fitToBudget(this._lastBudget, { durationMs: RETURN_TO_OVERVIEW_DURATION_MS });
   }
 
   /**
@@ -826,6 +879,10 @@ export class TerrainMapView {
   flyToSpot(spot, departureStation) {
     if (!this.map || !isFiniteNumber(spot?.latitude) || !isFiniteNumber(spot?.longitude)) return;
     const token = ++this._flySpotToken;
+    // 【2026-10-15、11本目②】寄り始めた時点で「全体を見る」ボタンを出す
+    // （Minami決定：C。途中でも全体へ戻れるようにする）。
+    this._focusedOnSpot = true;
+    if (this.onFocusChange) this.onFocusChange(true);
 
     if (prefersReducedMotion()) {
       this.map.flyTo({
@@ -1026,7 +1083,6 @@ export class TerrainMapView {
       this.map = null;
     }
     this.departureMarker = null;
-    this.popup = null;
     this._reachCircleLabelMarker = null;
   }
 }

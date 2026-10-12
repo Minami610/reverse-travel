@@ -123,6 +123,16 @@
       <!-- 3D切替中だけ表示。2Dの地図は消さずに裏で残したまま、準備ができたら
            #map-area.mode-3dが付いて3Dに切り替わる（4本目②、Minami指示）。 -->
       <p id="terrain-loading-indicator" hidden>3D地図を準備しています…</p>
+      <!-- 【2026-10-15、11本目①】地図の吹き出し（ポップアップ）の代わりに、
+           地図の下中央に固定で出す情報枠（Minami決定：A）。2D・3D共通、
+           どちらのピンを押しても同じ枠を使い回す。 -->
+      <div id="spot-info-panel" class="spot-info-panel" hidden>
+        <button type="button" id="spot-info-close" class="spot-info-close" aria-label="閉じる">×</button>
+        <div id="spot-info-content" class="spot-info-content"></div>
+      </div>
+      <!-- 【2026-10-15、11本目②】寄っているときだけ出す「全体を見る」ボタン
+           （Minami決定：C）。右上の方角ボタン（3Dのみ）の下に重ならないよう配置。 -->
+      <button type="button" id="view-all-btn" class="view-all-btn" hidden>全体を見る</button>
     </div>
   </div>
 

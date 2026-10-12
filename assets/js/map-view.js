@@ -80,9 +80,10 @@ export class MapView {
     this._waveToken = 0;
     this._waveTimers = [];
     this._pendingWaveReveal = false; // 【2026-10-14、10本目②】layout-controller.jsのinvalidateMapSize()参照
+    this._overviewZoom = null; // 【2026-10-15、11本目②】直近のfitToBudget()が合わせたズーム（寄っているか判定用）
 
-    this.onDetailRequest = null; // (spotId) => void … ポップアップの「詳細を見る」ボタン
     this.onSelectionChange = null; // (spotId) => void … ピン選択と一覧パネルの連動用
+    this.onFocusChange = null; // 【2026-10-15、11本目②】(focused: boolean) => void … 「全体を見る」ボタンの表示切替用
   }
 
   ensureMap() {
@@ -101,16 +102,10 @@ export class MapView {
     // アプリ自体はこれを使わない。本番でも害はないため条件分岐は入れていない。
     window.__mapViewForDebug = this;
 
-    // ポップアップ内の「詳細を見る」ボタンはHTML文字列として渡すため、
-    // 開いたタイミングでイベントを後付けする
-    this.map.on('popupopen', (e) => {
-      const el = e.popup.getElement();
-      const btn = el && el.querySelector('.popup-detail-btn');
-      if (!btn) return;
-      btn.addEventListener('click', () => {
-        const spotId = btn.getAttribute('data-spot-id');
-        if (this.onDetailRequest) this.onDetailRequest(spotId);
-      });
+    // 【2026-10-15、11本目②】ユーザーが手でズームした結果、全体（_overviewZoom）
+    // より寄った状態になったかを「全体を見る」ボタンの表示判定に使う。
+    this.map.on('zoomend', () => {
+      if (this.onFocusChange) this.onFocusChange(this.isZoomedInPastOverview());
     });
   }
 
@@ -135,6 +130,9 @@ export class MapView {
 
     this.departureLatLng = null;
     if (departureStation && isFiniteNumber(departureStation.stop_lat) && isFiniteNumber(departureStation.stop_lon)) {
+      // 【2026-10-15、11本目①】吹き出し（ポップアップ）は廃止（Minami決定：A、
+      // 地図の下の固定枠に統一）。出発駅名は常時表示の吹き出し型ツールチップ
+      // （permanent、ポップアップとは別物）のまま残す。
       L.marker([departureStation.stop_lat, departureStation.stop_lon], {
         icon: createPinIcon('departure'),
         zIndexOffset: 2000,
@@ -145,8 +143,7 @@ export class MapView {
           direction: 'top',
           offset: [0, -16],
           className: 'map-departure-tooltip',
-        })
-        .bindPopup(`${departureStation.display_name}（出発駅）`);
+        });
       this.departureLatLng = [departureStation.stop_lat, departureStation.stop_lon];
     }
 
@@ -155,9 +152,7 @@ export class MapView {
 
       const marker = L.marker([spot.latitude, spot.longitude], {
         icon: createPinIcon('spot'),
-      })
-        .addTo(this.markersLayer)
-        .bindPopup(buildSpotPopupHtml(spot));
+      }).addTo(this.markersLayer);
 
       marker.on('click', () => this.setSelected(spot.id));
 
@@ -226,11 +221,14 @@ export class MapView {
    * 予算以下（帯＋それより安い点）が全部入るよう、地図をなめらかに引く/寄せる。
    * スライダーを指から離したときに呼ぶ想定（Minami指示：動かしている間は
    * カメラを動かさない）。新規検索時（animate:false）は瞬時に合わせる。
+   * 【2026-10-15、11本目②】この「全体の位置」をreturnToOverview()・
+   * isZoomedInPastOverview()の基準として_overviewZoomに覚えておく。
    * @param {number} budget
-   * @param {{animate?: boolean}} [opts]
+   * @param {{animate?: boolean, durationSec?: number}} [opts]
    */
-  fitToBudget(budget, { animate = true } = {}) {
+  fitToBudget(budget, { animate = true, durationSec = 0.6 } = {}) {
     if (!this.map) return;
+    this.lastBudget = budget;
     const bounds = [];
     if (this.departureLatLng) bounds.push(this.departureLatLng);
     this.fareBySpotId.forEach((fare, spotId) => {
@@ -245,11 +243,15 @@ export class MapView {
     // 【2026-10-10】¥2000選択時に点が画面端からはみ出る不具合をMinamiが
     // スクリーンショットで発見（主に3D側だったが、余白は2Dも合わせて広げる）。
     const options = { padding: [48, 48], maxZoom: 16 };
-    if (animate) {
-      this.map.flyToBounds(bounds, { ...options, duration: 0.6 });
+    this._overviewZoom = Math.min(this.map.getBoundsZoom(bounds, false, L.point(48, 48)), options.maxZoom);
+    if (reachPrefersReducedMotion()) {
+      this.map.fitBounds(bounds, options);
+    } else if (animate) {
+      this.map.flyToBounds(bounds, { ...options, duration: durationSec });
     } else {
       this.map.fitBounds(bounds, options);
     }
+    if (this.onFocusChange) this.onFocusChange(false);
   }
 
   /** 直近のbounds（出発駅＋スポット）に再フィットする。地図が非表示の間に
@@ -258,6 +260,26 @@ export class MapView {
     if (this.map && this.lastBounds.length > 0) {
       this.map.fitBounds(this.lastBounds, { padding: [36, 36], maxZoom: 16 });
     }
+  }
+
+  /**
+   * 【2026-10-15、11本目②、Minami決定：C】ユーザーが手でズームして、
+   * 全体の位置（_overviewZoom）より寄っているかどうか。
+   * 「全体を見る」ボタンの表示判定・予算操作時の自動復帰判定に使う。
+   */
+  isZoomedInPastOverview() {
+    if (!this.map || this._overviewZoom == null) return false;
+    return this.map.getZoom() > this._overviewZoom + 0.3;
+  }
+
+  /**
+   * 「全体を見る」ボタン・予算操作時の自動復帰（Minami決定：C）。寄っている
+   * ときに全体の位置へなめらかに引く。向き（bearing）は2Dに無いため変更不要。
+   * @param {{durationSec?: number}} [opts]
+   */
+  returnToOverview({ durationSec = 1.5 } = {}) {
+    if (!this.map || this.lastBudget == null || !this.isZoomedInPastOverview()) return;
+    this.fitToBudget(this.lastBudget, { animate: true, durationSec });
   }
 
   /**
@@ -405,6 +427,17 @@ export class MapView {
     if (this.onSelectionChange) this.onSelectionChange(spotId);
   }
 
+  /**
+   * 【2026-10-15、11本目①】情報枠を閉じたとき・検索し直したとき・予算を
+   * 触ったときに、ピンの強調だけを外す（新しい選択はしない）。
+   */
+  clearSelected() {
+    if (this.selectedSpotId) {
+      this.setMarkerState(this.selectedSpotId, 'selected', false);
+    }
+    this.selectedSpotId = null;
+  }
+
   /** ホバー時の一時ハイライト。選択状態（map-pin-selected）とは
    * 別クラス（map-pin-hover）を使うため、互いに競合・上書きしない。 */
   highlightSpot(spotId) {
@@ -452,18 +485,3 @@ function createPinIcon(kind) {
   });
 }
 
-/**
- * 【2026-10-11、6本目B】説明文は出さない（Minami決定：長いとはみ出すため）。
- * 名前・往復運賃・「詳細を見る」だけにする（3D側のterrain-map-view.jsと同じ）。
- */
-export function buildSpotPopupHtml(spot) {
-  const fare = spot.source_round_trip_fare;
-  const fareText = typeof fare === 'number' ? `往復¥${fare.toLocaleString('ja-JP')}` : '運賃不明';
-  return `
-    <div class="map-popup">
-      <strong class="map-popup-title">${spot.name}</strong>
-      <p class="map-popup-fare">${fareText}</p>
-      <button type="button" class="popup-detail-btn" data-spot-id="${spot.id}">詳細を見る</button>
-    </div>
-  `;
-}
