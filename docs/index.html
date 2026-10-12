@@ -830,6 +830,62 @@ header p {
   margin-bottom: 0.75rem;
 }
 
+/* 【2026-10-16、12本目②A、Minami決定：A＋C】検索後、スマホではフォームを
+   1行の要約バーに畳む（縦長の予算スライダーを含むフォームが画面の大半を
+   占め、地図タブ・一覧タブが細い帯になりスクロールもできなかった対策）。
+   #search-summary自体はまだ一度も検索していない間hidden属性のまま
+   （JSがdisplayResults()で初めて外す）。畳む／開くの出し分けは
+   .layout-left.form-collapsedの有無とメディアクエリだけで行い、hidden属性には
+   以降触れない（[hidden]はdisplay:none!importantのため、一度外したあとは
+   このクラスだけで制御する）。PCでは常にフォームを開いたまま・要約は出さない。 */
+.search-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+  background: white;
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  margin-bottom: 0.5rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+#search-summary-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#search-summary-toggle {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--color-main-deep);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.2rem 0.3rem;
+}
+
+@media (min-width: 760px) {
+  .search-summary {
+    display: none !important; /* PCは常にフォームを開いたまま */
+  }
+}
+
+@media (max-width: 759px) {
+  .layout-left:not(.form-collapsed) .search-summary {
+    display: none;
+  }
+  .layout-left.form-collapsed #search-form {
+    display: none;
+  }
+}
+
 .form-group {
   margin-bottom: 0.6rem;
 }
@@ -1322,30 +1378,48 @@ header p {
   font-weight: 600;
 }
 
-/* 【2026-10-15、11本目①】地図の下中央に固定で出す情報枠（Minami決定：A、
-   吹き出し廃止の代わり）。左下の2D/3D切替ボタン・右下の出典ボタンと重ならない
-   よう、十分な余白（bottom）を取る（verify-layoutの重なりチェック対象）。 */
+/* 【2026-10-16、12本目①、Minami決定：A＋C】地図の下に固定で出す情報「帯」
+   （11本目の大きな枠から、高さ40px前後の細い1行に変更。選んだピンが隠れる
+   というMinami指摘による）。1行に名前（長ければ…で省略、title属性で全文）・
+   往復運賃・「詳細を見る」・閉じるを横並びで収める。
+   PC：#map-areaの一番下、左下の2D/3D切替ボタンと右下の出典ボタンの間に
+   収まる位置（左右の余白をボタン幅ぶん確保）。
+   スマホ：幅が足りないため地図の幅いっぱいで、ボタン類より上に出す。 */
 .spot-info-panel {
   position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: 52px;
   z-index: 1200;
-  width: calc(100% - 24px);
-  max-width: 420px;
+  height: 40px;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.5rem;
   background-color: rgba(255, 255, 255, 0.97);
-  border-radius: 10px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
-  padding: 0.5rem 2.1rem 0.5rem 0.8rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  padding: 0 0.6rem;
+}
+
+@media (min-width: 760px) {
+  .spot-info-panel {
+    left: 90px;
+    /* 【2026-10-16、12本目①修正】出典（attribution）コントロールは
+       Leaflet/MapLibreとも右下8px寄せで、実測の表示幅は最大131px前後
+       （"© 国土地理院"等の文言込み）。46pxでは重なっていたため、
+       実測＋余白を見込んだ150pxに広げた（verify-layoutで重なり0件を確認）。 */
+    right: 150px;
+    bottom: 6px;
+  }
+}
+
+@media (max-width: 759px) {
+  .spot-info-panel {
+    left: 8px;
+    right: 8px;
+    bottom: 48px;
+  }
 }
 
 .spot-info-close {
-  position: absolute;
-  top: 2px;
-  right: 2px;
+  flex-shrink: 0;
   width: 28px;
   height: 28px;
   border: none;
@@ -1354,6 +1428,7 @@ header p {
   font-size: 1.1rem;
   line-height: 1;
   cursor: pointer;
+  order: 4;
 }
 
 .spot-info-content {
@@ -1361,22 +1436,16 @@ header p {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-}
-
-.spot-info-text {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
+  gap: 0.5rem;
 }
 
 .spot-info-name {
   display: flex;
   align-items: center;
-  gap: 0.3rem;
-  font-size: 0.9rem;
+  gap: 0.25rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.85rem;
   color: var(--color-text);
   white-space: nowrap;
   overflow: hidden;
@@ -1385,8 +1454,8 @@ header p {
 
 .spot-info-heart {
   flex-shrink: 0;
-  width: 15px;
-  height: 15px;
+  width: 13px;
+  height: 13px;
   color: var(--color-accent-deep); /* カード・この先へと同じ色に揃える */
 }
 
@@ -1397,21 +1466,24 @@ header p {
 }
 
 .spot-info-fare {
+  flex-shrink: 0;
   margin: 0;
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   color: var(--color-text-sub);
+  white-space: nowrap;
 }
 
 .spot-info-detail-btn {
   flex-shrink: 0;
-  padding: 0.4rem 0.75rem;
+  padding: 0.3rem 0.6rem;
   border: none;
   border-radius: 999px;
   background-color: var(--color-main);
   color: white;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   font-weight: 600;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 /* 【2026-10-15、11本目②】「全体を見る」ボタン（Minami決定：C）。右上の方角
@@ -2272,6 +2344,35 @@ header p {
   margin: 0 auto;
 }
 
+/* 【2026-10-16、12本目②C、Minami決定：A＋C】スマホでは出典の長文の代わりに
+   「使い方」「データ出典・免責」の1行リンクだけにし、縦幅を取り戻す。
+   PCは従来どおり長文を表示し、この1行は出さない。 */
+.footer-summary-mobile {
+  display: none;
+  margin: 0;
+}
+
+.footer-summary-mobile button {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0 0.6rem;
+  font: inherit;
+  color: var(--color-main-deep);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+@media (max-width: 759px) {
+  #app-footer .footer-summary {
+    display: none;
+  }
+
+  .footer-summary-mobile {
+    display: block;
+  }
+}
+
 #app-footer a {
   color: var(--color-main-deep);
 }
@@ -2618,7 +2719,16 @@ header p {
     <!-- PC：左カラム（sticky）＝検索フォーム＋地図／右カラム＝並び替え＋一覧
          スマホ：検索フォームのみ上部固定、その下は「一覧」「地図」タブ切替 -->
     <div id="app-layout" class="app-layout" data-view="results">
-      <div class="layout-left">
+      <div id="layout-left" class="layout-left">
+        <!-- 【2026-10-16、12本目②A、Minami決定：A＋C】検索後、スマホでは
+             フォームをこの1行に畳む（予算スライダーで縦長になったフォームが
+             画面の大半を占め、地図・一覧が細い帯になる不具合の対策）。
+             PCでは常にフォームを開いたままにする（CSS側で出し分け）。
+             まだ一度も検索していないときは畳まない。 -->
+        <div id="search-summary" class="search-summary" hidden>
+          <span id="search-summary-text"></span>
+          <button type="button" id="search-summary-toggle" aria-expanded="false">▼条件を変える</button>
+        </div>
         <!-- 検索フォーム -->
         <form id="search-form">
           <div class="form-row">
@@ -2746,6 +2856,13 @@ header p {
       表示内容の正確性・完全性は保証されません。
       <button type="button" id="howto-btn">使い方</button>
       <button type="button" id="about-data-btn">出典の詳細・免責・お問い合わせ</button>
+    </p>
+    <!-- 【2026-10-16、12本目②C、Minami決定：A＋C】スマホでは出典の長文の
+         代わりに「使い方」「データ出典・免責」の1行リンクだけにする
+         （画面の縦幅を取り戻すため）。押すと中身は上と同じモーダルを開く。 -->
+    <p class="footer-summary-mobile">
+      <button type="button" id="howto-btn-mobile">使い方</button>
+      <button type="button" id="about-data-btn-mobile">データ出典・免責</button>
     </p>
   </footer>
 
@@ -4166,6 +4283,11 @@ const MAP_BAND_WIDTH = 200;
 // 等）の同種の関数と衝突しない名前にしている。
 const REACH_CIRCLE_LABEL_BEARING = 45; // ラベルを置く方位角（出発駅の吹き出しと重ならない向き）
 const WAVE_DURATION_MS = 1000; // Minami指示：検索後、点を波のように出す所要時間（全体で1秒前後）
+// 【2026-10-16、12本目①】選んだピンが下の情報帯（高さ40px前後）に隠れないよう、
+// 地図をずらす量（px）。帯はスマホでは地図下端から48px浮かせて出すため
+// （style.css参照）、帯の高さ＋余白を見込んだ値にする（PCは帯が地図の下端
+// 近くに収まるため、この値より少なく済むが、同じ値でも実害はない）。
+const REVEAL_ABOVE_BAND_OFFSET_PX = 90;
 const EARTH_RADIUS_KM = 6371;
 const toRadReach = (d) => (d * Math.PI) / 180;
 const toDegReach = (r) => (r * 180) / Math.PI;
@@ -4297,7 +4419,12 @@ class MapView {
         icon: createPinIcon('spot'),
       }).addTo(this.markersLayer);
 
-      marker.on('click', () => this.setSelected(spot.id));
+      marker.on('click', () => {
+        this.setSelected(spot.id);
+        // 【2026-10-16、12本目①、Minami決定：A＋C】選んだピンが下の情報帯に
+        // 隠れないよう、帯の分だけ地図をずらす（向きは2Dに無いため変更不要）。
+        this.revealAboveBand([spot.latitude, spot.longitude]);
+      });
 
       this.markersBySpotId.set(spot.id, marker);
       this.fareBySpotId.set(spot.id, spot.source_round_trip_fare);
@@ -4423,6 +4550,26 @@ class MapView {
   returnToOverview({ durationSec = 1.5 } = {}) {
     if (!this.map || this.lastBudget == null || !this.isZoomedInPastOverview()) return;
     this.fitToBudget(this.lastBudget, { animate: true, durationSec });
+  }
+
+  /**
+   * 【2026-10-16、12本目①、Minami決定：A＋C】選んだピンが下の情報帯の
+   * 裏に隠れないよう、地図をずらす。latlngを画面中央そのものではなく、
+   * REVEAL_ABOVE_BAND_OFFSET_PXぶん「南」に実質ずらした地点を中心にする
+   * ことで、latlng自体は画面中央よりその分だけ上（帯より上の見える位置）に
+   * 描画される。向き（bearing）は2Dに無いため変更不要。
+   * @param {[number, number]} latlng
+   */
+  revealAboveBand(latlng) {
+    if (!this.map) return;
+    const zoom = this.map.getZoom();
+    const targetPoint = this.map.project(latlng, zoom).add([0, REVEAL_ABOVE_BAND_OFFSET_PX]);
+    const target = this.map.unproject(targetPoint, zoom);
+    if (reachPrefersReducedMotion()) {
+      this.map.panTo(target, { animate: false });
+    } else {
+      this.map.panTo(target, { animate: true, duration: 0.4 });
+    }
   }
 
   /**
@@ -5372,6 +5519,10 @@ class ReverseTravel {
   initUI() {
     // DOM 要素取得
     this.elements = {
+      layoutLeft: document.getElementById('layout-left'),
+      searchSummary: document.getElementById('search-summary'),
+      searchSummaryText: document.getElementById('search-summary-text'),
+      searchSummaryToggle: document.getElementById('search-summary-toggle'),
       searchForm: document.getElementById('search-form'),
       mapDimensionToggle: document.getElementById('map-dimension-toggle'),
       terrainLoadingIndicator: document.getElementById('terrain-loading-indicator'),
@@ -5402,6 +5553,8 @@ class ReverseTravel {
       howtoBtn: document.getElementById('howto-btn'),
       howtoModal: document.getElementById('howto-modal'),
       howtoModalClose: document.getElementById('howto-modal-close'),
+      howtoBtnMobile: document.getElementById('howto-btn-mobile'),
+      aboutBtnMobile: document.getElementById('about-data-btn-mobile'),
       mylistBtn: document.getElementById('mylist-btn'),
       mylistCount: document.getElementById('mylist-count'),
       mylistModal: document.getElementById('mylist-modal'),
@@ -5424,6 +5577,19 @@ class ReverseTravel {
     this.initModal(null, this.elements.sharedListModal, this.elements.sharedListModalClose);
     this.renderDataSources();
     this.updateMylistCount();
+
+    // 【2026-10-16、12本目②C】スマホ版フッターの「使い方」「データ出典・免責」
+    // リンク。中身はPC版と同じモーダルを開く（initModal()がmodal._openに
+    // 保存した開く関数をそのまま使い、2つ目のトリガーのために同じ要素を
+    // 2回初期化しない）。
+    this.elements.howtoBtnMobile?.addEventListener('click', () => this.elements.howtoModal?._open?.());
+    this.elements.aboutBtnMobile?.addEventListener('click', () => this.elements.aboutModal?._open?.());
+
+    // 【2026-10-16、12本目②A】検索後、スマホでは要約バーを押すとフォームの
+    // 開閉を切り替える（もう一度検索すると自動でたたむのはdisplayResults側）。
+    this.elements.searchSummaryToggle?.addEventListener('click', () => {
+      this.setFormCollapsed(!this.elements.layoutLeft.classList.contains('form-collapsed'));
+    });
 
     this.elements.mylistSortSelect?.addEventListener('change', () => this.renderMylist());
 
@@ -6354,6 +6520,15 @@ class ReverseTravel {
     // main.js側にあるため、ここで明示的に閉じる必要がある。
     this.hideSpotInfoPanel();
 
+    // 【2026-10-16、12本目②A、Minami決定：A＋C】検索成功時に要約バーの文言を
+    // 更新し、スマホではフォームをたたむ（PCはCSS側で要約バー自体を出さない
+    // ため実害なし）。要約バーはここで初めてhidden属性を外す
+    // （「まだ一度も検索していないときは畳まない」の一度きりのゲート。
+    // 以降はform-collapsedクラスだけで開閉を制御する）。
+    if (this.elements.searchSummary) this.elements.searchSummary.hidden = false;
+    this.updateSearchSummaryText(departureStationId, budget);
+    this.setFormCollapsed(true);
+
     // 【2026-10-14、10本目②】「この条件で検索」を押した結果の表示なので、
     // 出発駅から近い順に点が波のように広がって出る演出を行う（Minami指示）。
     const departureStation = this.data.stations?.[departureStationId];
@@ -7142,8 +7317,10 @@ class ReverseTravel {
   }
 
   /**
-   * 【2026-10-15、11本目①、Minami決定：A】地図のピンを押したとき、下の固定
-   * 情報枠に名前・往復運賃・「詳細を見る」を出す（吹き出しの代わり）。
+   * 【2026-10-16、12本目①、Minami決定：A】地図のピンを押したとき、下の固定
+   * 情報「帯」（高さ40px前後、1行）に名前・往復運賃・「詳細を見る」を出す
+   * （11本目の大きな枠から変更：選んだピンが枠に隠れるとのMinami指摘）。
+   * 名前が長いときは…で省略し、title属性で全文を確認できるようにする。
    * 応援マーク対象なら名前の横に小さい塗りハートを添える（カードと同じ基準）。
    */
   showSpotInfoPanel(spotId) {
@@ -7154,10 +7331,8 @@ class ReverseTravel {
     const freqInfo = this.buildFrequencyDisplay(spot);
     const heart = freqInfo?.isBadgeEligible ? `<span class="spot-info-heart">${HEART_FILLED_SVG}</span>` : '';
     this.elements.spotInfoContent.innerHTML = `
-      <div class="spot-info-text">
-        <strong class="spot-info-name">${heart}${spot.name}</strong>
-        <p class="spot-info-fare">${fareText}</p>
-      </div>
+      <strong class="spot-info-name" title="${spot.name}">${heart}${spot.name}</strong>
+      <span class="spot-info-fare">${fareText}</span>
       <button type="button" class="spot-info-detail-btn" data-spot-id="${spot.id}">詳細を見る</button>
     `;
     this.elements.spotInfoContent.querySelector('.spot-info-detail-btn')
@@ -7174,6 +7349,34 @@ class ReverseTravel {
     if (this.elements.spotInfoContent) this.elements.spotInfoContent.innerHTML = '';
     this.mapView.clearSelected();
     this.terrainMapView?.clearSelected();
+  }
+
+  /**
+   * 【2026-10-16、12本目②A、Minami決定：A＋C】検索成功時の要約バー文言
+   * （例：「富山駅前・往復¥1,200」）。PCでは要約バー自体をCSSで常に非表示に
+   * するため、ここでは出発駅名・予算の整形だけ行えばよい。
+   */
+  updateSearchSummaryText(departureStationId, budget) {
+    if (!this.elements.searchSummaryText) return;
+    const name = this.data.stations?.[departureStationId]?.display_name || this.lastSearchedDepartureText || '';
+    this.elements.searchSummaryText.textContent = `${name}・往復¥${formatThousands(budget)}`;
+  }
+
+  /**
+   * 【2026-10-16、12本目②A、Minami決定：A＋C】スマホの検索フォーム開閉。
+   * .layout-leftへform-collapsedクラスを付け外しするだけで、実際の表示/
+   * 非表示はCSS（@media (max-width: 759px)）側に任せる（PCはCSSが要約バー
+   * 自体を常に非表示にするため、このクラスの有無に関わらず常にフォームが
+   * 見える＝影響しない）。
+   * @param {boolean} collapsed
+   */
+  setFormCollapsed(collapsed) {
+    if (!this.elements.layoutLeft) return;
+    this.elements.layoutLeft.classList.toggle('form-collapsed', collapsed);
+    this.elements.searchSummaryToggle?.setAttribute('aria-expanded', String(!collapsed));
+    if (this.elements.searchSummaryToggle) {
+      this.elements.searchSummaryToggle.textContent = collapsed ? '▼条件を変える' : '▲閉じる';
+    }
   }
 
   /**

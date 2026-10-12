@@ -135,6 +135,10 @@ class ReverseTravel {
   initUI() {
     // DOM 要素取得
     this.elements = {
+      layoutLeft: document.getElementById('layout-left'),
+      searchSummary: document.getElementById('search-summary'),
+      searchSummaryText: document.getElementById('search-summary-text'),
+      searchSummaryToggle: document.getElementById('search-summary-toggle'),
       searchForm: document.getElementById('search-form'),
       mapDimensionToggle: document.getElementById('map-dimension-toggle'),
       terrainLoadingIndicator: document.getElementById('terrain-loading-indicator'),
@@ -165,6 +169,8 @@ class ReverseTravel {
       howtoBtn: document.getElementById('howto-btn'),
       howtoModal: document.getElementById('howto-modal'),
       howtoModalClose: document.getElementById('howto-modal-close'),
+      howtoBtnMobile: document.getElementById('howto-btn-mobile'),
+      aboutBtnMobile: document.getElementById('about-data-btn-mobile'),
       mylistBtn: document.getElementById('mylist-btn'),
       mylistCount: document.getElementById('mylist-count'),
       mylistModal: document.getElementById('mylist-modal'),
@@ -187,6 +193,19 @@ class ReverseTravel {
     this.initModal(null, this.elements.sharedListModal, this.elements.sharedListModalClose);
     this.renderDataSources();
     this.updateMylistCount();
+
+    // 【2026-10-16、12本目②C】スマホ版フッターの「使い方」「データ出典・免責」
+    // リンク。中身はPC版と同じモーダルを開く（initModal()がmodal._openに
+    // 保存した開く関数をそのまま使い、2つ目のトリガーのために同じ要素を
+    // 2回初期化しない）。
+    this.elements.howtoBtnMobile?.addEventListener('click', () => this.elements.howtoModal?._open?.());
+    this.elements.aboutBtnMobile?.addEventListener('click', () => this.elements.aboutModal?._open?.());
+
+    // 【2026-10-16、12本目②A】検索後、スマホでは要約バーを押すとフォームの
+    // 開閉を切り替える（もう一度検索すると自動でたたむのはdisplayResults側）。
+    this.elements.searchSummaryToggle?.addEventListener('click', () => {
+      this.setFormCollapsed(!this.elements.layoutLeft.classList.contains('form-collapsed'));
+    });
 
     this.elements.mylistSortSelect?.addEventListener('change', () => this.renderMylist());
 
@@ -1117,6 +1136,15 @@ class ReverseTravel {
     // main.js側にあるため、ここで明示的に閉じる必要がある。
     this.hideSpotInfoPanel();
 
+    // 【2026-10-16、12本目②A、Minami決定：A＋C】検索成功時に要約バーの文言を
+    // 更新し、スマホではフォームをたたむ（PCはCSS側で要約バー自体を出さない
+    // ため実害なし）。要約バーはここで初めてhidden属性を外す
+    // （「まだ一度も検索していないときは畳まない」の一度きりのゲート。
+    // 以降はform-collapsedクラスだけで開閉を制御する）。
+    if (this.elements.searchSummary) this.elements.searchSummary.hidden = false;
+    this.updateSearchSummaryText(departureStationId, budget);
+    this.setFormCollapsed(true);
+
     // 【2026-10-14、10本目②】「この条件で検索」を押した結果の表示なので、
     // 出発駅から近い順に点が波のように広がって出る演出を行う（Minami指示）。
     const departureStation = this.data.stations?.[departureStationId];
@@ -1905,8 +1933,10 @@ class ReverseTravel {
   }
 
   /**
-   * 【2026-10-15、11本目①、Minami決定：A】地図のピンを押したとき、下の固定
-   * 情報枠に名前・往復運賃・「詳細を見る」を出す（吹き出しの代わり）。
+   * 【2026-10-16、12本目①、Minami決定：A】地図のピンを押したとき、下の固定
+   * 情報「帯」（高さ40px前後、1行）に名前・往復運賃・「詳細を見る」を出す
+   * （11本目の大きな枠から変更：選んだピンが枠に隠れるとのMinami指摘）。
+   * 名前が長いときは…で省略し、title属性で全文を確認できるようにする。
    * 応援マーク対象なら名前の横に小さい塗りハートを添える（カードと同じ基準）。
    */
   showSpotInfoPanel(spotId) {
@@ -1917,10 +1947,8 @@ class ReverseTravel {
     const freqInfo = this.buildFrequencyDisplay(spot);
     const heart = freqInfo?.isBadgeEligible ? `<span class="spot-info-heart">${HEART_FILLED_SVG}</span>` : '';
     this.elements.spotInfoContent.innerHTML = `
-      <div class="spot-info-text">
-        <strong class="spot-info-name">${heart}${spot.name}</strong>
-        <p class="spot-info-fare">${fareText}</p>
-      </div>
+      <strong class="spot-info-name" title="${spot.name}">${heart}${spot.name}</strong>
+      <span class="spot-info-fare">${fareText}</span>
       <button type="button" class="spot-info-detail-btn" data-spot-id="${spot.id}">詳細を見る</button>
     `;
     this.elements.spotInfoContent.querySelector('.spot-info-detail-btn')
@@ -1937,6 +1965,34 @@ class ReverseTravel {
     if (this.elements.spotInfoContent) this.elements.spotInfoContent.innerHTML = '';
     this.mapView.clearSelected();
     this.terrainMapView?.clearSelected();
+  }
+
+  /**
+   * 【2026-10-16、12本目②A、Minami決定：A＋C】検索成功時の要約バー文言
+   * （例：「富山駅前・往復¥1,200」）。PCでは要約バー自体をCSSで常に非表示に
+   * するため、ここでは出発駅名・予算の整形だけ行えばよい。
+   */
+  updateSearchSummaryText(departureStationId, budget) {
+    if (!this.elements.searchSummaryText) return;
+    const name = this.data.stations?.[departureStationId]?.display_name || this.lastSearchedDepartureText || '';
+    this.elements.searchSummaryText.textContent = `${name}・往復¥${formatThousands(budget)}`;
+  }
+
+  /**
+   * 【2026-10-16、12本目②A、Minami決定：A＋C】スマホの検索フォーム開閉。
+   * .layout-leftへform-collapsedクラスを付け外しするだけで、実際の表示/
+   * 非表示はCSS（@media (max-width: 759px)）側に任せる（PCはCSSが要約バー
+   * 自体を常に非表示にするため、このクラスの有無に関わらず常にフォームが
+   * 見える＝影響しない）。
+   * @param {boolean} collapsed
+   */
+  setFormCollapsed(collapsed) {
+    if (!this.elements.layoutLeft) return;
+    this.elements.layoutLeft.classList.toggle('form-collapsed', collapsed);
+    this.elements.searchSummaryToggle?.setAttribute('aria-expanded', String(!collapsed));
+    if (this.elements.searchSummaryToggle) {
+      this.elements.searchSummaryToggle.textContent = collapsed ? '▼条件を変える' : '▲閉じる';
+    }
   }
 
   /**

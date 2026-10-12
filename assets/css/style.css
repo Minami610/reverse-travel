@@ -150,6 +150,62 @@ header p {
   margin-bottom: 0.75rem;
 }
 
+/* 【2026-10-16、12本目②A、Minami決定：A＋C】検索後、スマホではフォームを
+   1行の要約バーに畳む（縦長の予算スライダーを含むフォームが画面の大半を
+   占め、地図タブ・一覧タブが細い帯になりスクロールもできなかった対策）。
+   #search-summary自体はまだ一度も検索していない間hidden属性のまま
+   （JSがdisplayResults()で初めて外す）。畳む／開くの出し分けは
+   .layout-left.form-collapsedの有無とメディアクエリだけで行い、hidden属性には
+   以降触れない（[hidden]はdisplay:none!importantのため、一度外したあとは
+   このクラスだけで制御する）。PCでは常にフォームを開いたまま・要約は出さない。 */
+.search-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+  background: white;
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  margin-bottom: 0.5rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+#search-summary-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#search-summary-toggle {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--color-main-deep);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.2rem 0.3rem;
+}
+
+@media (min-width: 760px) {
+  .search-summary {
+    display: none !important; /* PCは常にフォームを開いたまま */
+  }
+}
+
+@media (max-width: 759px) {
+  .layout-left:not(.form-collapsed) .search-summary {
+    display: none;
+  }
+  .layout-left.form-collapsed #search-form {
+    display: none;
+  }
+}
+
 .form-group {
   margin-bottom: 0.6rem;
 }
@@ -642,30 +698,48 @@ header p {
   font-weight: 600;
 }
 
-/* 【2026-10-15、11本目①】地図の下中央に固定で出す情報枠（Minami決定：A、
-   吹き出し廃止の代わり）。左下の2D/3D切替ボタン・右下の出典ボタンと重ならない
-   よう、十分な余白（bottom）を取る（verify-layoutの重なりチェック対象）。 */
+/* 【2026-10-16、12本目①、Minami決定：A＋C】地図の下に固定で出す情報「帯」
+   （11本目の大きな枠から、高さ40px前後の細い1行に変更。選んだピンが隠れる
+   というMinami指摘による）。1行に名前（長ければ…で省略、title属性で全文）・
+   往復運賃・「詳細を見る」・閉じるを横並びで収める。
+   PC：#map-areaの一番下、左下の2D/3D切替ボタンと右下の出典ボタンの間に
+   収まる位置（左右の余白をボタン幅ぶん確保）。
+   スマホ：幅が足りないため地図の幅いっぱいで、ボタン類より上に出す。 */
 .spot-info-panel {
   position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: 52px;
   z-index: 1200;
-  width: calc(100% - 24px);
-  max-width: 420px;
+  height: 40px;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.5rem;
   background-color: rgba(255, 255, 255, 0.97);
-  border-radius: 10px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
-  padding: 0.5rem 2.1rem 0.5rem 0.8rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  padding: 0 0.6rem;
+}
+
+@media (min-width: 760px) {
+  .spot-info-panel {
+    left: 90px;
+    /* 【2026-10-16、12本目①修正】出典（attribution）コントロールは
+       Leaflet/MapLibreとも右下8px寄せで、実測の表示幅は最大131px前後
+       （"© 国土地理院"等の文言込み）。46pxでは重なっていたため、
+       実測＋余白を見込んだ150pxに広げた（verify-layoutで重なり0件を確認）。 */
+    right: 150px;
+    bottom: 6px;
+  }
+}
+
+@media (max-width: 759px) {
+  .spot-info-panel {
+    left: 8px;
+    right: 8px;
+    bottom: 48px;
+  }
 }
 
 .spot-info-close {
-  position: absolute;
-  top: 2px;
-  right: 2px;
+  flex-shrink: 0;
   width: 28px;
   height: 28px;
   border: none;
@@ -674,6 +748,7 @@ header p {
   font-size: 1.1rem;
   line-height: 1;
   cursor: pointer;
+  order: 4;
 }
 
 .spot-info-content {
@@ -681,22 +756,16 @@ header p {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-}
-
-.spot-info-text {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
+  gap: 0.5rem;
 }
 
 .spot-info-name {
   display: flex;
   align-items: center;
-  gap: 0.3rem;
-  font-size: 0.9rem;
+  gap: 0.25rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.85rem;
   color: var(--color-text);
   white-space: nowrap;
   overflow: hidden;
@@ -705,8 +774,8 @@ header p {
 
 .spot-info-heart {
   flex-shrink: 0;
-  width: 15px;
-  height: 15px;
+  width: 13px;
+  height: 13px;
   color: var(--color-accent-deep); /* カード・この先へと同じ色に揃える */
 }
 
@@ -717,21 +786,24 @@ header p {
 }
 
 .spot-info-fare {
+  flex-shrink: 0;
   margin: 0;
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   color: var(--color-text-sub);
+  white-space: nowrap;
 }
 
 .spot-info-detail-btn {
   flex-shrink: 0;
-  padding: 0.4rem 0.75rem;
+  padding: 0.3rem 0.6rem;
   border: none;
   border-radius: 999px;
   background-color: var(--color-main);
   color: white;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   font-weight: 600;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 /* 【2026-10-15、11本目②】「全体を見る」ボタン（Minami決定：C）。右上の方角
@@ -1590,6 +1662,35 @@ header p {
 #app-footer .footer-summary {
   max-width: 1000px;
   margin: 0 auto;
+}
+
+/* 【2026-10-16、12本目②C、Minami決定：A＋C】スマホでは出典の長文の代わりに
+   「使い方」「データ出典・免責」の1行リンクだけにし、縦幅を取り戻す。
+   PCは従来どおり長文を表示し、この1行は出さない。 */
+.footer-summary-mobile {
+  display: none;
+  margin: 0;
+}
+
+.footer-summary-mobile button {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0 0.6rem;
+  font: inherit;
+  color: var(--color-main-deep);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+@media (max-width: 759px) {
+  #app-footer .footer-summary {
+    display: none;
+  }
+
+  .footer-summary-mobile {
+    display: block;
+  }
 }
 
 #app-footer a {

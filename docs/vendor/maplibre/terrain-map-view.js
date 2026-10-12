@@ -76,6 +76,11 @@ const OVERVIEW_MIN_ZOOM = 9.5;
 const SPOT_FOCUS_ZOOM = 14;
 const SPOT_FOCUS_PITCH = 60;
 const SPOT_FOCUS_DURATION_MS = 2600; // Minami指示：2〜3秒
+// 【2026-10-16、12本目①、Minami決定：A＋C】選んだピンが下の情報帯（高さ40px
+// 前後）に隠れないよう、寄るときの中心をこの分だけ画面上へずらす（2D側の
+// REVEAL_ABOVE_BAND_OFFSET_PXと同じ値・同じ考え方）。MapLibreのoffsetは
+// 「centerを画面中央からどれだけずらして描くか」（負のYで上へ）。
+const REVEAL_ABOVE_BAND_OFFSET = [0, -90];
 // 【2026-10-13、8本目③】真上(pitch0)から降りた後、傾けて立体にするまでの時間。
 const TILT_DURATION_MS = 2000; // Minami指示：2秒前後
 const REDUCED_MOTION_FLY_DURATION_MS = 300; // prefers-reduced-motion時：降りる・傾けるを1回の短い移動にまとめる
@@ -458,7 +463,13 @@ export class TerrainMapView {
       this.map.off('sourcedata', collapseAttribution);
       this.map.off('terrain', collapseAttribution);
     };
-    this.waitForTerrainLoaded().then(stopCollapsing);
+    // 【不具合修正、2026-10-16、12本目③】ここでwaitForTerrainLoaded()を呼ぶと、
+    // まだ下のmap.once('load', ...)より前＝スタイルの読み込みが終わっておらず
+    // 'gsi-dem'ソース自体がmap.style.sourceCachesにまだ登録されていないことが
+    // あり、isSourceLoaded('gsi-dem')が「そのようなソースは無い」という
+    // コンソールエラーを出していた（Minami実機確認：赤いエラーとして発見）。
+    // setTerrain()の直後（ソースが確実に存在する時点）に呼ぶよう後ろへ移した
+    // （下記参照）。ここでは保険のsetTimeoutだけ残す。
     setTimeout(stopCollapsing, 20000); // 読み込みが長引く・失敗する場合の保険
 
     // 検証用の参照（queryTerrainElevationでの標高確認・Playwrightでのカメラ操作など）。
@@ -507,6 +518,9 @@ export class TerrainMapView {
     // addSourceでgsi-demは既に宣言済みのため、setTerrainは標高タイルの
     // 取得・変換を裏側で開始するだけで、この呼び出し自体は同期的に返る。
     this.map.setTerrain({ source: 'gsi-dem', exaggeration: DEFAULT_EXAGGERATION });
+    // 【不具合修正、12本目③】'gsi-dem'ソースが確実に存在するこの時点で呼ぶ
+    // （上のcollapseAttribution設定箇所のコメント参照）。
+    this.waitForTerrainLoaded().then(stopCollapsing);
 
     if (this._lastDepartureStation || this._lastSpots) {
       this.render(this._lastDepartureStation, this._lastSpots || [], this._lastBudget);
@@ -890,6 +904,7 @@ export class TerrainMapView {
         zoom: SPOT_FOCUS_ZOOM,
         pitch: SPOT_FOCUS_PITCH,
         duration: REDUCED_MOTION_FLY_DURATION_MS,
+        offset: REVEAL_ABOVE_BAND_OFFSET,
         essential: true,
       });
       if (this.onOverheadSettled) this.onOverheadSettled(spot);
@@ -902,6 +917,7 @@ export class TerrainMapView {
       zoom: SPOT_FOCUS_ZOOM,
       pitch: 0,
       duration: SPOT_FOCUS_DURATION_MS,
+      offset: REVEAL_ABOVE_BAND_OFFSET,
       essential: true,
     });
 
@@ -910,7 +926,14 @@ export class TerrainMapView {
       this.waitForSceneSettled().then(() => {
         if (token !== this._flySpotToken || !this.map) return;
         if (this.onOverheadSettled) this.onOverheadSettled(spot);
-        this.map.easeTo({ pitch: SPOT_FOCUS_PITCH, duration: TILT_DURATION_MS });
+        // center・offsetを傾けのeaseToでも明示し直す（spotの座標＋情報帯よけの
+        // ずらし幅を毎回同じに保つ。offsetだけ省略した場合の挙動に依存しない）。
+        this.map.easeTo({
+          pitch: SPOT_FOCUS_PITCH,
+          duration: TILT_DURATION_MS,
+          center: [spot.longitude, spot.latitude],
+          offset: REVEAL_ABOVE_BAND_OFFSET,
+        });
         this.map.once('moveend', () => {
           if (token !== this._flySpotToken || !this.map) return;
           // 【2026-10-13、8本目③修正】傾け終わった直後にそのまま

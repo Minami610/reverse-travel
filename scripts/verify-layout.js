@@ -66,7 +66,28 @@ function startServer() {
   });
 }
 
+/**
+ * 【2026-10-16、12本目②A】検索成功後、スマホ幅ではフォームが要約バーへ畳まれ
+ * display:noneになる（main.jsのsetFormCollapsed()参照）。同じpageを使い回す
+ * 複数の検証関数が、1回目の検索後にフォーム要素を直接操作しようとすると
+ * 「見えない」エラーになるため、各操作の前にこれを呼び、畳まれていれば
+ * 要約バーの「条件を変える」を押して開き直す（PCでは畳まれないため何もしない）。
+ */
+async function ensureFormExpanded(page) {
+  // form-collapsedクラスはPCでも付くが、実際にフォームが隠れる
+  // （display:none）のはスマホ幅だけ（@media (max-width: 759px)）のため、
+  // クラスの有無ではなく実際の見た目（computed display）で判定する
+  // （PCでは#search-summary-toggle自体がdisplay:noneで押せないため、
+  // クラスだけで判定するとPCでクリックに失敗する）。
+  const hidden = await page.evaluate(() => getComputedStyle(document.getElementById('search-form')).display === 'none');
+  if (hidden) {
+    await page.click('#search-summary-toggle');
+    await page.waitForTimeout(100);
+  }
+}
+
 async function searchAt(page, stationText, budget) {
+  await ensureFormExpanded(page);
   await page.fill('#departure-input', '');
   await page.fill('#departure-input', stationText);
   await page.waitForTimeout(400);
@@ -270,6 +291,7 @@ async function captureNoResultsScreen(page, viewportLabel) {
 }
 
 async function captureSuggestionsScreen(page, viewportLabel) {
+  await ensureFormExpanded(page);
   await page.fill('#departure-input', '');
   await page.fill('#departure-input', '魚');
   await page.waitForTimeout(400);
@@ -331,7 +353,12 @@ async function captureResultsListScreen(page, viewportLabel) {
 }
 
 async function captureHowToScreen(page, viewportLabel) {
-  await page.click('#howto-btn');
+  // 【2026-10-16、12本目②C】スマホでは#howto-btnの親（.footer-summary）が
+  // display:noneになり、ボタン自身のcomputed displayには表れない
+  // （displayは継承プロパティではないため）。isVisible()で実際の見え方を見て、
+  // 隠れていれば代わりに#howto-btn-mobileを押す。
+  const howtoBtnVisible = await page.locator('#howto-btn').isVisible();
+  await page.click(howtoBtnVisible ? '#howto-btn' : '#howto-btn-mobile');
   await page.waitForTimeout(200);
   const screenshotPath = path.join(screenshotDir, `howto-${viewportLabel}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: true });
@@ -350,6 +377,7 @@ async function captureHowToScreen(page, viewportLabel) {
 
 async function captureSearchButtonPendingScreen(page, viewportLabel) {
   await searchAt(page, '高松築港', 1000);
+  await ensureFormExpanded(page);
   await page.click('#budget-increment');
   await page.waitForTimeout(100);
   const screenshotPath = path.join(screenshotDir, `search-btn-pending-${viewportLabel}.png`);
@@ -811,6 +839,7 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
     const pendingClass = await page.evaluate(() => document.getElementById('search-btn').classList.contains('search-btn-pending'));
     record('スライダー操作後、「この条件で検索」ボタンが強調表示になる', pendingClass);
 
+    await ensureFormExpanded(page);
     await page.click('#search-btn');
     await page.waitForSelector('.spot-card, .no-results', { timeout: 15000 });
     await page.waitForTimeout(200);
@@ -1012,6 +1041,7 @@ async function checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths)
         if (value === 1600) break;
         if (value < 1600) await page.click('#budget-increment'); else await page.click('#budget-decrement');
       }
+      await ensureFormExpanded(page);
       await page.click('#search-btn');
       await page.waitForSelector('.spot-card, .no-results', { timeout: 15000 });
       // 【不具合修正、3回目】_waveFrameも、実はapplyBudget()自体が
@@ -1080,6 +1110,7 @@ async function checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths)
         console.log(`  保存: budget-circle-${dim}-${budget}-presearch-${label}.png`);
       }
 
+      await ensureFormExpanded(page);
       await page.click('#search-btn');
       // 【不具合修正】spではこの時点で地図タブへ切り替え済み（一覧タブが
       // display:none）のため、waitForSelectorの既定（visible待ち）は
@@ -1477,6 +1508,7 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
       savedPaths.push(focusedPath);
 
       // 回転させたあと（Minami指示のスクリーンショット要件）
+      const bearingBeforeRotateDemo = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
       await page.evaluate(() => {
         const map = window.__terrainMapForDebug;
         map.setBearing(map.getBearing() + 110);
@@ -1485,6 +1517,17 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
       const rotatedPath = path.join(screenshotDir, `terrain-3d-rotated-${label}.png`);
       await page.screenshot({ path: rotatedPath, clip: mapAreaBox });
       savedPaths.push(rotatedPath);
+      // 【2026-10-16、12本目①修正】この回転はスクリーンショット用の演出
+      // （スマホは2本指回転自体を無効化済みのため、実機でこの状態には
+      // ならない）。flyToSpot()が情報帯よけのoffset（REVEAL_ABOVE_BAND_OFFSET）
+      // を使うようになり、寄ったあとの中心が画面の真の中心（＝bearing回転の
+      // 中心）とズレたため、回転したままだとピンが画面外まで振れて
+      // タップできなくなることがあった（実機相当のdiag scriptで確認：
+      // 回転前はx,y＝画面内、回転後はx=-78と画面外に出た）。この下の
+      // ピンタップ検証は実機で実際に起こりうる状態（＝回転前）で行う必要が
+      // あるため、演出用の回転を元に戻してから進める。
+      await page.evaluate((bearing) => window.__terrainMapForDebug.setBearing(bearing), bearingBeforeRotateDemo);
+      await page.waitForTimeout(100);
 
       if (label === 'sp') {
         // 【2026-10-11追加】スマホは「地図で見る」でdata-view="results"（地図
@@ -2005,6 +2048,20 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
           JSON.stringify({ panelBox, attribBox })
         );
       }
+      // 【2026-10-16、12本目①、Minami決定：A＋C】情報枠は高さ48px以下の
+      // 細い帯であること。選んだピンは、この帯の上（帯のtopより上）に
+      // 描画されること（revealAboveBand()の効果を実機相当で検証）。
+      record(
+        `[2D/${label}] 情報枠は高さ48px以下の帯`,
+        !!panelBox && panelBox.height <= 48,
+        JSON.stringify(panelBox)
+      );
+      const selectedPinBoxAfterReveal = await page.locator('.map-pin-spot.map-pin-selected:visible').boundingBox();
+      record(
+        `[2D/${label}] 選んだピンが情報帯より上に表示される`,
+        !!selectedPinBoxAfterReveal && !!panelBox && (selectedPinBoxAfterReveal.y + selectedPinBoxAfterReveal.height) < panelBox.y,
+        JSON.stringify({ selectedPinBoxAfterReveal, panelBox })
+      );
 
       const panelPath = path.join(screenshotDir, `spot-info-panel-2d-${label}.png`);
       const mapAreaBox = await page.locator('#map-area').boundingBox();
@@ -2111,6 +2168,25 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
             JSON.stringify({ panelBox, compassBox })
           );
         }
+        // 【2026-10-16、12本目①、Minami決定：A＋C】情報枠は高さ48px以下、
+        // 選んだピン（画面座標）は帯より上にあること（3D版のreveal確認）。
+        record(
+          `[3D/${label}] 情報枠は高さ48px以下の帯`,
+          !!panelBox && panelBox.height <= 48,
+          JSON.stringify(panelBox)
+        );
+        const selectedPinScreenY = await page.evaluate(() => {
+          const map = window.__terrainMapForDebug;
+          const source = map.getSource('selected-spot');
+          const feat = source?._data?.features?.[0];
+          if (!feat) return null;
+          return map.project(feat.geometry.coordinates).y;
+        });
+        record(
+          `[3D/${label}] 選んだピンが情報帯より上に表示される`,
+          selectedPinScreenY !== null && !!panelBox && (mapBox.y + selectedPinScreenY) < panelBox.y,
+          JSON.stringify({ selectedPinScreenY, mapBoxY: mapBox.y, panelBox })
+        );
 
         const panelPath = path.join(screenshotDir, `spot-info-panel-3d-${label}.png`);
         await page.screenshot({ path: panelPath, clip: mapBox });
@@ -2228,6 +2304,196 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
       '[2D] 検索し直すと、枠が消えピンの強調も外れる',
       afterResearch.panelHidden && afterResearch.selectedCount === 0,
       JSON.stringify(afterResearch)
+    );
+
+    await context.close();
+  }
+}
+
+// 【2026-10-16、12本目④】round12の指示で追加された2つのスマホ幅
+// （iPhone SE相当・iPhone標準相当）。既存のVIEWPORTS.spは375×667のまま
+// 他の検証（round11以前）で使われ続けるため、こちらは専用の定数にする
+// （VIEWPORTSへ混ぜて全チェックを2倍に増やさない）。
+const MOBILE_FORM_COLLAPSE_VIEWPORTS = {
+  se: { width: 375, height: 667 },
+  std: { width: 390, height: 844 },
+};
+
+// GSI DEMタイルの404（データが元々存在しない座標、修正不可）・hillshadeと
+// 3D地形の共有ソース警告（意図した設計、7本目参照）は、既知として許容する。
+// それ以外のコンソールエラー・警告が1件でもあれば検証失敗にする。
+function isKnownAcceptableConsoleMessage(text) {
+  // 【2026-10-16、12本目④修正】Playwrightのconsoleイベントは、ブラウザ自身が
+  // 出す「Failed to load resource」系のメッセージにURLを含めない（DevTools上の
+  // 表示とは異なり、msg.text()はURL抜きの定型文のみ）。このアプリでタイルや
+  // 画像が404になり得るのはGSI DEMタイル（データが元々存在しない座標、
+  // CLAUDE.md参照・修正不可）だけで、他に404を起こすリソースは無いことを
+  // 確認済みのため、URLでの絞り込みはできないが「404のリソース読み込み
+  // 失敗」はこのアプリでは一律に既知・許容扱いとする。
+  return /Failed to load resource.*404/i.test(text)
+    || /same source for a hillshade layer and for 3D terrain/i.test(text);
+}
+
+/**
+ * 【2026-10-16、12本目②③、Minami決定：A＋C】スマホでの画面の広さの取り戻し
+ * （検索後にフォームを1行へ畳む・フッターの出典長文をリンク2つへ縮める）と、
+ * Minami実機確認の再現手順（富山駅前・スマホ幅・検索・3D切替）での
+ * コンソールエラー0件を、375×667・390×844の両方で検証する。
+ */
+async function checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths) {
+  console.log('\n=== スマホの画面の広さの取り戻し・コンソールエラーの検証（12本目②③） ===');
+
+  for (const [label, viewport] of Object.entries(MOBILE_FORM_COLLAPSE_VIEWPORTS)) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    const consoleMessages = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error' || msg.type() === 'warning') consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    });
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+
+    // 検索前：要約バーは出ず、フォームは開いたまま
+    const preSearch = await page.evaluate(() => ({
+      summaryHidden: document.getElementById('search-summary').hidden,
+      formDisplay: getComputedStyle(document.getElementById('search-form')).display,
+    }));
+    record(`[${label}] 検索前は要約バーが出ずフォームが開いたまま`, preSearch.summaryHidden && preSearch.formDisplay !== 'none', JSON.stringify(preSearch));
+
+    await searchAt(page, '富山駅前', 500);
+
+    const postSearch = await page.evaluate(() => ({
+      collapsed: document.getElementById('layout-left').classList.contains('form-collapsed'),
+      formDisplay: getComputedStyle(document.getElementById('search-form')).display,
+      summaryDisplay: getComputedStyle(document.getElementById('search-summary')).display,
+      summaryText: document.getElementById('search-summary-text')?.textContent || '',
+    }));
+    record(
+      `[${label}] 検索後、スマホではフォームが1行の要約バーに畳まれる`,
+      postSearch.collapsed && postSearch.formDisplay === 'none' && postSearch.summaryDisplay !== 'none',
+      JSON.stringify(postSearch)
+    );
+    record(
+      `[${label}] 要約バーの文言に出発駅・往復予算が入る`,
+      postSearch.summaryText.includes('富山駅前') && postSearch.summaryText.includes('¥500'),
+      postSearch.summaryText
+    );
+
+    // 地図タブ：残り高さの半分以上を地図が占める（検索前のフォームが
+    // 畳まれたことで、一覧・地図タブが細い帯になる不具合が解消したことの検証）
+    await page.click('.tab-btn[data-tab="map"]');
+    await page.waitForTimeout(200);
+    const mapHeight = await page.locator('#map-area').boundingBox().then((b) => b?.height || 0);
+    record(
+      `[${label}] 地図タブの地図が画面高さの半分以上を占める`,
+      mapHeight >= viewport.height * 0.5,
+      `mapHeight=${mapHeight} / viewportHeight=${viewport.height}`
+    );
+    // 「2D表示」ボタンが「一覧／地図」タブ（画面上部、地図タブより前にある
+    // 要素）と重ならないこと（Minamiがスクリーンショットで報告した不具合）
+    const toggleBox = await page.locator('#map-dimension-toggle').boundingBox();
+    const tabsBox = await page.locator('.mobile-tabs').boundingBox();
+    record(
+      `[${label}] 「2D表示」ボタンが「一覧／地図」タブと重ならない`,
+      !rectsOverlap(toggleBox, tabsBox),
+      JSON.stringify({ toggleBox, tabsBox })
+    );
+    const mapTabPath = path.join(screenshotDir, `mobile-form-collapse-map-tab-${label}.png`);
+    await page.screenshot({ path: mapTabPath });
+    savedPaths.push(mapTabPath);
+
+    // 【2026-10-16、12本目⑥】必要スクリーンショット「375×667・390×844の両方で
+    // ピンを選んだ状態」を、この地図タブの流れの中で撮る（2D、実クリック）。
+    const pinLocatorMobile = page.locator('.map-pin-spot:visible').first();
+    const pinBoxMobile = await pinLocatorMobile.boundingBox().catch(() => null);
+    if (pinBoxMobile) {
+      await page.mouse.click(pinBoxMobile.x + pinBoxMobile.width / 2, pinBoxMobile.y + pinBoxMobile.height / 2);
+      await page.waitForTimeout(150);
+      const pinSelectedPath = path.join(screenshotDir, `mobile-form-collapse-pin-selected-${label}.png`);
+      await page.screenshot({ path: pinSelectedPath });
+      savedPaths.push(pinSelectedPath);
+      await page.click('#spot-info-close').catch(() => {});
+    }
+
+    // 一覧タブ：残り高さいっぱいでスクロール可能
+    // 【2026-10-16、12本目④修正】実際にスクロールするのは#results-container
+    // 自身ではなく、その子の#results-list（overflow-y:auto、style.css参照）。
+    // #results-containerはflex-columnの器でoverflow指定を持たないため、
+    // そちらを見ると常にoverflowY:'visible'になり誤って検証失敗していた。
+    await page.click('.tab-btn[data-tab="list"]');
+    await page.waitForTimeout(200);
+    const listInfo = await page.evaluate(() => {
+      const container = document.getElementById('results-container');
+      const list = document.getElementById('results-list');
+      const rect = container.getBoundingClientRect();
+      return {
+        overflowY: getComputedStyle(list).overflowY,
+        height: rect.height,
+        viewportHeight: window.innerHeight,
+      };
+    });
+    record(
+      `[${label}] 一覧タブが画面高さの半分以上を占め、スクロール可能なoverflow設定`,
+      listInfo.height >= listInfo.viewportHeight * 0.5 && (listInfo.overflowY === 'auto' || listInfo.overflowY === 'scroll'),
+      JSON.stringify(listInfo)
+    );
+    const listTabPath = path.join(screenshotDir, `mobile-form-collapse-list-tab-${label}.png`);
+    await page.screenshot({ path: listTabPath });
+    savedPaths.push(listTabPath);
+
+    // 要約バーの「▼条件を変える」でフォームが開き直る
+    await page.click('#search-summary-toggle');
+    await page.waitForTimeout(150);
+    const afterToggle = await page.evaluate(() => ({
+      collapsed: document.getElementById('layout-left').classList.contains('form-collapsed'),
+      formDisplay: getComputedStyle(document.getElementById('search-form')).display,
+    }));
+    record(
+      `[${label}] 要約バーの「条件を変える」でフォームが開き直る`,
+      !afterToggle.collapsed && afterToggle.formDisplay !== 'none',
+      JSON.stringify(afterToggle)
+    );
+    const formExpandedPath = path.join(screenshotDir, `mobile-form-collapse-expanded-${label}.png`);
+    await page.screenshot({ path: formExpandedPath });
+    savedPaths.push(formExpandedPath);
+
+    // もう一度検索すると再び畳まれる
+    await searchAt(page, '富山駅前', 1000);
+    const afterResearch = await page.evaluate(() => document.getElementById('layout-left').classList.contains('form-collapsed'));
+    record(`[${label}] 再検索すると要約バーへ再び畳まれる`, afterResearch);
+
+    // フッターのスマホ用リンク（使い方・データ出典/免責）
+    await page.click('#about-data-btn-mobile');
+    await page.waitForTimeout(150);
+    const aboutOpen = await page.evaluate(() => !document.getElementById('about-modal').hidden);
+    record(`[${label}] フッターの「データ出典・免責」リンクがモーダルを開く`, aboutOpen);
+    await page.click('#about-modal-close').catch(() => {});
+    await page.waitForTimeout(100);
+
+    await page.click('#howto-btn-mobile');
+    await page.waitForTimeout(150);
+    const howtoOpen = await page.evaluate(() => !document.getElementById('howto-modal').hidden);
+    record(`[${label}] フッターの「使い方」リンクがモーダルを開く`, howtoOpen);
+    await page.click('#howto-modal-close').catch(() => {});
+
+    // Minami実機確認の再現手順：富山駅前・スマホ幅・検索・3D切替で
+    // コンソールに赤いエラー・警告が出ないこと（既知の許容分を除く）。
+    await page.click('.tab-btn[data-tab="map"]');
+    await page.waitForTimeout(150);
+    await page.click('#map-dimension-toggle');
+    await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).catch(() => {});
+    await page.evaluate(() => window.__terrainViewForDebug?.waitForTerrainLoaded(20000)).catch(() => {});
+    await page.waitForTimeout(500);
+
+    const unexpected = [...consoleMessages.filter((m) => !isKnownAcceptableConsoleMessage(m)), ...pageErrors];
+    record(
+      `[${label}] 富山駅前・検索・3D切替の一連の操作でコンソールエラー・警告が出ない（既知のDEMタイル404・hillshade警告は除く）`,
+      unexpected.length === 0,
+      unexpected.join(' | ')
     );
 
     await context.close();
@@ -2589,6 +2855,7 @@ async function main() {
     await checkDefaultStyleD(browser, baseUrl, savedPaths);
     await checkDescendTiltChoreography(browser, baseUrl, savedPaths);
     await checkSpotInfoPanel(browser, baseUrl, savedPaths);
+    await checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths);
     await checkReturnToOverview(browser, baseUrl, savedPaths);
     await checkBreadcrumbTrail(browser, baseUrl, savedPaths);
     await checkBudgetSlider(browser, baseUrl, savedPaths);

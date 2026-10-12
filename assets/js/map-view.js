@@ -23,6 +23,11 @@ const MAP_BAND_WIDTH = 200;
 // 等）の同種の関数と衝突しない名前にしている。
 const REACH_CIRCLE_LABEL_BEARING = 45; // ラベルを置く方位角（出発駅の吹き出しと重ならない向き）
 const WAVE_DURATION_MS = 1000; // Minami指示：検索後、点を波のように出す所要時間（全体で1秒前後）
+// 【2026-10-16、12本目①】選んだピンが下の情報帯（高さ40px前後）に隠れないよう、
+// 地図をずらす量（px）。帯はスマホでは地図下端から48px浮かせて出すため
+// （style.css参照）、帯の高さ＋余白を見込んだ値にする（PCは帯が地図の下端
+// 近くに収まるため、この値より少なく済むが、同じ値でも実害はない）。
+const REVEAL_ABOVE_BAND_OFFSET_PX = 90;
 const EARTH_RADIUS_KM = 6371;
 const toRadReach = (d) => (d * Math.PI) / 180;
 const toDegReach = (r) => (r * 180) / Math.PI;
@@ -154,7 +159,12 @@ export class MapView {
         icon: createPinIcon('spot'),
       }).addTo(this.markersLayer);
 
-      marker.on('click', () => this.setSelected(spot.id));
+      marker.on('click', () => {
+        this.setSelected(spot.id);
+        // 【2026-10-16、12本目①、Minami決定：A＋C】選んだピンが下の情報帯に
+        // 隠れないよう、帯の分だけ地図をずらす（向きは2Dに無いため変更不要）。
+        this.revealAboveBand([spot.latitude, spot.longitude]);
+      });
 
       this.markersBySpotId.set(spot.id, marker);
       this.fareBySpotId.set(spot.id, spot.source_round_trip_fare);
@@ -280,6 +290,26 @@ export class MapView {
   returnToOverview({ durationSec = 1.5 } = {}) {
     if (!this.map || this.lastBudget == null || !this.isZoomedInPastOverview()) return;
     this.fitToBudget(this.lastBudget, { animate: true, durationSec });
+  }
+
+  /**
+   * 【2026-10-16、12本目①、Minami決定：A＋C】選んだピンが下の情報帯の
+   * 裏に隠れないよう、地図をずらす。latlngを画面中央そのものではなく、
+   * REVEAL_ABOVE_BAND_OFFSET_PXぶん「南」に実質ずらした地点を中心にする
+   * ことで、latlng自体は画面中央よりその分だけ上（帯より上の見える位置）に
+   * 描画される。向き（bearing）は2Dに無いため変更不要。
+   * @param {[number, number]} latlng
+   */
+  revealAboveBand(latlng) {
+    if (!this.map) return;
+    const zoom = this.map.getZoom();
+    const targetPoint = this.map.project(latlng, zoom).add([0, REVEAL_ABOVE_BAND_OFFSET_PX]);
+    const target = this.map.unproject(targetPoint, zoom);
+    if (reachPrefersReducedMotion()) {
+      this.map.panTo(target, { animate: false });
+    } else {
+      this.map.panTo(target, { animate: true, duration: 0.4 });
+    }
   }
 
   /**
