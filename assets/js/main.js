@@ -2087,6 +2087,43 @@ class ReverseTravel {
     this.elements.spotInfoContent.querySelector('.spot-info-detail-btn')
       ?.addEventListener('click', () => this.openSpotDetailById(spot.id));
     this.elements.spotInfoPanel.hidden = false;
+    this.updateSpotInfoPanelMaxWidth();
+  }
+
+  /**
+   * 【2026-10-14、24本目③、不具合修正】PCの名前の帯（.spot-info-panel）は
+   * CSSのmax-width: calc(100% - 90px - 150px)で「2D/3D切替ボタンと出典
+   * ボタンの間」を見積もっていたが、固定の150pxは出典ボタンの実際の表示幅
+   * （地図の横幅が狭い二段組の左カラムでは出典ボタンがもっと右寄り＝
+   * もっと余白がある）と食い違い、狭く見積もりすぎて「長崎鼻古墳」程度の
+   * 名前でも省略されることがあった（Cowork指摘）。固定値をやめ、実際に
+   * 今表示されている2D/3D切替ボタンの右端と出典ボタンの左端を測り、
+   * その間に収まるmax-widthをJSで都度設定する（3Dの帯の余白を動的に
+   * clampするgetRevealPadding()と同じ考え方）。スマホでは帯の横幅は
+   * CSS側（left:8px;right:8px）に任せるため、ここでは何もしない
+   * （インラインstyleを残さないようクリアする）。
+   */
+  updateSpotInfoPanelMaxWidth() {
+    const panel = this.elements.spotInfoPanel;
+    if (!panel) return;
+    const isDesktop = window.matchMedia('(min-width: 760px)').matches;
+    if (!isDesktop) {
+      panel.style.maxWidth = '';
+      return;
+    }
+    const mapArea = document.getElementById('map-area');
+    const toggle = this.elements.mapDimensionToggle;
+    if (!mapArea || !toggle) return;
+    const attrib = mapArea.querySelector(
+      mapArea.classList.contains('mode-3d') ? '.maplibregl-ctrl-bottom-right' : '.leaflet-control-attribution'
+    );
+    const mapRect = mapArea.getBoundingClientRect();
+    const toggleRect = toggle.getBoundingClientRect();
+    const attribRect = attrib?.getBoundingClientRect();
+    const rightEdge = attribRect ? attribRect.left - mapRect.left : mapRect.width;
+    const safetyMargin = 16;
+    const maxWidth = rightEdge - 90 - safetyMargin;
+    panel.style.maxWidth = `${Math.max(100, maxWidth)}px`;
   }
 
   /**

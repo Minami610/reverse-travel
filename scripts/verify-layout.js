@@ -131,10 +131,48 @@ function rectsOverlap(a, b) {
   return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 }
 
+/**
+ * 【24本目④、不具合修正】「交差していない」だけでは、実際には数pxしか
+ * 離れておらず見た目には触れ合っている（Cowork指摘：2D/3D切替ボタンと
+ * 出典ボタンの間が実測5px前後しか無く、重なって見えた）ケースを見逃す。
+ * 縦に並ぶ2つの矩形の間の実際の隙間（px）を返す（横方向の重なりが無い場合は
+ * 判定対象外としてnullを返す＝左右にずれている場合はこの関数では見ない）。
+ */
+function verticalGap(upper, lower) {
+  if (!upper || !lower) return null;
+  const horizontalOverlap = upper.x < lower.x + lower.width && upper.x + upper.width > lower.x;
+  if (!horizontalOverlap) return null;
+  return lower.y - (upper.y + upper.height);
+}
+
 /** 矩形が0サイズでなく、ビューポート内に収まっているか */
 function isFullyVisible(rect, viewport) {
   if (!rect || rect.width <= 0 || rect.height <= 0) return false;
   return rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= viewport.width + 1 && rect.y + rect.height <= viewport.height + 1;
+}
+
+/**
+ * 【24本目①、不具合修正】検索直後の2D地図は、出発駅から近い順にピンが
+ * 波のように広がって出る演出中（.map-pin-spot要素に一時的に付く
+ * pin-wave-hidden、CLAUDE.md・map-view.js _startWaveReveal()参照）で、
+ * 検索後すぐにスクリーンショットを撮るとピンが1つも写らないまま撮って
+ * しまうことがあった（Cowork指摘：mobile-budget-overlay-pin-selected-2d-se.png
+ * 等でピンが1つも写っていなかった件。実機相当の検証で、ピンの位置自体は
+ * 正しく・style.displayも'none'ではなく、単に演出の途中だっただけと確認した）。
+ * 全てのピンからpin-wave-hiddenクラスが外れる（＝演出が終わる）まで待つ。
+ */
+async function waitForWaveRevealSettled(page, { timeout = 3000, interval = 100 } = {}) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const hiddenCount = await page.evaluate(() => {
+      const mv = window.__mapViewForDebug;
+      if (!mv) return 0;
+      return Array.from(mv.markersBySpotId.values())
+        .filter((m) => m.getElement()?.classList.contains('pin-wave-hidden')).length;
+    });
+    if (hiddenCount === 0) return;
+    await page.waitForTimeout(interval);
+  }
 }
 
 /**
@@ -2069,6 +2107,20 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
       const panelBox = await page.locator('#spot-info-panel').boundingBox();
       const toggleBox = await page.locator('#map-dimension-toggle').boundingBox();
       const attribBox = await page.locator('#spots-map .leaflet-control-attribution').boundingBox().catch(() => null);
+      // 【24本目③、不具合修正】PCでは「長崎鼻古墳」程度（10文字まで）の名前は
+      // 省略されないこと（Cowork指摘：以前は帯の幅の見積もりが狭すぎて
+      // 5文字でも省略されていた）。
+      if (label === 'pc' && spotName.length <= 10) {
+        const nameTruncated = await page.evaluate(() => {
+          const el = document.querySelector('.spot-info-name');
+          return el ? el.scrollWidth > el.clientWidth + 1 : null;
+        });
+        record(
+          `[2D/${label}] 10文字までの名前（${spotName}）は帯で省略されない`,
+          nameTruncated === false,
+          `nameTruncated=${nameTruncated}`
+        );
+      }
       record(
         `[2D/${label}] 情報枠が2D/3D切替ボタンと重ならない`,
         !rectsOverlap(panelBox, toggleBox),
@@ -2197,6 +2249,19 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
         const panelBox = await page.locator('#spot-info-panel').boundingBox();
         const toggleBox = await page.locator('#map-dimension-toggle').boundingBox();
         const compassBox = await page.locator('.maplibregl-ctrl-top-right').boundingBox().catch(() => null);
+        // 【24本目③、不具合修正】2Dと同じく、PCでは10文字までの名前は
+        // 省略されないこと。
+        if (label === 'pc' && spotName.length <= 10) {
+          const nameTruncated = await page.evaluate(() => {
+            const el = document.querySelector('.spot-info-name');
+            return el ? el.scrollWidth > el.clientWidth + 1 : null;
+          });
+          record(
+            `[3D/${label}] 10文字までの名前（${spotName}）は帯で省略されない`,
+            nameTruncated === false,
+            `nameTruncated=${nameTruncated}`
+          );
+        }
         record(
           `[3D/${label}] 情報枠が2D/3D切替ボタンと重ならない`,
           !rectsOverlap(panelBox, toggleBox),
@@ -2668,9 +2733,17 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
     record(`[${label}/2D] 2D/3D切替ボタンが予算操作帯と重ならない`, !rectsOverlap(toggleBox, overlayBox), JSON.stringify({ toggleBox, overlayBox }));
     const attribBox2d = await page.locator('#map-area .leaflet-control-attribution').boundingBox().catch(() => null);
     if (attribBox2d) {
-      record(`[${label}/2D] 出典ボタンが2D/3D切替ボタンと重ならない`, !rectsOverlap(attribBox2d, toggleBox), JSON.stringify({ attribBox2d, toggleBox }));
+      const gap2d = verticalGap(toggleBox, attribBox2d);
+      record(
+        `[${label}/2D] 出典ボタンが2D/3D切替ボタンと重ならず、はっきりした隙間がある（8px以上）`,
+        gap2d === null || gap2d >= 8,
+        `gap=${gap2d}px, ${JSON.stringify({ attribBox2d, toggleBox })}`
+      );
     }
 
+    // 波の演出（検索直後、近い順にピンが広がって出る）が終わるまで待ってから撮る
+    // （Cowork指摘。待たずに撮るとピンが1つも写らない画面になる）。
+    await waitForWaveRevealSettled(page);
     const mapTab2dPath = path.join(screenshotDir, `mobile-budget-overlay-2d-${label}.png`);
     await page.screenshot({ path: mapTab2dPath });
     savedPaths.push(mapTab2dPath);
@@ -2682,6 +2755,32 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       await page.waitForTimeout(150);
       const panelBox2d = await page.locator('#spot-info-panel').boundingBox();
       record(`[${label}/2D] 名前の帯が予算操作帯と重ならない`, !rectsOverlap(panelBox2d, overlayBox), JSON.stringify({ panelBox2d, overlayBox }));
+
+      // 【24本目①】選んだピンと、ほかのピンが地図の上に出ていて、画面の中で
+      // 帯（名前の帯・予算操作帯のうち、より上にある方＝名前の帯）より上に
+      // あることを検証する（Cowork指摘の再発防止）。
+      const pinsAfterSelect = await page.evaluate(() => {
+        // 【不具合修正】':visible'はPlaywrightのlocator専用の拡張疑似クラスで、
+        // ブラウザ本体のquerySelectorAll()には存在しない（構文エラーになる）。
+        // getBoundingClientRect()の幅・高さで可視判定する。
+        const nodes = [...document.querySelectorAll('.map-pin-spot')].filter((n) => {
+          const r = n.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        });
+        return nodes.map((n) => n.getBoundingClientRect().top);
+      });
+      const bandTop2d = panelBox2d ? panelBox2d.y : overlayBox.y;
+      record(
+        `[${label}/2D] 選んだピンを含め、複数のピンが地図上に見えている`,
+        pinsAfterSelect.length >= 2,
+        `見えているピン数=${pinsAfterSelect.length}`
+      );
+      record(
+        `[${label}/2D] 見えているピンがすべて帯より上にある`,
+        pinsAfterSelect.length > 0 && pinsAfterSelect.every((top) => top < bandTop2d),
+        JSON.stringify({ pinsAfterSelect, bandTop2d })
+      );
+
       const pinSelectedPath2d = path.join(screenshotDir, `mobile-budget-overlay-pin-selected-2d-${label}.png`);
       await page.screenshot({ path: pinSelectedPath2d });
       savedPaths.push(pinSelectedPath2d);
@@ -2793,7 +2892,12 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       record(`[${label}/3D] 2D/3D切替ボタンがタブと重ならない`, !rectsOverlap(toggleBox3d, tabsBox3d), JSON.stringify({ toggleBox3d, tabsBox3d }));
       record(`[${label}/3D] 2D/3D切替ボタンが予算操作帯と重ならない`, !rectsOverlap(toggleBox3d, overlayBox3d), JSON.stringify({ toggleBox3d, overlayBox3d }));
       if (attribBox3d) {
-        record(`[${label}/3D] 出典ボタンが2D/3D切替ボタンと重ならない`, !rectsOverlap(attribBox3d, toggleBox3d), JSON.stringify({ attribBox3d, toggleBox3d }));
+        const gap3d = verticalGap(toggleBox3d, attribBox3d);
+        record(
+          `[${label}/3D] 出典ボタンが2D/3D切替ボタンと重ならず、はっきりした隙間がある（8px以上）`,
+          gap3d === null || gap3d >= 8,
+          `gap=${gap3d}px, ${JSON.stringify({ attribBox3d, toggleBox3d })}`
+        );
       }
       if (compassBox3d) {
         record(`[${label}/3D] 方角ボタンが2D/3D切替ボタンと重ならない`, !rectsOverlap(compassBox3d, toggleBox3d), JSON.stringify({ compassBox3d, toggleBox3d }));
@@ -2814,6 +2918,14 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       }, 800);
       if (pinScreenPos) {
         const mapBox3d = await page.locator('#map-area').boundingBox();
+        // 【24本目②、不具合修正】checkCrossDimensionSelectionScroll()と同じ、
+        // クリック前にonTiltCompleteを仕込み、クリック後はtiltComplete→
+        // MapLibreの'idle'の順で待ってからスクリーンショットを撮る
+        // （固定300ms待ちのままだと航空写真がぼやけた状態で撮ってしまう）。
+        const tiltCompletePromise3d = page.evaluate(() => new Promise((resolve) => {
+          window.__terrainViewForDebug.onTiltComplete = () => resolve();
+          setTimeout(resolve, 10000);
+        }));
         await page.mouse.click(mapBox3d.x + pinScreenPos.x, mapBox3d.y + pinScreenPos.y);
         await page.waitForTimeout(300);
         const panelBox3d = await page.locator('#spot-info-panel').boundingBox();
@@ -2822,6 +2934,13 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
         if (viewAllBox3d) {
           record(`[${label}/3D] 「全体を見る」ボタンが方角ボタンと重ならない`, !compassBox3d || !rectsOverlap(viewAllBox3d, compassBox3d), JSON.stringify({ viewAllBox3d, compassBox3d }));
         }
+        await tiltCompletePromise3d;
+        await page.evaluate(() => new Promise((resolve) => {
+          const map = window.__terrainMapForDebug;
+          map.once('idle', resolve);
+          setTimeout(resolve, 8000);
+        }));
+        await page.waitForTimeout(300);
         const pinSelectedPath3d = path.join(screenshotDir, `mobile-budget-overlay-pin-selected-3d-${label}.png`);
         await page.screenshot({ path: pinSelectedPath3d });
         savedPaths.push(pinSelectedPath3d);
@@ -2979,6 +3098,15 @@ async function checkCrossDimensionSelectionScroll(browser, baseUrl, savedPaths) 
     record('[PC/3D] 最後のカードに対応するピンが見つかる', !!pinPos);
     if (pinPos) {
       const mapBox = await page.locator('#map-area').boundingBox();
+      // 【24本目②、不具合修正】クリック前にonTiltCompleteの待ち受けを仕込んで
+      // おく（checkSpotInfoPanel()と同じ確立済みの手法）。以前はクリック後
+      // すぐスクリーンショットを撮っており、降りる→傾ける演出中・航空写真の
+      // 高詳細タイルが揃う前のぼやけた状態を撮っていた（Cowork指摘、
+      // cross-dimension-pc-3d-selected-scrolled.pngで発覚）。
+      const tiltCompletePromise = page.evaluate(() => new Promise((resolve) => {
+        window.__terrainViewForDebug.onTiltComplete = () => resolve();
+        setTimeout(resolve, 10000);
+      }));
       await page.mouse.click(mapBox.x + pinPos.x, mapBox.y + pinPos.y);
       // 【不具合修正】#results-list.scrollTo({behavior:'smooth'})はブラウザの
       // スムーズスクロールアニメーション（既定で数百ms）が終わるまでscrollTopが
@@ -2995,6 +3123,17 @@ async function checkCrossDimensionSelectionScroll(browser, baseUrl, savedPaths) 
         scrollTopAfter3d !== scrollTopBefore3d,
         `${scrollTopBefore3d} -> ${scrollTopAfter3d}`
       );
+
+      // 降りる→傾ける演出完了を待ってから、MapLibre公式の'idle'イベント
+      // （航空写真の高詳細タイルまで含めて描画が完全に落ち着いたことを示す）
+      // も追加で待つ（checkSpotInfoPanel()と同じ、20本目で確立した手法）。
+      await tiltCompletePromise;
+      await page.evaluate(() => new Promise((resolve) => {
+        const map = window.__terrainMapForDebug;
+        map.once('idle', resolve);
+        setTimeout(resolve, 8000);
+      }));
+      await page.waitForTimeout(300);
 
       // 必須スクリーンショット：PC・3Dでピンを選び、一覧がスクロールした状態
       const shotPath = path.join(screenshotDir, 'cross-dimension-pc-3d-selected-scrolled.png');

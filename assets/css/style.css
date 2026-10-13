@@ -720,7 +720,13 @@ header p {
 @media (max-width: 759px) {
   #map-area .leaflet-bottom.leaflet-right,
   #map-area .maplibregl-ctrl-bottom-right {
-    top: 46px;
+    /* 【2026-10-14、24本目④、不具合修正】46pxは2D/3D切替ボタン
+       （top:8px、実測の高さ約32.8px→下端は約40.8px）との間が5px前後しか
+       無く、見た目には触れ合っているように見える（Coworkのスクリーン
+       ショット指摘で発覚。verify-layoutの「重ならない」判定は交差の有無しか
+       見ておらず、この僅差を検出できていなかった）。54pxに広げて
+       はっきりした隙間（約13px）を確保した。 */
+    top: 54px;
     left: 8px;
     bottom: auto;
     right: auto;
@@ -750,11 +756,20 @@ header p {
 @media (min-width: 760px) {
   .spot-info-panel {
     left: 90px;
-    /* 【2026-10-16、12本目①修正】出典（attribution）コントロールは
-       Leaflet/MapLibreとも右下8px寄せで、実測の表示幅は最大131px前後
-       （"© 国土地理院"等の文言込み）。46pxでは重なっていたため、
-       実測＋余白を見込んだ150pxに広げた（verify-layoutで重なり0件を確認）。 */
-    right: 150px;
+    /* 【2026-10-14、24本目③、不具合修正】以前はleft:90px・right:150pxの
+       両方を指定して帯を「2D/3D切替ボタンと出典ボタンの間いっぱい」に
+       引き伸ばしていたが、これだと帯の実際の横幅は地図の幅に左右され、
+       名前（.spot-info-name、flex:1 1 autoで余りを取り合う）が長めの運賃・
+       ボタン類に押されて収まりきらず「長崎鼻古墳」程度（5文字）でも
+       省略されることがあった（Cowork指摘、地図が狭い左カラムのときに実測で
+       再現）。rightを指定せずmax-widthだけにすることで、帯は中身に合わせて
+       縮む・広がる（絶対配置はwidth未指定なら中身サイズになる）ようにしつつ、
+       2D/3D切替ボタンと出典ボタンの間（100% - 90px - 150px、出典側の見積もりは
+       直前のコメントのまま）を超えて広がらないようにした。収まらないときだけ
+       .spot-info-name側のtext-overflow:ellipsisで省略される。
+       （右150pxの余白分だけはみ出さないようにmax-widthで確保し続ける）。 */
+    width: fit-content;
+    max-width: calc(100% - 90px - 150px);
     bottom: 6px;
   }
 }
@@ -857,7 +872,18 @@ header p {
 }
 
 .spot-info-content {
-  flex: 1;
+  /* 【2026-10-14、24本目③、不具合修正】flex:1（flex-basis:0%）は、
+     このコンテナを含む.spot-info-panel（中身の幅に合わせて縮むshrink-to-fit
+     配置、上記max-width参照）を常に目一杯（max-widthいっぱい）まで
+     広げてしまい、結果として中の.spot-info-name側に「余った」幅が
+     text-overflow:ellipsisの判定を誤らせ、実際には収まる文字数でも
+     省略されることがあった（flex-basis:0%の子を持つflexコンテナは、
+     中身に基づく本来の幅ではなくflex-grow分を使い切ろうとする挙動が
+     ブラウザのサイズ計算に出るため）。flex-basis:autoに変える
+     （flex:1 1 autoではなくflex:0 1 auto、伸びずに縮むだけ）ことで、
+     中身の実サイズどおりに縮むようにした。閉じるボタン（.spot-info-close、
+     order:4、flex-shrink:0）との間隔は.spot-info-panel自体のgapで保たれる。 */
+  flex: 0 1 auto;
   min-width: 0;
   display: flex;
   align-items: center;
