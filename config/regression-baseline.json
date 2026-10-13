@@ -46,7 +46,7 @@
         {
           "display_name": "富山駅前",
           "note": "富山県の中心駅。地鉄バス（OD運賃表型）＋旧均一運賃路線（まいどはやバス等）が乗り入れる",
-          "budgets": { "400": { "reachable": 35, "spots": 56 }, "1000": { "reachable": 229, "spots": 17 }, "2000": { "reachable": 787, "spots": 11, "transfer": 11 } }
+          "budgets": { "400": { "reachable": 35, "spots": 56 }, "1000": { "reachable": 229, "spots": 17 }, "2000": { "reachable": 705, "spots": 11, "transfer": 11 } }
         },
         {
           "display_name": "高岡駅",
