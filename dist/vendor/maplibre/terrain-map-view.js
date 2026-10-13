@@ -76,11 +76,22 @@ const OVERVIEW_MIN_ZOOM = 9.5;
 const SPOT_FOCUS_ZOOM = 14;
 const SPOT_FOCUS_PITCH = 60;
 const SPOT_FOCUS_DURATION_MS = 2600; // Minami指示：2〜3秒
-// 【2026-10-16、12本目①、Minami決定：A＋C】選んだピンが下の情報帯（高さ40px
-// 前後）に隠れないよう、寄るときの中心をこの分だけ画面上へずらす（2D側の
-// REVEAL_ABOVE_BAND_OFFSET_PXと同じ値・同じ考え方）。MapLibreのoffsetは
-// 「centerを画面中央からどれだけずらして描くか」（負のYで上へ）。
-const REVEAL_ABOVE_BAND_OFFSET = [0, -90];
+// 【2026-10-13、20本目修正、Minami指示】選んだピンが下の情報帯（高さ40px前後）に
+// 隠れないよう、寄るときの中心を画面上寄りにずらす。以前はMapLibreのoffsetを
+// 使っていたが、offsetは「centerを画面中央からどれだけずらして描くか」という
+// 見た目だけのずらしで、回転（bearing）の中心は画面の真の中心のままになる。
+// PCは右ドラッグで回転できるため、選んだピンが帯より上に出ている状態で回転すると、
+// ピンだけが画面中央を中心に振れて画面外へ飛んでしまう不具合があった
+// （verify-layout.jsの旧コメントに実測値「回転後はx=-78と画面外に出た」と残っていた）。
+// paddingは「この分だけ外側を見えない余白として扱う」設定で、回転の中心も
+// 「帯より上の見える範囲の中心」に変わるため、回転してもピンは見える範囲の
+// 中心に留まり続ける。bottomパディングぶん、中心は画面中央よりbottom/2だけ
+// 上にずれる（MapLibreの仕様）。旧offset[0,-90]と同じ見え方になるようbottom=180にした。
+const REVEAL_ABOVE_BAND_PADDING = { top: 0, right: 0, bottom: 180, left: 0 };
+// 帯を閉じた後（全体表示・予算操作での復帰）は、上のpaddingを明示的に0へ戻す
+// （MapLibreのpaddingは次のカメラ操作でpaddingを指定しない限りそのまま残り続ける
+// ため、戻し忘れると全体表示の「短い辺の8%・最小ズーム9.5」の構図が狂う）。
+const CLEAR_PADDING = { top: 0, right: 0, bottom: 0, left: 0 };
 // 【2026-10-13、8本目③】真上(pitch0)から降りた後、傾けて立体にするまでの時間。
 const TILT_DURATION_MS = 2000; // Minami指示：2秒前後
 const REDUCED_MOTION_FLY_DURATION_MS = 300; // prefers-reduced-motion時：降りる・傾けるを1回の短い移動にまとめる
@@ -90,7 +101,7 @@ const SPOTS_SOURCE_ID = 'spots';
 const SPOTS_LAYER_ID = 'spots-circle';
 const DEM_SOURCE_ID = 'gsi-dem';
 const HILLSHADE_LAYER_ID = 'hillshade-layer';
-// 【2026-10-14、10本目②】予算の到達範囲の円（出発駅中心）。
+// 【2026-10-13、10本目②】予算の到達範囲の円（出発駅中心）。
 const REACH_CIRCLE_SOURCE_ID = 'reach-circle';
 const REACH_CIRCLE_FILL_LAYER_ID = 'reach-circle-fill';
 const REACH_CIRCLE_LINE_LAYER_ID = 'reach-circle-line';
@@ -221,7 +232,7 @@ export class TerrainMapView {
     this._lastBudget = null;
     this._flySpotToken = 0; // 【2026-10-13、8本目】flyToSpot()の「降りる→傾ける」演出を、ユーザー操作や次のflyToSpot呼び出しで無効化するための世代カウンタ
     this._focusedOnSpot = false; // 【2026-10-15、11本目②】flyToSpot()で寄っている間true。fitToBudget()で全体に戻るとfalse
-    this._reachCircleRadiusKm = 0; // 【2026-10-14、10本目②】現在描画中の円の半径（なめらかな変化の起点）
+    this._reachCircleRadiusKm = 0; // 【2026-10-13、10本目②】現在描画中の円の半径（なめらかな変化の起点）
     this._pendingCircleRadiusKm = null;
     this._pendingCircleStyle = 'live';
     this._circlePaintScheduled = false;
@@ -327,7 +338,7 @@ export class TerrainMapView {
               'hillshade-highlight-color': HILLSHADE_HIGHLIGHT_COLOR_EXPR,
             },
           },
-          // 【2026-10-14、10本目②】予算の到達範囲の円。地形の上に塗る通常のfill/line
+          // 【2026-10-13、10本目②】予算の到達範囲の円。地形の上に塗る通常のfill/line
           // レイヤーのため、特別な指定なしに地形の起伏へ自然に貼り付く（MapLibreは
           // fill/lineレイヤーを既定で地形にドレープする）。スポットの点より目立たない
           // 色（青系）にし、点より下に描く。
@@ -399,7 +410,7 @@ export class TerrainMapView {
       pitch: DEFAULT_PITCH,
       bearing: 0,
       maxPitch: 75,
-      // 【2026-10-14、10本目①、Minami決定：B】回転を減らす。PCの右ドラッグ
+      // 【2026-10-13、10本目①、Minami決定：B】回転を減らす。PCの右ドラッグ
       // （Ctrl＋ドラッグ）での回転・傾きは残す（dragRotate）。スマホの2本指で
       // ひねる回転は、酔う・向きが分からなくなるとのMinami指摘により止める
       // （下のtouchZoomRotate.disableRotation()参照）。2本指ズーム・2本指上下の
@@ -410,7 +421,7 @@ export class TerrainMapView {
       pitchWithRotate: true,
     });
 
-    // 【2026-10-14、10本目①】touchZoomRotateは2本指ピンチズームと2本指回転の
+    // 【2026-10-13、10本目①】touchZoomRotateは2本指ピンチズームと2本指回転の
     // 両方を束ねたハンドラのため、有効のまま回転部分だけを無効化する
     // （Minami指示：2本指ズームは残し、2本指でひねる回転だけ止める）。
     this.map.touchZoomRotate.disableRotation();
@@ -428,7 +439,7 @@ export class TerrainMapView {
     // easeTo()によるプログラム側の変更でも発火するため、e.originalEvent
     // （実際のDOMイベント。ユーザー操作由来のときだけ存在する）で判別する
     // （実機確認で確定）。
-    // 【2026-10-14、10本目①】Minami指示によりゆっくり回る演出（自動回転）を
+    // 【2026-10-13、10本目①】Minami指示によりゆっくり回る演出（自動回転）を
     // まるごと廃止したため、ここで止めていた_stopAutoRotate()呼び出しは削除した。
     ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart', 'wheel'].forEach((evt) => {
       this.map.on(evt, (e) => {
@@ -463,7 +474,7 @@ export class TerrainMapView {
       this.map.off('sourcedata', collapseAttribution);
       this.map.off('terrain', collapseAttribution);
     };
-    // 【不具合修正、2026-10-16、12本目③】ここでwaitForTerrainLoaded()を呼ぶと、
+    // 【不具合修正、2026-10-13、12本目③】ここでwaitForTerrainLoaded()を呼ぶと、
     // まだ下のmap.once('load', ...)より前＝スタイルの読み込みが終わっておらず
     // 'gsi-dem'ソース自体がmap.style.sourceCachesにまだ登録されていないことが
     // あり、isSourceLoaded('gsi-dem')が「そのようなソースは無い」という
@@ -531,7 +542,7 @@ export class TerrainMapView {
    * @param {{display_name:string, stop_lat:number, stop_lon:number}} departureStation
    * @param {Array} spots - 予算¥2000で一度取得したallSpots全体（予算の絞り込みはapplyBudget側で行う）
    * @param {number} [budget] - 初期表示の予算。省略時は2000（全件が「少し薄い」状態で見える）
-   * @param {{reveal?: boolean}} [opts] - 【2026-10-14、10本目②】reveal:trueで、出発駅から
+   * @param {{reveal?: boolean}} [opts] - 【2026-10-13、10本目②】reveal:trueで、出発駅から
    *   近い順に波が広がるように点を出す（Minami指示：「この条件で検索」を押したときだけ）。
    *   それ以外（予算操作の裏取得・3D初回有効化など）は従来どおり即座に全部出す。
    */
@@ -607,7 +618,7 @@ export class TerrainMapView {
    * 予算を確定させる（検索実行・裏取得等）。データの再取得は行わず、既存の
    * GeoJSONソースにsetFilter/setPaintPropertyを適用するだけ（Minami指示：計算は
    * ¥2000で一度出したallSpotsから帯で絞るだけで足りる）。
-   * 【2026-10-14、10本目①】予算スライダー・±ボタンを動かしている間はこの
+   * 【2026-10-13、10本目①】予算スライダー・±ボタンを動かしている間はこの
    * メソッドを呼ばない（Minami決定：円だけ広げる。点は検索を押すまで変えない）。
    * 呼ぶのは実際に検索した／裏で¥2000全域を取得し終えた／3Dを初めて有効化した
    * ときだけ（main.js参照）。
@@ -659,7 +670,7 @@ export class TerrainMapView {
   }
 
   /**
-   * 【2026-10-14、10本目②】検索を押した直後、出発駅から近い順に点が波のように
+   * 【2026-10-13、10本目②】検索を押した直後、出発駅から近い順に点が波のように
    * 広がって出る演出（Minami指示：全体で1秒前後）。各スポットのdistance_km
    * （render()で付与済み）を使い、「予算内で一番遠い点までの距離」を1秒かけて
    * 0から広げるのと同じ考え方で、filterの距離条件を毎フレーム広げていく
@@ -712,7 +723,7 @@ export class TerrainMapView {
   }
 
   /**
-   * 【2026-10-14、10本目②、Minami決定：A】予算の±・スライダーを動かしている間は
+   * 【2026-10-13、10本目②、Minami決定：A】予算の±・スライダーを動かしている間は
    * 点を変えず、出発駅を中心にした到達範囲の円だけを広げる・縮める。
    * 半径は「今の予算以内（往復）で行ける場所のうち、一番遠い場所までの直線距離」
    * （¥2000で先に取得済みのallSpotsから実測。推測値にしない、Minami指示）。
@@ -841,11 +852,16 @@ export class TerrainMapView {
       ? [this._lastDepartureStation.stop_lon, this._lastDepartureStation.stop_lat]
       : camera.center;
 
-    // 【2026-10-14、10本目①】向き（bearing）は変えない（Minami指示）。現在の
+    // 【2026-10-13、10本目①】向き（bearing）は変えない（Minami指示）。現在の
     // bearingをそのまま渡すことで、実質「変えない」になる。
+    // 【2026-10-13、20本目修正】flyToSpot()で設定した帯よけのpadding
+    // （REVEAL_ABOVE_BAND_PADDING）が残ったままだと、MapLibreのpaddingは
+    // 明示的に指定しない限り残り続けるため、全体表示の構図（短い辺の8%・
+    // 最小ズーム9.5）が狂う。ここで明示的に0へ戻す。
     this.map.easeTo({
       center, zoom, pitch: DEFAULT_PITCH, bearing: this.map.getBearing(),
       duration: prefersReducedMotion() ? 0 : durationMs,
+      padding: CLEAR_PADDING,
     });
     this._focusedOnSpot = false;
     if (this.onFocusChange) this.onFocusChange(false);
@@ -866,7 +882,7 @@ export class TerrainMapView {
    * 指定したスポットへ寄る（Minami指示、5本目：地図の点をタップした/一覧の
    * カードを選んだ/詳細画面を開いたとき）。
    *
-   * 【2026-10-14、10本目①、Minami決定：B】向き（bearing）は変えない。以前は
+   * 【2026-10-13、10本目①、Minami決定：B】向き（bearing）は変えない。以前は
    * 出発駅→スポットの方位角に合わせて回転していたが、「地図が勝手に回る・
    * 向きが大きく変わるのが無駄な動きに感じる、触り続けると酔う」という
    * Minami指摘により、回転をまるごと廃止した（自動回転・flyToSpotでの
@@ -904,7 +920,7 @@ export class TerrainMapView {
         zoom: SPOT_FOCUS_ZOOM,
         pitch: SPOT_FOCUS_PITCH,
         duration: REDUCED_MOTION_FLY_DURATION_MS,
-        offset: REVEAL_ABOVE_BAND_OFFSET,
+        padding: REVEAL_ABOVE_BAND_PADDING,
         essential: true,
       });
       if (this.onOverheadSettled) this.onOverheadSettled(spot);
@@ -917,7 +933,7 @@ export class TerrainMapView {
       zoom: SPOT_FOCUS_ZOOM,
       pitch: 0,
       duration: SPOT_FOCUS_DURATION_MS,
-      offset: REVEAL_ABOVE_BAND_OFFSET,
+      padding: REVEAL_ABOVE_BAND_PADDING,
       essential: true,
     });
 
@@ -926,13 +942,13 @@ export class TerrainMapView {
       this.waitForSceneSettled().then(() => {
         if (token !== this._flySpotToken || !this.map) return;
         if (this.onOverheadSettled) this.onOverheadSettled(spot);
-        // center・offsetを傾けのeaseToでも明示し直す（spotの座標＋情報帯よけの
-        // ずらし幅を毎回同じに保つ。offsetだけ省略した場合の挙動に依存しない）。
+        // center・paddingを傾けのeaseToでも明示し直す（spotの座標＋情報帯よけの
+        // ずらし幅を毎回同じに保つ。paddingだけ省略した場合の挙動に依存しない）。
         this.map.easeTo({
           pitch: SPOT_FOCUS_PITCH,
           duration: TILT_DURATION_MS,
           center: [spot.longitude, spot.latitude],
-          offset: REVEAL_ABOVE_BAND_OFFSET,
+          padding: REVEAL_ABOVE_BAND_PADDING,
         });
         this.map.once('moveend', () => {
           if (token !== this._flySpotToken || !this.map) return;

@@ -95,7 +95,7 @@ export class LayoutController {
         // 保留していた場合（MapView.applyBudget参照）、実寸を得たここで
         // 改めて反映する。
         if (this.mapView.lastBudget != null) this.mapView.applyBudget(this.mapView.lastBudget);
-        // 【2026-10-14、10本目②】検索時に地図タブが非表示（コンテナ0×0）だった
+        // 【2026-10-13、10本目②】検索時に地図タブが非表示（コンテナ0×0）だった
         // ため、波のように点を出す演出が空振りに終わっていた場合、実寸を得た
         // ここで改めてやり直す（MapView._startWaveReveal参照）。
         if (this.mapView._pendingWaveReveal) {

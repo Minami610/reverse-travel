@@ -24,7 +24,7 @@ const BAND_WIDTH = 200;
 const MIN_BUDGET = 200;
 const MAX_BUDGET = 2000; // 2026-10-06、Minamiさんの判断により¥1000から変更
 const BUDGET_STEP = 100;
-// 【2026-10-14、10本目②】scheduleMaxBudgetPrefetch()参照。map-view.js・
+// 【2026-10-13、10本目②】scheduleMaxBudgetPrefetch()参照。map-view.js・
 // terrain-map-view.jsのWAVE_DURATION_MS（1000ms、検索後に点が波のように出る
 // 演出の所要時間）より確実に後になるよう、裏取得の反映を遅らせるための余裕時間。
 const WAVE_REVEAL_SAFE_DELAY_MS = 1200;
@@ -194,14 +194,14 @@ class ReverseTravel {
     this.renderDataSources();
     this.updateMylistCount();
 
-    // 【2026-10-16、12本目②C】スマホ版フッターの「使い方」「データ出典・免責」
+    // 【2026-10-13、12本目②C】スマホ版フッターの「使い方」「データ出典・免責」
     // リンク。中身はPC版と同じモーダルを開く（initModal()がmodal._openに
     // 保存した開く関数をそのまま使い、2つ目のトリガーのために同じ要素を
     // 2回初期化しない）。
     this.elements.howtoBtnMobile?.addEventListener('click', () => this.elements.howtoModal?._open?.());
     this.elements.aboutBtnMobile?.addEventListener('click', () => this.elements.aboutModal?._open?.());
 
-    // 【2026-10-16、12本目②A】検索後、スマホでは要約バーを押すとフォームの
+    // 【2026-10-13、12本目②A】検索後、スマホでは要約バーを押すとフォームの
     // 開閉を切り替える（もう一度検索すると自動でたたむのはdisplayResults側）。
     this.elements.searchSummaryToggle?.addEventListener('click', () => {
       this.setFormCollapsed(!this.elements.layoutLeft.classList.contains('form-collapsed'));
@@ -288,7 +288,7 @@ class ReverseTravel {
       this.stepBudget(100);
     });
 
-    // 予算スライダー（4本目③、2026-10-14 10本目①で変更）。'input'はドラッグ中に
+    // 予算スライダー（4本目③、2026-10-13 10本目①で変更）。'input'はドラッグ中に
     // 連続発火＝到達範囲の円だけ広げる（Minami決定：A。点・カメラは「この条件で
     // 検索」を押すまで変えない）。指を離したとき（change）に別途行うことは
     // 無くなったため、changeのリスナーは廃止した。
@@ -570,7 +570,7 @@ class ReverseTravel {
 
     input.value = next;
     this.updateBudgetUI();
-    // 【2026-10-14、10本目①、Minami決定：A】±ボタンもスライダーと同じく
+    // 【2026-10-13、10本目①、Minami決定：A】±ボタンもスライダーと同じく
     // 円だけを広げる。点・カメラは「この条件で検索」を押すまで変えない
     // （Minami指示：点がすぐ変わると検索ボタンを押す動機が薄れるため）。
     this.updateMapBudgetLive(next);
@@ -590,7 +590,7 @@ class ReverseTravel {
   }
 
   /**
-   * 予算スライダー・±ボタンの1コマ分（4本目③、2026-10-14 10本目①で全面変更）。
+   * 予算スライダー・±ボタンの1コマ分（4本目③、2026-10-13 10本目①で全面変更）。
    * 【10本目、Minami決定：A】地図の点（光る点・薄い点）は変えない。点は、
    * 最後に検索したときの状態のまま。代わりに、出発駅を中心にした到達範囲の円
    * だけを広げる・縮める（2D・3D共通）。帯の件数プレビューはこれまでどおり
@@ -1018,7 +1018,7 @@ class ReverseTravel {
         const { allSpots } = await this.computeSearchResult(stationId, MAX_BUDGET);
         if (this.currentDepartureStationId !== stationId) return;
         this.currentAllSpots = allSpots;
-        // 【2026-10-14、10本目②修正】ここで即render()し直すと、検索直後に
+        // 【2026-10-13、10本目②修正】ここで即render()し直すと、検索直後に
         // 始まったばかりの「波のように出る」演出を、マーカーの作り直しで
         // 無言のまま中断・リセットしてしまう（render()はwaveの進行中かどうかに
         // 関わらず常に演出をキャンセルして作り直す設計のため）。requestIdleCallback
@@ -1029,7 +1029,7 @@ class ReverseTravel {
         setTimeout(() => {
           if (this.currentDepartureStationId !== stationId) return;
           const departureStation = this.data.stations?.[stationId];
-          // 【2026-10-14、10本目①修正】裏の計算中にスライダーが動かされていても、
+          // 【2026-10-13、10本目①修正】裏の計算中にスライダーが動かされていても、
           // 点は検索したときの予算（this.currentBudget）のまま据え置く（Minami指示：
           // 点は「この条件で検索」を押すまで変えない。以前はスライダーの今の値を
           // 使っていたが、それは「点がすぐ変わる」挙動そのものだった）。
@@ -1143,7 +1143,7 @@ class ReverseTravel {
     // main.js側にあるため、ここで明示的に閉じる必要がある。
     this.hideSpotInfoPanel();
 
-    // 【2026-10-16、12本目②A、Minami決定：A＋C】検索成功時に要約バーの文言を
+    // 【2026-10-13、12本目②A、Minami決定：A＋C】検索成功時に要約バーの文言を
     // 更新し、スマホではフォームをたたむ（PCはCSS側で要約バー自体を出さない
     // ため実害なし）。要約バーはここで初めてhidden属性を外す
     // （「まだ一度も検索していないときは畳まない」の一度きりのゲート。
@@ -1152,7 +1152,7 @@ class ReverseTravel {
     this.updateSearchSummaryText(departureStationId, budget);
     this.setFormCollapsed(true);
 
-    // 【2026-10-14、10本目②】「この条件で検索」を押した結果の表示なので、
+    // 【2026-10-13、10本目②】「この条件で検索」を押した結果の表示なので、
     // 出発駅から近い順に点が波のように広がって出る演出を行う（Minami指示）。
     const departureStation = this.data.stations?.[departureStationId];
     this.mapView.render(departureStation, this.currentAllSpots, budget, { reveal: true });
@@ -1938,7 +1938,7 @@ class ReverseTravel {
   }
 
   /**
-   * 【2026-10-16、12本目①、Minami決定：A】地図のピンを押したとき、下の固定
+   * 【2026-10-13、12本目①、Minami決定：A】地図のピンを押したとき、下の固定
    * 情報「帯」（高さ40px前後、1行）に名前・往復運賃・「詳細を見る」を出す
    * （11本目の大きな枠から変更：選んだピンが枠に隠れるとのMinami指摘）。
    * 名前が長いときは…で省略し、title属性で全文を確認できるようにする。
@@ -1973,7 +1973,7 @@ class ReverseTravel {
   }
 
   /**
-   * 【2026-10-16、12本目②A、Minami決定：A＋C】検索成功時の要約バー文言
+   * 【2026-10-13、12本目②A、Minami決定：A＋C】検索成功時の要約バー文言
    * （例：「富山駅前・往復¥1,200」）。PCでは要約バー自体をCSSで常に非表示に
    * するため、ここでは出発駅名・予算の整形だけ行えばよい。
    */
@@ -1984,7 +1984,7 @@ class ReverseTravel {
   }
 
   /**
-   * 【2026-10-16、12本目②A、Minami決定：A＋C】スマホの検索フォーム開閉。
+   * 【2026-10-13、12本目②A、Minami決定：A＋C】スマホの検索フォーム開閉。
    * .layout-leftへform-collapsedクラスを付け外しするだけで、実際の表示/
    * 非表示はCSS（@media (max-width: 759px)）側に任せる（PCはCSSが要約バー
    * 自体を常に非表示にするため、このクラスの有無に関わらず常にフォームが

@@ -18,12 +18,12 @@ const GSI_ATTRIBUTION =
 // バンドル後は同じスクリプトスコープに連結されるため、名前が衝突しないよう
 // このファイルだけMAP_BAND_WIDTHという別名にしている。
 const MAP_BAND_WIDTH = 200;
-// 【2026-10-14、10本目②】予算の到達範囲の円・波の演出用の定数・関数。
+// 【2026-10-13、10本目②】予算の到達範囲の円・波の演出用の定数・関数。
 // 同じ理由（バンドル後は同一スクリプトスコープ）で、他ファイル（onward-candidates.js
 // 等）の同種の関数と衝突しない名前にしている。
 const REACH_CIRCLE_LABEL_BEARING = 45; // ラベルを置く方位角（出発駅の吹き出しと重ならない向き）
 const WAVE_DURATION_MS = 1000; // Minami指示：検索後、点を波のように出す所要時間（全体で1秒前後）
-// 【2026-10-16、12本目①】選んだピンが下の情報帯（高さ40px前後）に隠れないよう、
+// 【2026-10-13、12本目①】選んだピンが下の情報帯（高さ40px前後）に隠れないよう、
 // 地図をずらす量（px）。帯はスマホでは地図下端から48px浮かせて出すため
 // （style.css参照）、帯の高さ＋余白を見込んだ値にする（PCは帯が地図の下端
 // 近くに収まるため、この値より少なく済むが、同じ値でも実害はない）。
@@ -74,7 +74,7 @@ export class MapView {
     this.spotsLatLngById = new Map(); // fitToBudget用
     this.selectedSpotId = null;
     this.lastBounds = [];
-    this._lastSpots = []; // 【2026-10-14、10本目②】到達円の半径計算用（出発駅からの距離はここから出す）
+    this._lastSpots = []; // 【2026-10-13、10本目②】到達円の半径計算用（出発駅からの距離はここから出す）
     this._departureStation = null;
     this._reachCircle = null;
     this._reachCircleLabel = null;
@@ -84,7 +84,7 @@ export class MapView {
     this._pendingCircleStyle = 'live';
     this._waveToken = 0;
     this._waveTimers = [];
-    this._pendingWaveReveal = false; // 【2026-10-14、10本目②】layout-controller.jsのinvalidateMapSize()参照
+    this._pendingWaveReveal = false; // 【2026-10-13、10本目②】layout-controller.jsのinvalidateMapSize()参照
     this._overviewZoom = null; // 【2026-10-15、11本目②】直近のfitToBudget()が合わせたズーム（寄っているか判定用）
 
     this.onSelectionChange = null; // (spotId) => void … ピン選択と一覧パネルの連動用
@@ -119,7 +119,7 @@ export class MapView {
    * @param {Array} spots - latitude/longitude を持つスポット配列（¥2000で一度取得したallSpots全体。
    *   予算の絞り込み・塗り分けはapplyBudget側で行うため、ここでは帯を絞らずそのまま渡す）
    * @param {number} [budget] - 初期表示の予算。省略時は2000
-   * @param {{reveal?: boolean}} [opts] - 【2026-10-14、10本目②】reveal:trueで、出発駅から
+   * @param {{reveal?: boolean}} [opts] - 【2026-10-13、10本目②】reveal:trueで、出発駅から
    *   近い順に波が広がるように点を出す（Minami指示：「この条件で検索」を押したときだけ）。
    */
   render(departureStation, spots, budget = 2000, { reveal = false } = {}) {
@@ -161,7 +161,7 @@ export class MapView {
 
       marker.on('click', () => {
         this.setSelected(spot.id);
-        // 【2026-10-16、12本目①、Minami決定：A＋C】選んだピンが下の情報帯に
+        // 【2026-10-13、12本目①、Minami決定：A＋C】選んだピンが下の情報帯に
         // 隠れないよう、帯の分だけ地図をずらす（向きは2Dに無いため変更不要）。
         this.revealAboveBand([spot.latitude, spot.longitude]);
       });
@@ -293,7 +293,7 @@ export class MapView {
   }
 
   /**
-   * 【2026-10-16、12本目①、Minami決定：A＋C】選んだピンが下の情報帯の
+   * 【2026-10-13、12本目①、Minami決定：A＋C】選んだピンが下の情報帯の
    * 裏に隠れないよう、地図をずらす。latlngを画面中央そのものではなく、
    * REVEAL_ABOVE_BAND_OFFSET_PXぶん「南」に実質ずらした地点を中心にする
    * ことで、latlng自体は画面中央よりその分だけ上（帯より上の見える位置）に
@@ -313,7 +313,7 @@ export class MapView {
   }
 
   /**
-   * 【2026-10-14、10本目②、Minami決定：A】予算の±・スライダーを動かしている間は
+   * 【2026-10-13、10本目②、Minami決定：A】予算の±・スライダーを動かしている間は
    * 点を変えず、出発駅を中心にした到達範囲の円だけを広げる・縮める。
    * 半径は「今の予算以内（往復）で行ける場所のうち、一番遠い場所までの直線距離」
    * （¥2000で先に取得済みのallSpotsから実測。推測値にしない、Minami指示）。
@@ -380,7 +380,7 @@ export class MapView {
   }
 
   /**
-   * 【2026-10-14、10本目②】検索を押した直後、出発駅から近い順に点が波のように
+   * 【2026-10-13、10本目②】検索を押した直後、出発駅から近い順に点が波のように
    * 広がって出る演出（Minami指示：全体で1秒前後）。帯内・帯外どちらの点も対象
    * （applyBudget()が既に非表示にした予算超の点は対象外）。
    * prefers-reduced-motionのときは即座に全部出す。

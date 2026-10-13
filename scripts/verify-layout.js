@@ -67,7 +67,7 @@ function startServer() {
 }
 
 /**
- * 【2026-10-16、12本目②A】検索成功後、スマホ幅ではフォームが要約バーへ畳まれ
+ * 【2026-10-13、12本目②A】検索成功後、スマホ幅ではフォームが要約バーへ畳まれ
  * display:noneになる（main.jsのsetFormCollapsed()参照）。同じpageを使い回す
  * 複数の検証関数が、1回目の検索後にフォーム要素を直接操作しようとすると
  * 「見えない」エラーになるため、各操作の前にこれを呼び、畳まれていれば
@@ -353,7 +353,7 @@ async function captureResultsListScreen(page, viewportLabel) {
 }
 
 async function captureHowToScreen(page, viewportLabel) {
-  // 【2026-10-16、12本目②C】スマホでは#howto-btnの親（.footer-summary）が
+  // 【2026-10-13、12本目②C】スマホでは#howto-btnの親（.footer-summary）が
   // display:noneになり、ボタン自身のcomputed displayには表れない
   // （displayは継承プロパティではないため）。isVisible()で実際の見え方を見て、
   // 隠れていれば代わりに#howto-btn-mobileを押す。
@@ -737,7 +737,7 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
         previewText
       );
 
-      // 【2026-10-14、10本目②】円の半径が「今の予算以内で一番遠い場所までの
+      // 【2026-10-13、10本目②】円の半径が「今の予算以内で一番遠い場所までの
       // 直線距離」と一致することを検証する。haversine式はテスト側で独立に
       // 再実装し、view内部が今持っているデータ（_lastSpots/_departureStation）
       // から期待値を出す（裏取得の完了タイミングに左右されないよう、view自身の
@@ -795,7 +795,7 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
     await page.waitForTimeout(1500);
 
     const cardsBefore = await page.locator('.spot-card h3').allTextContents();
-    // 【2026-10-14、10本目①②、Minami決定：A】地図の点（2D）は変えず、円の半径だけ
+    // 【2026-10-13、10本目①②、Minami決定：A】地図の点（2D）は変えず、円の半径だけ
     // 変わることを検証する。
     const markersBeforeDrag = await page.evaluate(() => {
       const mv = window.__mapViewForDebug;
@@ -871,7 +871,7 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
 
     if (became3d) {
       // 地形の読み込みを待ってから撮る（Minami指示4本目④）。
-      // 【2026-10-14、10本目①②】検索を挟まずスライダーだけ動かしているため、
+      // 【2026-10-13、10本目①②】検索を挟まずスライダーだけ動かしているため、
       // 地図の点は検索時（¥1000）のまま変わらず、到達範囲の円だけが
       // 400/1000/2000の順に変わる（Minami決定：A）。
       await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(20000));
@@ -909,7 +909,7 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
 }
 
 /**
- * 【2026-10-14、10本目②③】検索後の波の演出（出発駅から近い順に点が出る）と、
+ * 【2026-10-13、10本目②③】検索後の波の演出（出発駅から近い順に点が出る）と、
  * 「検索前はスライダーが円だけを動かす」ことを合わせて検証する。
  * - 通常時：検索直後は一部の点がまだ隠れていて、1.5秒待つと全部出る（2D）。
  *   3Dは「filterに距離条件が一時的に入り、1.5秒後に外れる」ことで同じ現象を見る。
@@ -1444,7 +1444,7 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
     await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
 
     // 1. 回転・コンパス（budgetやカード選択と無関係なので最初に見る）。
-    // 【2026-10-14、10本目①、Minami決定：B】PCの右ドラッグ回転は残すが、
+    // 【2026-10-13、10本目①、Minami決定：B】PCの右ドラッグ回転は残すが、
     // スマホの2本指でひねる回転は止める（2本指ズーム・2本指上下の傾きは残す）。
     const rotateState = await page.evaluate(() => ({
       dragRotate: window.__terrainMapForDebug.dragRotate.isEnabled(),
@@ -1500,7 +1500,7 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
       // 撮影箇所との違いを調べたが特定できなかった）。このファイルの他の
       // 箇所（行130）と同じ、boundingBox()を取ってpage.screenshot({clip})で
       // 撮る方式に変え、要素の安定待ちそのものを回避する。
-      // 【2026-10-14、10本目①】自動回転をまるごと廃止したため、ここで
+      // 【2026-10-13、10本目①】自動回転をまるごと廃止したため、ここで
       // 止めていた_stopAutoRotate()呼び出しは不要になった（削除）。
       const mapAreaBox = await page.locator('#map-area').boundingBox();
       const focusedPath = path.join(screenshotDir, `terrain-3d-spot-focus-${label}.png`);
@@ -1517,7 +1517,7 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
       const rotatedPath = path.join(screenshotDir, `terrain-3d-rotated-${label}.png`);
       await page.screenshot({ path: rotatedPath, clip: mapAreaBox });
       savedPaths.push(rotatedPath);
-      // 【2026-10-16、12本目①修正】この回転はスクリーンショット用の演出
+      // 【2026-10-13、12本目①修正】この回転はスクリーンショット用の演出
       // （スマホは2本指回転自体を無効化済みのため、実機でこの状態には
       // ならない）。flyToSpot()が情報帯よけのoffset（REVEAL_ABOVE_BAND_OFFSET）
       // を使うようになり、寄ったあとの中心が画面の真の中心（＝bearing回転の
@@ -1686,7 +1686,7 @@ async function checkDefaultStyleD(browser, baseUrl, savedPaths) {
   const station = await page.evaluate(() => window.__terrainViewForDebug._lastDepartureStation);
 
   if (coords) {
-    // 【2026-10-14、10本目①】寄る前後でbearingが変わらないことを見るため、
+    // 【2026-10-13、10本目①】寄る前後でbearingが変わらないことを見るため、
     // flyToSpot()を呼ぶ直前のbearingを控えておく（Minami決定：B、回転を
     // まるごと廃止。以前は出発駅→スポットの方位角に合わせて回転していた）。
     const bearingBeforeFly = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
@@ -1717,7 +1717,7 @@ async function checkDefaultStyleD(browser, baseUrl, savedPaths) {
       JSON.stringify(zoomAndOpacity)
     );
 
-    // 【2026-10-14、10本目①、Minami決定：B】回転をまるごと廃止した検証。
+    // 【2026-10-13、10本目①、Minami決定：B】回転をまるごと廃止した検証。
     // 1. 寄る前後でbearingが変わらないこと（以前は出発駅→スポットの方位角に
     //    合わせて回転していたが、「地図が勝手に回る・向きが大きく変わるのが
     //    無駄な動きに感じる」というMinami指摘で廃止した）。
@@ -2048,7 +2048,7 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
           JSON.stringify({ panelBox, attribBox })
         );
       }
-      // 【2026-10-16、12本目①、Minami決定：A＋C】情報枠は高さ48px以下の
+      // 【2026-10-13、12本目①、Minami決定：A＋C】情報枠は高さ48px以下の
       // 細い帯であること。選んだピンは、この帯の上（帯のtopより上）に
       // 描画されること（revealAboveBand()の効果を実機相当で検証）。
       record(
@@ -2127,6 +2127,14 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
 
     if (pinScreenPos) {
       const mapBox = await page.locator('#map-area').boundingBox();
+      // 【2026-10-13、20本目修正】クリック前にonTiltCompleteの待ち受けを
+      // 仕込んでおく（降りる→傾ける演出＋waitForSceneSettled()が終わるまで。
+      // スクリーンショットは演出完了後に撮る。以前はクリック300ms後にすぐ
+      // 撮っていたため、航空写真の読み込み途中でぼやけた画像になっていた）。
+      const tiltCompletePromise = page.evaluate(() => new Promise((resolve) => {
+        window.__terrainViewForDebug.onTiltComplete = () => resolve();
+        setTimeout(resolve, 10000); // 保険（演出が終わらない場合でも進める）
+      }));
       await page.mouse.click(mapBox.x + pinScreenPos.x, mapBox.y + pinScreenPos.y);
       // flyToSpot()の降りる演出が始まるため、情報枠はすぐ出るはず（Minami指示：
       // 寄る演出と情報枠の表示は独立。枠はクリック直後に出す設計）。
@@ -2168,7 +2176,7 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
             JSON.stringify({ panelBox, compassBox })
           );
         }
-        // 【2026-10-16、12本目①、Minami決定：A＋C】情報枠は高さ48px以下、
+        // 【2026-10-13、12本目①、Minami決定：A＋C】情報枠は高さ48px以下、
         // 選んだピン（画面座標）は帯より上にあること（3D版のreveal確認）。
         record(
           `[3D/${label}] 情報枠は高さ48px以下の帯`,
@@ -2188,6 +2196,20 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
           JSON.stringify({ selectedPinScreenY, mapBoxY: mapBox.y, panelBox })
         );
 
+        // 降りる→傾ける演出が終わるまで待つ。
+        await tiltCompletePromise;
+        // 【2026-10-13、20本目修正②】onTiltComplete（isCenterTileReady()）は
+        // 中央タイル1枚の有無しか見ておらず、航空写真はそのあとも周辺・高詳細の
+        // タイルが数秒かけて差し替わり続けることが実機確認で判明した（固定
+        // 300ms待ちのままだと低解像度タイルの引き伸ばしでぼやけた状態のまま
+        // 撮っていた）。MapLibre公式の'idle'イベント（描画・タイル読み込みが
+        // 完全に落ち着いたことを示す）を追加で待つ（保険として最大8秒）。
+        await page.evaluate(() => new Promise((resolve) => {
+          const map = window.__terrainMapForDebug;
+          map.once('idle', resolve);
+          setTimeout(resolve, 8000);
+        }));
+        await page.waitForTimeout(300); // idle直後の最後の数フレームの余裕
         const panelPath = path.join(screenshotDir, `spot-info-panel-3d-${label}.png`);
         await page.screenshot({ path: panelPath, clip: mapBox });
         savedPaths.push(panelPath);
@@ -2310,7 +2332,7 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
   }
 }
 
-// 【2026-10-16、12本目④】round12の指示で追加された2つのスマホ幅
+// 【2026-10-13、12本目④】round12の指示で追加された2つのスマホ幅
 // （iPhone SE相当・iPhone標準相当）。既存のVIEWPORTS.spは375×667のまま
 // 他の検証（round11以前）で使われ続けるため、こちらは専用の定数にする
 // （VIEWPORTSへ混ぜて全チェックを2倍に増やさない）。
@@ -2323,7 +2345,7 @@ const MOBILE_FORM_COLLAPSE_VIEWPORTS = {
 // 3D地形の共有ソース警告（意図した設計、7本目参照）は、既知として許容する。
 // それ以外のコンソールエラー・警告が1件でもあれば検証失敗にする。
 function isKnownAcceptableConsoleMessage(text) {
-  // 【2026-10-16、12本目④修正】Playwrightのconsoleイベントは、ブラウザ自身が
+  // 【2026-10-13、12本目④修正】Playwrightのconsoleイベントは、ブラウザ自身が
   // 出す「Failed to load resource」系のメッセージにURLを含めない（DevTools上の
   // 表示とは異なり、msg.text()はURL抜きの定型文のみ）。このアプリでタイルや
   // 画像が404になり得るのはGSI DEMタイル（データが元々存在しない座標、
@@ -2335,7 +2357,7 @@ function isKnownAcceptableConsoleMessage(text) {
 }
 
 /**
- * 【2026-10-16、12本目②③、Minami決定：A＋C】スマホでの画面の広さの取り戻し
+ * 【2026-10-13、12本目②③、Minami決定：A＋C】スマホでの画面の広さの取り戻し
  * （検索後にフォームを1行へ畳む・フッターの出典長文をリンク2つへ縮める）と、
  * Minami実機確認の再現手順（富山駅前・スマホ幅・検索・3D切替）での
  * コンソールエラー0件を、375×667・390×844の両方で検証する。
@@ -2386,7 +2408,52 @@ async function checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths) {
     // 地図タブ：残り高さの半分以上を地図が占める（検索前のフォームが
     // 畳まれたことで、一覧・地図タブが細い帯になる不具合が解消したことの検証）
     await page.click('.tab-btn[data-tab="map"]');
-    await page.waitForTimeout(200);
+    // 【2026-10-13、20本目修正、再修正3回】タイルの読み込み中（灰色のまま）を
+    // スクショに撮らないよう待つ。
+    // 1回目：単純な待ち時間の延長（3秒→15秒）→直らなかった（タイル0件のまま＝
+    //   遅いのではなくそもそも要求されていなかった）。
+    // 2回目：タイルが出ない場合にinvalidateSize()を強制実行する対策を追加し、
+    //   「leaflet-tile-loadedが付く」のを完了条件にした→タイル自体は出たが、
+    //   実機確認で一部スクショが依然ほぼ真っ白のままだった。調べたところ、
+    //   Leafletは画像のerrorイベントでも「読み込み完了」扱いにしてこのクラスを
+    //   付けるため（実際のネットワーク応答はすべて200だったので今回はこれが
+    //   直接の原因ではなかったが）、DOM上のクラスだけでは「本当に画面に
+    //   表示されているか」を区別できないと判明。
+    // 3回目（今回）：画像が実際にデコードできたかを示すnaturalWidthを
+    //   完了条件にする（ブラウザが画素データを持っている＝見た目にも描画
+    //   されている、という直接的な指標）。
+    // 4回目（今回）：1回のinvalidateSize()キックと10秒待ちでも、まれに
+    // 全タイルがnaturalWidth=0のまま揃わないことが実機確認で分かった
+    // （実行中の外部タイルサーバーへの実通信に依存するため、このsuite自体が
+    // 大量にタイルを要求した後の実行タイミング次第で変動しうる。WDQSの応答が
+    // 実行ごとに大きく振れるのと同種の、外部サービス依存の揺らぎ）。
+    // invalidateSize()キック→待ちを最大3回まで繰り返し、確率的な揺らぎを吸収する。
+    let tileRenderInfo = { count: 0, renderedCount: 0 };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) await page.evaluate(() => window.__mapViewForDebug?.map?.invalidateSize(true));
+      await page.waitForFunction(
+        () => document.querySelectorAll('#map-area .leaflet-tile').length > 0,
+        { timeout: attempt === 0 ? 2000 : 3000 }
+      ).catch(() => {});
+      await page.waitForFunction(
+        () => {
+          const tiles = document.querySelectorAll('#map-area .leaflet-tile');
+          return tiles.length > 0 && [...tiles].every((t) => t.naturalWidth > 0);
+        },
+        { timeout: 8000 }
+      ).catch(() => {});
+      await page.waitForTimeout(200);
+      tileRenderInfo = await page.evaluate(() => {
+        const tiles = [...document.querySelectorAll('#map-area .leaflet-tile')];
+        return { count: tiles.length, renderedCount: tiles.filter((t) => t.naturalWidth > 0).length };
+      });
+      if (tileRenderInfo.count > 0 && tileRenderInfo.renderedCount === tileRenderInfo.count) break;
+    }
+    record(
+      `[${label}] 地図タブに切り替えると地図のタイルが表示される`,
+      tileRenderInfo.count > 0 && tileRenderInfo.renderedCount === tileRenderInfo.count,
+      JSON.stringify(tileRenderInfo)
+    );
     const mapHeight = await page.locator('#map-area').boundingBox().then((b) => b?.height || 0);
     record(
       `[${label}] 地図タブの地図が画面高さの半分以上を占める`,
@@ -2406,7 +2473,7 @@ async function checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths) {
     await page.screenshot({ path: mapTabPath });
     savedPaths.push(mapTabPath);
 
-    // 【2026-10-16、12本目⑥】必要スクリーンショット「375×667・390×844の両方で
+    // 【2026-10-13、12本目⑥】必要スクリーンショット「375×667・390×844の両方で
     // ピンを選んだ状態」を、この地図タブの流れの中で撮る（2D、実クリック）。
     const pinLocatorMobile = page.locator('.map-pin-spot:visible').first();
     const pinBoxMobile = await pinLocatorMobile.boundingBox().catch(() => null);
@@ -2420,7 +2487,7 @@ async function checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths) {
     }
 
     // 一覧タブ：残り高さいっぱいでスクロール可能
-    // 【2026-10-16、12本目④修正】実際にスクロールするのは#results-container
+    // 【2026-10-13、12本目④修正】実際にスクロールするのは#results-container
     // 自身ではなく、その子の#results-list（overflow-y:auto、style.css参照）。
     // #results-containerはflex-columnの器でoverflow指定を持たないため、
     // そちらを見ると常にoverflowY:'visible'になり誤って検証失敗していた。
