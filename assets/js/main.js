@@ -413,11 +413,18 @@ class ReverseTravel {
           ? `<a href="${feed.license_url}" target="_blank" rel="noopener">${feed.license_label}</a>`
           : feed.license_label;
 
+        // 【2026-10-13、19本目修正】版名から日付が取れないフィード（例：万葉線
+        // 「20260825_01」）は、formatFeedVersionShort()がnullを返す。その場合は
+        // 「フィード版」の項目自体を出さず「対象期間」だけにする（期間で代わりに
+        // 表示すると同じ期間が2回並んで出ていたため）。
+        const feedVersionShort = formatFeedVersionShort(feed.feed_version);
+        const feedVersionLine = feedVersionShort ? `フィード版：${feedVersionShort} ／ ` : '';
+
         return `
           <li>
             <strong>${publisher}</strong>（${feed.source_category_label}）
             <span class="feed-meta">公開元サイト：${publisherLink}</span>
-            <span class="feed-meta">フィード版：${formatFeedVersionShort(feed.feed_version, feed.feed_start_date, feed.feed_end_date)} ／ 対象期間：${period}</span>
+            <span class="feed-meta">${feedVersionLine}対象期間：${period}</span>
             <span class="feed-meta">取得日：${fetchedAt} ／ ライセンス：${licenseText}</span>
           </li>
         `;
@@ -1416,9 +1423,7 @@ class ReverseTravel {
             <button type="button" class="favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}" aria-label="${fav ? 'マイリストから外す' : 'マイリストに保存'}">${starIconHtml(fav)}</button>
             <button type="button" class="share-btn" data-spot-id="${spot.id}" aria-label="共有">${shareIconHtml()}</button>
           </div>
-          ${spot.image
-            ? `<img src="${spot.image}" alt="${spot.name}" class="spot-image">`
-            : `<div class="spot-image spot-image-placeholder" aria-hidden="true">🏞️</div>`}
+          ${renderSpotImageHtml(spot, 'spot-image')}
           <h3>${spot.name}</h3>
           <p class="spot-description">${this.formatDescription(spot)}</p>
           <p class="spot-summary">${this.formatSpotSummary(spot)}</p>
@@ -1531,9 +1536,7 @@ class ReverseTravel {
         <button type="button" class="favorite-btn detail-favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}" aria-label="${fav ? 'マイリストから外す' : 'マイリストに保存'}">${starIconHtml(fav)}<span class="btn-label">${fav ? '保存済み' : 'マイリストに保存'}</span></button>
         <button type="button" class="share-btn detail-share-btn" data-spot-id="${spot.id}" aria-label="共有">${shareIconHtml()}<span class="btn-label">共有</span></button>
       </div>
-      ${spot.image
-        ? `<img src="${spot.image}" alt="${spot.name}" class="detail-image">`
-        : `<div class="detail-image spot-image-placeholder" aria-hidden="true">🏞️</div>`}
+      ${renderSpotImageHtml(spot, 'detail-image')}
       <p>${spot.description || (spot.wikipedia_url ? '詳細はWikipediaの記事を参照してください' : 'より詳しい情報がありません')}</p>
       <p class="spot-pageviews">月間ページビュー数: ${spot.pageviews || 'データなし'}</p>
       <p class="spot-distance">最寄駅からの距離: ${spot.distance?.toFixed(1) || '不明'}km</p>
@@ -1557,6 +1560,25 @@ class ReverseTravel {
   }
 }
 
+/**
+ * 景勝地の写真<img>を、読み込み失敗時のフォールバック付きで組み立てる。
+ * 【2026-10-13、19本目修正、18本目の調査で判明】spot.imageのURLが存在しても
+ * 実際の読み込みに失敗することがあり、従来はonerrorハンドラが無かったため
+ * ブラウザ標準の壊れた画像アイコンになっていた（spot.imageが元々無い場合の
+ * 「写真がないときの絵」プレースホルダーとは別経路で、そちらには出ない）。
+ * onerrorで同じプレースホルダーに差し替える。
+ * カード・詳細画面・マイリストとも同じカードHTML組み立て経路を通るため、
+ * ここ1箇所を直せば全箇所に効く。
+ * @param {{image: string|null, name: string}} spot
+ * @param {string} className - "spot-image" または "detail-image"
+ */
+function renderSpotImageHtml(spot, className) {
+  if (!spot.image) {
+    return `<div class="${className} spot-image-placeholder" aria-hidden="true">🏞️</div>`;
+  }
+  return `<img src="${spot.image}" alt="${spot.name}" class="${className}" onerror="this.outerHTML='<div class=&quot;${className} spot-image-placeholder&quot; aria-hidden=&quot;true&quot;>🏞️</div>'">`;
+}
+
 /** GTFSの日付形式（YYYYMMDD）を "YYYY-MM-DD" に整形する */
 export function formatGtfsDate(yyyymmdd) {
   if (!yyyymmdd || yyyymmdd.length !== 8) return yyyymmdd || '不明';
@@ -1572,28 +1594,26 @@ export function formatGtfsDate(yyyymmdd) {
  * 原文を出さず日付（＋改正と分かる語があればそれ）だけを短く示す。
  * data-sources.json自体のfeed_versionは変更しない（表示だけで短くする）。
  *
- * 抽出規則（日付が取れない場合は対象期間にフォールバック）：
+ * 抽出規則：
  * 1. 先頭が「YYYY/MM/DD」（GTFS出力日時の形式）→ その日付をそのまま使う
  * 2. 文中に「YYYY年MM月DD日」（その筋屋の説明欄の形式）→ その日付を使う
- * 3. どちらにも一致しなければ、feed_start_date〜feed_end_date（対象期間）を表示する
+ * 3. どちらにも一致しなければ null を返す（「フィード版」の項目自体を
+ *    呼び出し側で出さない。【19本目修正】期間で代わりに表示すると
+ *    「フィード版：2026-09-01〜2027-08-31 ／ 対象期間：2026-09-01〜2027-08-31」
+ *    のように同じ期間が2回並んで出ていたため）
  * 日付が取れた場合、feed_version中に「改正」の語があれば末尾に付ける
  * （「運賃改定」等、"改正"を含まない語は付けない＝原文の言い回しを増幅しない）。
+ * @returns {string|null}
  */
-export function formatFeedVersionShort(feedVersion, startDate, endDate) {
-  if (feedVersion) {
-    const slashMatch = feedVersion.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
-    const kanjiMatch = !slashMatch && feedVersion.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
-    const m = slashMatch || kanjiMatch;
-    if (m) {
-      const [, y, mo, d] = m;
-      const dateStr = `${y}/${mo.padStart(2, '0')}/${d.padStart(2, '0')}`;
-      return feedVersion.includes('改正') ? `${dateStr}改正` : dateStr;
-    }
-  }
-  if (startDate && endDate) {
-    return `${formatGtfsDate(startDate)}〜${formatGtfsDate(endDate)}`;
-  }
-  return feedVersion || '不明';
+export function formatFeedVersionShort(feedVersion) {
+  if (!feedVersion) return null;
+  const slashMatch = feedVersion.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+  const kanjiMatch = !slashMatch && feedVersion.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+  const m = slashMatch || kanjiMatch;
+  if (!m) return null;
+  const [, y, mo, d] = m;
+  const dateStr = `${y}/${mo.padStart(2, '0')}/${d.padStart(2, '0')}`;
+  return feedVersion.includes('改正') ? `${dateStr}改正` : dateStr;
 }
 
 /**
