@@ -91,10 +91,21 @@ class ReverseTravel {
     this.spotFinder = null;
     this.routeFormatter = null;
     this.mapView = new MapView('spots-map');
+    // 【2026-10-13、22本目修正、Cowork指摘】選ばれたピンは、2D・3Dそれぞれが
+    // 自分の selectedSpotId を持つのではなく、アプリ全体で1つだけ持つ
+    // （以前はscrollSelectedCardIntoView()がthis.mapView.selectedSpotId
+    // （2D側）しか見ておらず、3Dでピンを選んでも一覧がスクロールしなかった）。
+    // 2D・3Dを切り替えても同じピンが選ばれたままになるよう、この値を正として
+    // 両方のビューに反映する（applyMapMode()参照）。
+    this.selectedSpotId = null;
     // 【2026-10-15、11本目①】吹き出し（ポップアップ）を廃止し、地図の下の
     // 固定情報枠に統一した（Minami決定：A）。ピン選択の通知（onSelectionChange）
     // は既存のまま流用し、一覧のハイライトに加えて情報枠も開く。
-    this.mapView.onSelectionChange = (spotId) => { this.highlightCard(spotId); this.showSpotInfoPanel(spotId); };
+    this.mapView.onSelectionChange = (spotId) => {
+      this.selectedSpotId = spotId;
+      this.highlightCard(spotId);
+      this.showSpotInfoPanel(spotId);
+    };
     this.mapView.onFocusChange = () => this.updateViewAllButton();
     // 3D地図のインスタンスは3D切替が実際に行われるまで作らない（4本目②：
     // terrain-map-view.jsはMapLibre本体と同じく遅延読込のため、クラス自体が
@@ -153,6 +164,11 @@ class ReverseTravel {
       budgetDisplay: document.getElementById('budget-display'),
       budgetBandPreview: document.getElementById('budget-band-preview'),
       budgetDecrement: document.getElementById('budget-decrement'),
+      mobileBudgetOverlay: document.getElementById('mobile-budget-overlay'),
+      mobileBudgetSlider: document.getElementById('mobile-budget-slider'),
+      mobileBudgetDecrement: document.getElementById('mobile-budget-decrement'),
+      mobileBudgetIncrement: document.getElementById('mobile-budget-increment'),
+      mobileBudgetSearchBtn: document.getElementById('mobile-budget-search-btn'),
       budgetIncrement: document.getElementById('budget-increment'),
       searchBtn: document.getElementById('search-btn'),
       appLayout: document.getElementById('app-layout'),
@@ -297,6 +313,26 @@ class ReverseTravel {
       this.elements.budgetInput.value = value;
       this.updateBudgetUI();
       this.updateMapBudgetLive(value);
+    });
+
+    // 【2026-10-13、22本目、Minami決定：B】スマホの検索後は、予算の操作を
+    // 地図の下に重ねた帯（#mobile-budget-overlay）で行う。±・スライダーとも
+    // PC版と同じ#budget-inputを更新するだけで、以降の表示反映は
+    // updateBudgetUI()に一本化する（二重に状態を持たない）。
+    this.elements.mobileBudgetDecrement?.addEventListener('click', () => {
+      this.stepBudget(-100);
+    });
+    this.elements.mobileBudgetIncrement?.addEventListener('click', () => {
+      this.stepBudget(100);
+    });
+    this.elements.mobileBudgetSlider?.addEventListener('input', () => {
+      const value = parseInt(this.elements.mobileBudgetSlider.value, 10);
+      this.elements.budgetInput.value = value;
+      this.updateBudgetUI();
+      this.updateMapBudgetLive(value);
+    });
+    this.elements.mobileBudgetSearchBtn?.addEventListener('click', () => {
+      this.performSearch();
     });
 
     this.updateBudgetUI();
@@ -586,7 +622,42 @@ class ReverseTravel {
     this.elements.budgetSlider.value = value; // ±ボタン・共有リンク復元等どの経路で変わっても表示を揃える
     this.elements.budgetDecrement.disabled = value <= min;
     this.elements.budgetIncrement.disabled = value >= max;
+    // 【2026-10-13、22本目】スマホの地図下の予算操作帯も、#budget-inputを
+    // 正としてここで揃える（どちらの操作（PC欄・スマホ帯）で変えても同期する）。
+    if (this.elements.mobileBudgetSlider) this.elements.mobileBudgetSlider.value = value;
+    if (this.elements.mobileBudgetDecrement) this.elements.mobileBudgetDecrement.disabled = value <= min;
+    if (this.elements.mobileBudgetIncrement) this.elements.mobileBudgetIncrement.disabled = value >= max;
+    this.updateMobileBudgetOverlay(value);
     this.updateSearchButtonState();
+  }
+
+  /**
+   * 【2026-10-13、22本目、Minami決定：B】地図下の予算操作帯の「¥800・16件」
+   * 表示。まだこの金額で検索していない（#budget-inputの値が直近の検索条件と
+   * 違う）間は「¥900で探す」のような押せる見た目のボタンに変える。
+   * 上の要約バー（「富山駅前・往復¥800　▼条件を変える」）の金額も、操作に
+   * 合わせてその場で変える（Minami指示。検索してからでないと反映されない
+   * のでは「操作に合わせて変える」ことにならないため）。
+   */
+  updateMobileBudgetOverlay(budget) {
+    const btn = this.elements.mobileBudgetSearchBtn;
+    if (btn) {
+      const pending = this.lastSearchedBudget !== null && budget !== this.lastSearchedBudget;
+      if (pending) {
+        btn.textContent = `¥${formatThousands(budget)}で探す`;
+        btn.classList.add('mobile-budget-search-btn-pending');
+      } else {
+        const count = this.currentAllSpots?.length
+          ? this.filterBandFromAllSpots(this.currentAllSpots, budget).bandSpots.length
+          : 0;
+        btn.textContent = `¥${formatThousands(budget)}・${count}件`;
+        btn.classList.remove('mobile-budget-search-btn-pending');
+      }
+    }
+    // 要約バーはまだ一度も検索していない間は出ていない（hidden）ため、
+    // その間はテキストを更新しない（更新しても見えないが、念のため早期returnする）。
+    if (this.lastSearchedBudget === null) return;
+    this.updateSearchSummaryText(this.currentDepartureStationId, budget);
   }
 
   /**
@@ -1151,6 +1222,10 @@ class ReverseTravel {
     if (this.elements.searchSummary) this.elements.searchSummary.hidden = false;
     this.updateSearchSummaryText(departureStationId, budget);
     this.setFormCollapsed(true);
+    // 【2026-10-13、22本目、Minami決定：B】スマホの予算操作帯も、要約バーと
+    // 同じく初回検索で初めてhidden属性を外す（以降は常に出し続ける）。
+    if (this.elements.mobileBudgetOverlay) this.elements.mobileBudgetOverlay.hidden = false;
+    this.updateMobileBudgetOverlay(budget);
 
     // 【2026-10-13、10本目②】「この条件で検索」を押した結果の表示なので、
     // 出発駅から近い順に点が波のように広がって出る演出を行う（Minami指示）。
@@ -1215,7 +1290,11 @@ class ReverseTravel {
         // スクロール＋光らせる（highlightCardはスマホで一覧が非表示のときは
         // 自然に何もしない）。【2026-10-15、11本目①】吹き出しは廃止し、
         // 同じ通知で情報枠も開く。
-        this.terrainMapView.onSelectionChange = (spotId) => { this.highlightCard(spotId); this.showSpotInfoPanel(spotId); };
+        this.terrainMapView.onSelectionChange = (spotId) => {
+          this.selectedSpotId = spotId;
+          this.highlightCard(spotId);
+          this.showSpotInfoPanel(spotId);
+        };
         this.terrainMapView.onFocusChange = () => this.updateViewAllButton();
         this.layoutController.terrainMapView = this.terrainMapView; // 遅延生成のため後から差し替える
       }
@@ -1270,12 +1349,53 @@ class ReverseTravel {
     }
     // 直前までdisplay:noneだった側が実寸を持つよう、表示反映後にリサイズする
     requestAnimationFrame(() => {
-      if (this.mapMode === '3d') this.terrainMapView?.resize();
-      else if (this.mapView.map) this.mapView.map.invalidateSize();
+      if (this.mapMode === '3d') {
+        this.terrainMapView?.resize();
+      } else if (this.mapView.map) {
+        // 【2026-10-13、22本目、不具合修正】display:noneから復帰した直後、
+        // 既存マーカー（#spots-mapのL.marker群）の画面上の位置が直らない
+        // ことがPlaywrightでの実機相当検証で判明した（136件中44件が、
+        // 本来の位置から数千px単位でずれた場所に表示されたまま＝実際に
+        // クリックすると無関係な別の場所を押してしまう）。根本原因・調査の
+        // 経緯はmap-view.jsのforceMarkerReposition()参照（render()完了後にも
+        // 同じ問題が起きるため、そちらと処理を共通化した）。
+        this.mapView.forceMarkerReposition();
+      }
     });
     // 【2026-10-15、11本目②】「全体を見る」ボタンの表示判定は2D/3Dそれぞれ
     // 独立して持っているため、切り替えのたびに今表示中の側の状態に合わせ直す。
     this.updateViewAllButton();
+    // 【2026-10-13、22本目、Minami決定】2D・3Dを切り替えても選んでいたピンは
+    // 選ばれたままにする。
+    this.reapplySelectionAfterModeSwitch();
+  }
+
+  /**
+   * 【2026-10-13、22本目、Minami決定】2D・3Dの切り替え後、選択中のピン
+   * （this.selectedSpotId、アプリ全体で1つだけ持つ）を、これから表示される
+   * 側のビューへ反映し直す。薄い色のピン（帯より安い）でもcurrentAllSpotsには
+   * あるため選択自体は引き継げる。検索し直し直後等でcurrentAllSpotsに見つから
+   * ない場合は選択を諦める（エラーにしない。Minami指示）。
+   */
+  reapplySelectionAfterModeSwitch() {
+    if (!this.selectedSpotId) return;
+    const spot = this.currentAllSpots?.find((s) => s.id === this.selectedSpotId);
+    if (!spot) {
+      this.selectedSpotId = null;
+      return;
+    }
+    if (this.mapMode === '3d') {
+      // 3D側はsetSelectedSpot()自体がonSelectionChangeを呼ばない設計
+      // （実際のクリック操作時はクリックハンドラ側で別途呼んでいる）ため、
+      // ここで一覧ハイライト・情報枠の表示も明示的に行う。
+      this.terrainMapView?.setSelectedSpot(spot);
+      this.highlightCard(spot.id);
+      this.showSpotInfoPanel(spot.id);
+    } else {
+      // 2D側のsetSelected()はonSelectionChange経由でhighlightCard・
+      // showSpotInfoPanelも行うため、ここでは呼ばなくてよい。
+      this.mapView.setSelected(spot.id);
+    }
   }
 
   // ========================================
@@ -1843,9 +1963,10 @@ class ReverseTravel {
     this.elements.resultsList.innerHTML = html;
 
     // 一覧の再描画でカードのDOMが作り直されるため、選択中のスポットが
-    // あれば（地図側の状態を正として）ハイライトを再適用する
-    if (this.mapView.selectedSpotId) {
-      this.highlightCard(this.mapView.selectedSpotId);
+    // あれば（アプリ全体で1つだけ持つthis.selectedSpotIdを正として）
+    // ハイライトを再適用する
+    if (this.selectedSpotId) {
+      this.highlightCard(this.selectedSpotId);
     }
   }
 
@@ -1897,12 +2018,19 @@ class ReverseTravel {
    * サイズが0になり位置計算ができない。その場合は何もせず、
    * 「一覧」タブに切り替えられたタイミング（LayoutControllerの
    * onListTabActivated経由）で改めて呼び出される。
+   *
+   * 【2026-10-13、22本目修正、Cowork指摘】以前はthis.mapView.selectedSpotId
+   * （2D側だけが持つ状態）を見ていたため、3Dでピンを選んだときは一覧が
+   * スクロールしなかった。アプリ全体で1つだけ持つthis.selectedSpotIdを見る
+   * （2D・3Dどちらの選択でもこの値が更新される。onSelectionChange参照）。
    */
   scrollSelectedCardIntoView() {
-    const spotId = this.mapView.selectedSpotId;
+    const spotId = this.selectedSpotId;
     if (!spotId) return;
 
     const list = this.elements.resultsList;
+    // 帯より安い「薄い色のピン」は一覧にカードが無いため、ここで静かに
+    // 終わる（エラーにしない。Minami指示）。
     const card = list.querySelector(`.spot-card[data-spot-id="${spotId}"]`);
     if (!card) return;
 
@@ -1970,6 +2098,7 @@ class ReverseTravel {
     if (this.elements.spotInfoContent) this.elements.spotInfoContent.innerHTML = '';
     this.mapView.clearSelected();
     this.terrainMapView?.clearSelected();
+    this.selectedSpotId = null;
   }
 
   /**

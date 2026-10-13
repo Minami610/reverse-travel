@@ -142,6 +142,26 @@
       <!-- 【2026-10-15、11本目②】寄っているときだけ出す「全体を見る」ボタン
            （Minami決定：C）。右上の方角ボタン（3Dのみ）の下に重ならないよう配置。 -->
       <button type="button" id="view-all-btn" class="view-all-btn" hidden>全体を見る</button>
+      <!-- 【2026-10-13、22本目、Minami決定：B】スマホの検索後、地図の一番下に
+           予算操作を重ねて出す（検索フォームの予算欄は、スマホでは「条件を
+           変える」を開いても出さない設計に変えたため）。PCでは出さない
+           （CSS側で出し分け）。「¥800・16件」の表示は、スライダーを動かして
+           まだ検索し直していない間は「¥900で探す」のような押せるボタンに
+           変わる（main.jsのupdateMobileBudgetOverlay()参照）。 -->
+      <div id="mobile-budget-overlay" class="mobile-budget-overlay" hidden>
+        <button type="button" id="mobile-budget-decrement" aria-label="予算を100円減らす">−</button>
+        <input
+          type="range"
+          id="mobile-budget-slider"
+          min="200"
+          max="2000"
+          step="100"
+          value="500"
+          aria-label="予算（往復）をスライダーで変更"
+        >
+        <button type="button" id="mobile-budget-increment" aria-label="予算を100円増やす">＋</button>
+        <button type="button" id="mobile-budget-search-btn"></button>
+      </div>
     </div>
   </div>
 

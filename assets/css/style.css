@@ -498,10 +498,15 @@ header p {
   min-height: 0;
 }
 
-/* スマホの「地図」タブ：パネルの残り高さいっぱいに広がる */
+/* スマホの「地図」タブ：パネルの残り高さいっぱいに広がる。
+   【2026-10-13、22本目、Minami決定】min-height:0のままだと、画面が低い・
+   検索後の要約バー等で上側が伸びた場合に地図が70px程度まで潰れることが
+   実機で起きていた（地図がほぼ見えない・3Dのpaddingが地図の高さを超えて
+   MapLibreの警告が出る、の両方の原因）。240pxを下回らないようにし、
+   それでも収まらない場合はbody側のスクロールに任せる（上のbody定義参照）。 */
 #map-slot-mobile {
   flex: 1;
-  min-height: 0;
+  min-height: 240px;
 }
 
 /* 検索前は非表示。JSが#app-layoutに has-results クラスを付けたときのみ表示する。
@@ -681,6 +686,16 @@ header p {
   color: white;
 }
 
+/* 【2026-10-13、22本目、Minami決定】スマホでは地図の下端いっぱいに予算操作帯
+   （#mobile-budget-overlay）を出すため、2D/3D切替ボタンは左下から左上へ
+   移す（出典ボタンも下記で左上・2D/3Dボタンの下へ移す）。 */
+@media (max-width: 759px) {
+  #map-dimension-toggle {
+    top: 8px;
+    bottom: auto;
+  }
+}
+
 /* 3D準備中インジケータ（4本目②）。2Dの地図は消さず、これを右下に小さく重ねるだけ */
 #terrain-loading-indicator {
   position: absolute;
@@ -696,6 +711,20 @@ header p {
   color: white;
   font-size: 0.75rem;
   font-weight: 600;
+}
+
+/* 【2026-10-13、22本目、Minami決定】スマホでは地図の下端いっぱいに予算操作帯
+   を出すため、出典（attribution）コントロール（2D=Leaflet・3D=MapLibreとも
+   既定は右下）を左上・2D/3D切替ボタンの下へ移す。方位磁針（MapLibre既定は
+   右上）・「全体を見る」（右上、view-all-btn参照）は右側のまま変更しない。 */
+@media (max-width: 759px) {
+  #map-area .leaflet-bottom.leaflet-right,
+  #map-area .maplibregl-ctrl-bottom-right {
+    top: 46px;
+    left: 8px;
+    bottom: auto;
+    right: auto;
+  }
 }
 
 /* 【2026-10-16、12本目①、Minami決定：A＋C】地図の下に固定で出す情報「帯」
@@ -731,11 +760,87 @@ header p {
 }
 
 @media (max-width: 759px) {
+  /* 【2026-10-13、22本目、Minami決定：B】予算操作帯（#mobile-budget-overlay、
+     bottom:8px・高さ44px）のすぐ上に出す。48px→58px（8+44+余白6px）。 */
   .spot-info-panel {
     left: 8px;
     right: 8px;
-    bottom: 48px;
+    bottom: 58px;
   }
+}
+
+/* 【2026-10-13、22本目、Minami決定：B】スマホの検索後、地図の一番下に重ねて
+   出す予算操作帯。「−」「スライダー」「＋」「¥800・16件（または「この金額で
+   探す」）」を1行に収める。PCでは常に非表示にする（JS側は検索後にhidden属性を
+   外すだけで、幅の判定はしていないため、ここで確実にPCを除外する）。 */
+.mobile-budget-overlay {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  height: 44px;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background-color: rgba(255, 255, 255, 0.97);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  padding: 0 0.5rem;
+}
+
+@media (min-width: 760px) {
+  .mobile-budget-overlay {
+    display: none !important;
+  }
+}
+
+.mobile-budget-overlay #mobile-budget-decrement,
+.mobile-budget-overlay #mobile-budget-increment {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  background-color: white;
+  color: var(--color-main-deep);
+  font-size: 1.1rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mobile-budget-overlay #mobile-budget-decrement:disabled,
+.mobile-budget-overlay #mobile-budget-increment:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.mobile-budget-overlay input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+#mobile-budget-search-btn {
+  flex-shrink: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  background-color: white;
+  color: var(--color-text-sub);
+}
+
+/* スライダーを動かして、まだ検索し直していない間だけ押せるボタンらしい見た目にする
+   （main.jsのupdateMobileBudgetOverlay()がこのクラスを付け外しする）。 */
+#mobile-budget-search-btn.mobile-budget-search-btn-pending {
+  background-color: var(--color-main);
+  color: white;
 }
 
 .spot-info-close {
@@ -1831,6 +1936,33 @@ header p {
    適用したいため、ここでは上書きしない（過去にここで元の大きい値へ
    戻してしまい、縮小指示が効かなくなっていた反省を踏まえている）。 */
 @media (max-width: 759px) {
+  /* 【2026-10-13、22本目、Minami決定】地図に最低の高さ（240px、下の
+     #map-slot-mobileのmin-height参照）を設けたため、画面が低い端末
+     （例：400×464）では「ヘッダー＋要約バー＋タブ＋地図240px＋フッター」の
+     合計がビューポート高さを超えることがある。従来はbody{overflow:hidden}で
+     どの要素も一切はみ出さない設計だったが、これだと地図を240px未満に
+     潰す以外に逃げ場が無くなってしまう。
+     【不具合修正】当初はheightもauto（min-height:100vh）に変えていたが、
+     これだと#map-area{height:100%}のようなパーセント指定の高さが、bodyの
+     「明示的な高さ」が無くなったことで途中から軒並み解決できなくなり、
+     #map-areaの実際の高さが0になる regression が起きた（実機確認：
+     #map-slot-mobileは240pxを確保できているのに、その子の#map-areaだけ
+     height:0pxになっていた）。heightはこれまでどおり100vh（明示的な値）の
+     ままにし、overflowだけhidden→autoに変える：100vhという箱の大きさ自体は
+     変えず、中身がそれより高くなったときだけスクロールで逃がす。 */
+  body {
+    overflow-y: auto;
+  }
+
+  /* 上のbodyのスクロールが実際に効くよう、はみ出しを押しとどめていた
+     中間の祖先（.app-layout・.layout-right）のoverflow:hiddenも
+     visibleにする（#results-listなど、個別に持つ内部スクロール領域は
+     このoverflow指定とは独立のため、一覧のスクロール自体は変わらない）。 */
+  .app-layout,
+  .layout-right {
+    overflow: visible;
+  }
+
   .container {
     padding: 0.5rem 0.75rem;
   }
@@ -1864,6 +1996,17 @@ header p {
   .form-group-budget {
     flex: 0 0 auto;
     width: 100%;
+  }
+
+  /* 【2026-10-13、22本目、Minami決定：B】検索後（#app-layout.has-results）は、
+     スマホでは予算の操作を地図の下の#mobile-budget-overlayに任せるため、
+     「条件を変える」でフォームを開いたときも予算欄は出さない（出発駅と
+     検索ボタンだけにする）。まだ一度も検索していない間（has-resultsが
+     付く前）は、ここで隠さず通常どおりフォーム内に予算欄を表示する
+     （最初の検索に予算が必要なため）。 */
+  #app-layout.has-results .form-group-budget,
+  #app-layout.has-results #budget-band-preview {
+    display: none;
   }
 }
 

@@ -93,12 +93,20 @@ async function searchAt(page, stationText, budget) {
   await page.waitForTimeout(400);
   const item = page.locator('.suggestion-item', { hasText: stationText }).first();
   await item.click();
-  for (let i = 0; i < 20; i++) {
-    const value = parseInt(await page.inputValue('#budget-input'), 10);
-    if (value === budget) break;
-    if (value < budget) await page.click('#budget-increment');
-    else await page.click('#budget-decrement');
-  }
+  // 【2026-10-13、22本目】スマホでは検索後、PC用の予算ステッパー・スライダー
+  // （.form-group-budget）を常に非表示にした（予算操作は地図下の
+  // #mobile-budget-overlayへ移したため）。さらにそちらも「地図」タブを
+  // 見ているときしか見えない（#map-areaがタブパネルの中にあるため）。
+  // どちらが見えているかに左右されず確実に目的の予算へ揃えるため、
+  // クリックの連打ではなく#budget-sliderへ直接値を入れて'input'イベントを
+  // 発火させる（checkBudgetSlider()等、他の検証箇所と同じ手法。
+  // #budget-inputが正であり、どの経路でも最終的にそこへ収束する設計のため
+  // 結果は同じ）。
+  await page.evaluate((v) => {
+    const el = document.getElementById('budget-slider');
+    el.value = v;
+    el.dispatchEvent(new Event('input'));
+  }, budget);
   await page.click('#search-btn');
   await page.waitForSelector('.spot-card, .no-results', { timeout: 15000 });
   await page.waitForTimeout(300);
@@ -127,6 +135,22 @@ function rectsOverlap(a, b) {
 function isFullyVisible(rect, viewport) {
   if (!rect || rect.width <= 0 || rect.height <= 0) return false;
   return rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= viewport.width + 1 && rect.y + rect.height <= viewport.height + 1;
+}
+
+/**
+ * 【22本目】要素のscrollTo({behavior:'smooth'})アニメーションが終わる
+ * （scrollTopが2回連続で同じ値になる）まで待つ。固定時間待ちだと、
+ * アニメーション途中のscrollTopを基準に「表示範囲内か」を誤判定しうる。
+ */
+async function waitForScrollSettled(page, selector, { timeout = 3000, interval = 100 } = {}) {
+  let last = null;
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const current = await page.evaluate((sel) => document.querySelector(sel)?.scrollTop, selector);
+    if (current === last) return;
+    last = current;
+    await page.waitForTimeout(interval);
+  }
 }
 
 /** タップ領域が44px四方以上あるか（Minamiさんの指示：スマホで押しやすい大きさ） */
@@ -378,7 +402,16 @@ async function captureHowToScreen(page, viewportLabel) {
 async function captureSearchButtonPendingScreen(page, viewportLabel) {
   await searchAt(page, '高松築港', 1000);
   await ensureFormExpanded(page);
-  await page.click('#budget-increment');
+  // 【2026-10-13、22本目】スマホでは検索後、#budget-incrementは常に非表示になる
+  // （予算操作は地図下の#mobile-budget-overlayへ移したため）。クリックではなく
+  // スライダーへ直接値を入れて'input'を発火させる（searchAt()と同じ手法。
+  // #budget-inputが正であり、どの経路でも最終的にそこへ収束する設計のため、
+  // この画面が検証したい「予算を変えると検索ボタンが強調される」効果は同じ）。
+  await page.evaluate(() => {
+    const el = document.getElementById('budget-slider');
+    el.value = parseInt(el.value, 10) + 100;
+    el.dispatchEvent(new Event('input'));
+  });
   await page.waitForTimeout(100);
   const screenshotPath = path.join(screenshotDir, `search-btn-pending-${viewportLabel}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: false });
@@ -2339,6 +2372,9 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
 const MOBILE_FORM_COLLAPSE_VIEWPORTS = {
   se: { width: 375, height: 667 },
   std: { width: 390, height: 844 },
+  // 【2026-10-13、22本目】Minami実機（400×464）そのもの。地図が70px程度まで
+  // 潰れる不具合の再現手順はこの画面サイズで報告されたため、専用に追加する。
+  own: { width: 400, height: 464 },
 };
 
 // GSI DEMタイルの404（データが元々存在しない座標、修正不可）・hillshadeと
@@ -2352,8 +2388,25 @@ function isKnownAcceptableConsoleMessage(text) {
   // CLAUDE.md参照・修正不可）だけで、他に404を起こすリソースは無いことを
   // 確認済みのため、URLでの絞り込みはできないが「404のリソース読み込み
   // 失敗」はこのアプリでは一律に既知・許容扱いとする。
+  // 【2026-10-13、22本目】GPUドライバ自身が出す「GPU stall due to
+  // ReadPixels」（WebGLのパフォーマンス診断メッセージ）も既知・許容とする。
+  // _tmp-repro-console-22.mjs（本ラウンドの調査用スクリプト）で複数回
+  // 再現したところ、3D操作のたびに一定回数出るが、アプリのコード・データとは
+  // 無関係（GPUドライバがブラウザのコンソールへ直接出す診断メッセージで、
+  // アプリ側に対処手段がない）と確認した。
   return /Failed to load resource.*404/i.test(text)
-    || /same source for a hillshade layer and for 3D terrain/i.test(text);
+    || /same source for a hillshade layer and for 3D terrain/i.test(text)
+    || /GPU stall due to ReadPixels/i.test(text);
+}
+
+// 【2026-10-13、22本目】MapLibreの「Map cannot fit within canvas with the
+// given bounds, padding, and/or offset」警告は、地図コンテナが縮んでいるのに
+// 固定paddingを使うと出る（terrain-map-view.jsのgetRevealPadding()参照）。
+// 他のどの既知メッセージとも違い、これが1件でも出たら必ず検証失敗にする
+// （isKnownAcceptableConsoleMessageには入れない。許容してしまうと今回の
+// 修正が壊れても検知できなくなるため）。
+function containsMapCannotFitWarning(messages) {
+  return messages.some((m) => /Map cannot fit within canvas/i.test(m));
 }
 
 /**
@@ -2562,9 +2615,480 @@ async function checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths) {
       unexpected.length === 0,
       unexpected.join(' | ')
     );
+    record(
+      `[${label}] MapLibreの「Map cannot fit」警告が出ない（地図が潰れていない証拠）`,
+      !containsMapCannotFitWarning(consoleMessages)
+    );
 
     await context.close();
   }
+}
+
+/**
+ * 【22本目、Minami決定：B】スマホの予算操作帯（#mobile-budget-overlay）の検証。
+ * - 検索後、地図タブの一番下に予算操作帯が出て、他の重ねたUI（名前の帯・
+ *   2D/3D切替ボタン・出典ボタン・タブ・フッター）のどれとも重ならない。
+ * - 地図の高さは240px以上を保つ（Minami報告の約70pxまでの崩れが直っていること）。
+ * - ＋／−・スライダーは到達範囲の円だけを変え、点の数・一覧は変えない
+ *   （「この金額で探す」を押すまで）。
+ * - 「この金額で探す」を押すと点・一覧が変わり、要約バーの金額もその場で追従する。
+ * - 薄いピン（帯より安いピン）を選んでもエラーにならない。
+ * - 3DではMapLibreの「Map cannot fit」警告が出ない。
+ */
+async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
+  console.log('\n=== 22本目：スマホの予算操作帯の検証 ===');
+
+  for (const [label, viewport] of Object.entries(MOBILE_FORM_COLLAPSE_VIEWPORTS)) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '富山駅前', 800);
+    await page.click('.tab-btn[data-tab="map"]');
+    await page.waitForTimeout(300);
+
+    // --- 2D：地図の高さ・重なり ---
+    const mapHeight2d = await page.locator('#map-area').boundingBox().then((b) => b?.height || 0);
+    record(`[${label}/2D] 地図の高さが240px以上`, mapHeight2d >= 240, `height=${mapHeight2d}`);
+
+    const overlayVisible = await page.locator('#mobile-budget-overlay').isVisible().catch(() => false);
+    record(`[${label}/2D] 検索後、予算操作帯が表示される`, overlayVisible);
+
+    const toggleBox = await page.locator('#map-dimension-toggle').boundingBox();
+    const tabsBox = await page.locator('.mobile-tabs').boundingBox();
+    const overlayBox = await page.locator('#mobile-budget-overlay').boundingBox();
+    const footerBox = await page.locator('#app-footer').boundingBox();
+    record(`[${label}/2D] 予算操作帯がタブと重ならない`, !rectsOverlap(overlayBox, tabsBox), JSON.stringify({ overlayBox, tabsBox }));
+    record(`[${label}/2D] 予算操作帯がフッターと重ならない`, !rectsOverlap(overlayBox, footerBox), JSON.stringify({ overlayBox, footerBox }));
+    record(`[${label}/2D] 2D/3D切替ボタンがタブと重ならない`, !rectsOverlap(toggleBox, tabsBox), JSON.stringify({ toggleBox, tabsBox }));
+    record(`[${label}/2D] 2D/3D切替ボタンが予算操作帯と重ならない`, !rectsOverlap(toggleBox, overlayBox), JSON.stringify({ toggleBox, overlayBox }));
+    const attribBox2d = await page.locator('#map-area .leaflet-control-attribution').boundingBox().catch(() => null);
+    if (attribBox2d) {
+      record(`[${label}/2D] 出典ボタンが2D/3D切替ボタンと重ならない`, !rectsOverlap(attribBox2d, toggleBox), JSON.stringify({ attribBox2d, toggleBox }));
+    }
+
+    const mapTab2dPath = path.join(screenshotDir, `mobile-budget-overlay-2d-${label}.png`);
+    await page.screenshot({ path: mapTab2dPath });
+    savedPaths.push(mapTab2dPath);
+
+    // 名前の帯（ピン選択）が予算操作帯と重ならない
+    const pinBox2d = await page.locator('.map-pin-spot:visible').first().boundingBox().catch(() => null);
+    if (pinBox2d) {
+      await page.mouse.click(pinBox2d.x + pinBox2d.width / 2, pinBox2d.y + pinBox2d.height / 2);
+      await page.waitForTimeout(150);
+      const panelBox2d = await page.locator('#spot-info-panel').boundingBox();
+      record(`[${label}/2D] 名前の帯が予算操作帯と重ならない`, !rectsOverlap(panelBox2d, overlayBox), JSON.stringify({ panelBox2d, overlayBox }));
+      const pinSelectedPath2d = path.join(screenshotDir, `mobile-budget-overlay-pin-selected-2d-${label}.png`);
+      await page.screenshot({ path: pinSelectedPath2d });
+      savedPaths.push(pinSelectedPath2d);
+      await page.click('#spot-info-close').catch(() => {});
+      await page.waitForTimeout(100);
+    }
+
+    // 【不具合修正】検索後、裏で¥2000全域のデータを先読みする
+    // （scheduleMaxBudgetPrefetch、WAVE_REVEAL_SAFE_DELAY_MS≒1200ms後に完了）。
+    // これを待たずに「＋を押す前」の基準値を読むと、まだ帯だけの狭いデータ
+    // セットのままのマーカー数を基準にしてしまい、先読み完了が＋操作の直後に
+    // たまたま割り込むと「点が増えた」という誤検出になる（checkBudgetSlider()の
+    // 同種のコメント参照）。確実に先読みが終わってから基準値を読む。
+    await page.waitForTimeout(1500);
+
+    // ＋を2回：円だけ変わり、点の数・一覧は変わらない
+    const before2d = await page.evaluate(() => ({
+      cards: document.querySelectorAll('.spot-card').length,
+      visiblePins: Array.from(window.__mapViewForDebug.markersBySpotId.values())
+        .filter((m) => m.getElement()?.style.display !== 'none').length,
+      circleKm: window.__mapViewForDebug._reachCircleRadiusKm,
+    }));
+    await page.click('#mobile-budget-increment');
+    await page.click('#mobile-budget-increment');
+    await page.waitForTimeout(200);
+    const duringDrag2d = await page.evaluate(() => ({
+      cards: document.querySelectorAll('.spot-card').length,
+      visiblePins: Array.from(window.__mapViewForDebug.markersBySpotId.values())
+        .filter((m) => m.getElement()?.style.display !== 'none').length,
+      circleKm: window.__mapViewForDebug._reachCircleRadiusKm,
+    }));
+    record(
+      `[${label}/2D] 予算操作帯の＋を2回押しても点の数・一覧は変わらない`,
+      before2d.visiblePins === duringDrag2d.visiblePins && before2d.cards === duringDrag2d.cards,
+      JSON.stringify({ before2d, duringDrag2d })
+    );
+    record(
+      `[${label}/2D] 予算操作帯の＋を2回押すと円の半径は大きくなる`,
+      duringDrag2d.circleKm > before2d.circleKm,
+      JSON.stringify({ before2d, duringDrag2d })
+    );
+    const pendingText = await page.locator('#mobile-budget-search-btn').textContent();
+    const pendingClass = await page.evaluate(
+      () => document.getElementById('mobile-budget-search-btn').classList.contains('mobile-budget-search-btn-pending')
+    );
+    record(`[${label}/2D] 金額を変えると帯のボタンが「〜で探す」に変わる`, pendingClass && /で探す$/.test(pendingText || ''), pendingText);
+    const summaryTextDuringDrag = await page.locator('#search-summary-text').textContent();
+    record(
+      `[${label}/2D] 要約バーの金額が操作に合わせてその場で変わる（検索前、¥1,000）`,
+      (summaryTextDuringDrag || '').includes('¥1,000'),
+      summaryTextDuringDrag
+    );
+    const midDragPath2d = path.join(screenshotDir, `mobile-budget-overlay-mid-drag-2d-${label}.png`);
+    await page.screenshot({ path: midDragPath2d });
+    savedPaths.push(midDragPath2d);
+
+    // 「この金額で探す」を押すと点・一覧が変わる。
+    // 【不具合修正】このボタンは「地図」タブを見ながら押す想定のUIで、一覧タブ
+    // パネルは地図タブ表示中display:noneのため.spot-cardは「存在するが不可視」
+    // になる（このファイルの他箇所、957行目付近と同じ事情）。可視状態を待つ
+    // 既定のwaitForSelectorではなく、件数の変化そのものをDOM上で待つ。
+    await page.click('#mobile-budget-search-btn');
+    await page.waitForFunction(
+      (prevCount) => document.querySelectorAll('.spot-card').length !== prevCount || document.querySelector('.no-results') !== null,
+      before2d.cards,
+      { timeout: 15000 }
+    );
+    await page.waitForTimeout(200);
+    const afterOverlaySearch = await page.evaluate(() => ({
+      cards: document.querySelectorAll('.spot-card').length,
+      pendingClass: document.getElementById('mobile-budget-search-btn').classList.contains('mobile-budget-search-btn-pending'),
+    }));
+    record(
+      `[${label}/2D] 「この金額で探す」を押すと一覧が変わり、帯のボタンが件数表示に戻る`,
+      afterOverlaySearch.cards !== before2d.cards && !afterOverlaySearch.pendingClass,
+      JSON.stringify({ before: before2d.cards, after: afterOverlaySearch })
+    );
+
+    if (pageErrors.length > 0) {
+      record(`[${label}/2D] 予算操作帯の操作中にページエラーが発生していない`, false, pageErrors.join('; '));
+    }
+
+    // --- 3D：高さ・重なり・円のみ変化・薄いピン選択時の無エラー ---
+    pageErrors.length = 0;
+    const consoleMessages3d = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error' || msg.type() === 'warning') consoleMessages3d.push(`[${msg.type()}] ${msg.text()}`);
+    });
+    await page.click('#map-dimension-toggle');
+    const became3d = await page.waitForFunction(
+      () => document.getElementById('map-area').classList.contains('mode-3d'),
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
+    record(`[${label}/3D] 3D化に成功`, became3d);
+
+    if (became3d) {
+      await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+      await page.waitForTimeout(500);
+
+      const mapHeight3d = await page.locator('#map-area').boundingBox().then((b) => b?.height || 0);
+      record(`[${label}/3D] 地図の高さが240px以上`, mapHeight3d >= 240, `height=${mapHeight3d}`);
+
+      const overlayBox3d = await page.locator('#mobile-budget-overlay').boundingBox();
+      const toggleBox3d = await page.locator('#map-dimension-toggle').boundingBox();
+      const tabsBox3d = await page.locator('.mobile-tabs').boundingBox();
+      const compassBox3d = await page.locator('.maplibregl-ctrl-top-right').boundingBox().catch(() => null);
+      const attribBox3d = await page.locator('#map-area .maplibregl-ctrl-bottom-right').boundingBox().catch(() => null);
+      record(`[${label}/3D] 予算操作帯がタブと重ならない`, !rectsOverlap(overlayBox3d, tabsBox3d), JSON.stringify({ overlayBox3d, tabsBox3d }));
+      record(`[${label}/3D] 2D/3D切替ボタンがタブと重ならない`, !rectsOverlap(toggleBox3d, tabsBox3d), JSON.stringify({ toggleBox3d, tabsBox3d }));
+      record(`[${label}/3D] 2D/3D切替ボタンが予算操作帯と重ならない`, !rectsOverlap(toggleBox3d, overlayBox3d), JSON.stringify({ toggleBox3d, overlayBox3d }));
+      if (attribBox3d) {
+        record(`[${label}/3D] 出典ボタンが2D/3D切替ボタンと重ならない`, !rectsOverlap(attribBox3d, toggleBox3d), JSON.stringify({ attribBox3d, toggleBox3d }));
+      }
+      if (compassBox3d) {
+        record(`[${label}/3D] 方角ボタンが2D/3D切替ボタンと重ならない`, !rectsOverlap(compassBox3d, toggleBox3d), JSON.stringify({ compassBox3d, toggleBox3d }));
+      }
+
+      const mapTab3dPath = path.join(screenshotDir, `mobile-budget-overlay-3d-${label}.png`);
+      await page.screenshot({ path: mapTab3dPath });
+      savedPaths.push(mapTab3dPath);
+
+      // 普通のピン（帯内）を選ぶ：名前の帯が予算操作帯・「全体を見る」と重ならない
+      const pinScreenPos = await page.evaluate((budget) => {
+        const map = window.__terrainMapForDebug;
+        const feats = map.querySourceFeatures('spots').filter((f) => f.properties.fare <= budget);
+        if (feats.length === 0) return null;
+        const f = feats[0];
+        const p = map.project(f.geometry.coordinates);
+        return { x: p.x, y: p.y };
+      }, 800);
+      if (pinScreenPos) {
+        const mapBox3d = await page.locator('#map-area').boundingBox();
+        await page.mouse.click(mapBox3d.x + pinScreenPos.x, mapBox3d.y + pinScreenPos.y);
+        await page.waitForTimeout(300);
+        const panelBox3d = await page.locator('#spot-info-panel').boundingBox();
+        record(`[${label}/3D] 名前の帯が予算操作帯と重ならない`, !rectsOverlap(panelBox3d, overlayBox3d), JSON.stringify({ panelBox3d, overlayBox3d }));
+        const viewAllBox3d = await page.locator('#view-all-btn').boundingBox().catch(() => null);
+        if (viewAllBox3d) {
+          record(`[${label}/3D] 「全体を見る」ボタンが方角ボタンと重ならない`, !compassBox3d || !rectsOverlap(viewAllBox3d, compassBox3d), JSON.stringify({ viewAllBox3d, compassBox3d }));
+        }
+        const pinSelectedPath3d = path.join(screenshotDir, `mobile-budget-overlay-pin-selected-3d-${label}.png`);
+        await page.screenshot({ path: pinSelectedPath3d });
+        savedPaths.push(pinSelectedPath3d);
+        await page.click('#spot-info-close').catch(() => {});
+        await page.waitForTimeout(100);
+      }
+
+      // ＋を2回：円だけ変わり、点のフィルタ（帯の判定）は変わらない
+      const filterBefore = await page.evaluate(() => JSON.stringify(window.__terrainMapForDebug.getFilter('spots-circle')));
+      const circleBefore3d = await page.evaluate(() => window.__terrainViewForDebug._reachCircleRadiusKm);
+      await page.click('#mobile-budget-increment');
+      await page.click('#mobile-budget-increment');
+      await page.waitForTimeout(300);
+      const filterAfter = await page.evaluate(() => JSON.stringify(window.__terrainMapForDebug.getFilter('spots-circle')));
+      const circleAfter3d = await page.evaluate(() => window.__terrainViewForDebug._reachCircleRadiusKm);
+      record(`[${label}/3D] 予算操作帯の＋を2回押しても点の絞り込み（帯フィルタ）は変わらない`, filterBefore === filterAfter, JSON.stringify({ filterBefore, filterAfter }));
+      record(`[${label}/3D] 予算操作帯の＋を2回押すと円の半径は大きくなる`, circleAfter3d > circleBefore3d, JSON.stringify({ circleBefore3d, circleAfter3d }));
+      const midDragPath3d = path.join(screenshotDir, `mobile-budget-overlay-mid-drag-3d-${label}.png`);
+      await page.screenshot({ path: midDragPath3d });
+      savedPaths.push(midDragPath3d);
+
+      // 薄いピン（帯より安い＝fare > 現在の予算）を選んでもエラーにならない
+      const paleScreenPos = await page.evaluate((budget) => {
+        const map = window.__terrainMapForDebug;
+        const feats = map.querySourceFeatures('spots').filter((f) => f.properties.fare > budget);
+        if (feats.length === 0) return null;
+        const f = feats[0];
+        const p = map.project(f.geometry.coordinates);
+        return { x: p.x, y: p.y };
+      }, 1000);
+      if (paleScreenPos) {
+        const mapBox3dPale = await page.locator('#map-area').boundingBox();
+        await page.mouse.click(mapBox3dPale.x + paleScreenPos.x, mapBox3dPale.y + paleScreenPos.y);
+        await page.waitForTimeout(300);
+      }
+      record(`[${label}/3D] 薄いピンを選ぶ操作がある`, !!paleScreenPos);
+
+      // 「この金額で探す」を押すと点・一覧が変わる（地図タブ表示中は一覧タブ
+      // パネルがdisplay:noneのため、可視状態を待つのではなく件数の変化を待つ）。
+      const beforeOverlaySearch3d = await page.locator('.spot-card').count();
+      await page.click('#mobile-budget-search-btn');
+      await page.waitForFunction(
+        (prevCount) => document.querySelectorAll('.spot-card').length !== prevCount || document.querySelector('.no-results') !== null,
+        beforeOverlaySearch3d,
+        { timeout: 15000 }
+      );
+      await page.waitForTimeout(300);
+      const afterOverlaySearch3d = await page.locator('.spot-card').count();
+      record(
+        `[${label}/3D] 「この金額で探す」を押すと一覧が変わる`,
+        afterOverlaySearch3d !== beforeOverlaySearch3d,
+        `${beforeOverlaySearch3d} -> ${afterOverlaySearch3d}`
+      );
+
+      record(
+        `[${label}/3D] ここまでの一連の操作でMapLibreの「Map cannot fit」警告が出ない`,
+        !containsMapCannotFitWarning(consoleMessages3d)
+      );
+      const unexpected3d = consoleMessages3d.filter((m) => !isKnownAcceptableConsoleMessage(m));
+      record(
+        `[${label}/3D] 薄いピン選択・予算操作・再検索の一連の操作でコンソールエラー・警告が出ない`,
+        unexpected3d.length === 0 && pageErrors.length === 0,
+        [...unexpected3d, ...pageErrors].join(' | ')
+      );
+    }
+
+    await context.close();
+  }
+}
+
+/**
+ * 【22本目、Cowork指摘の修正】2D・3Dどちらでピンを選んでも、一覧（results-list）が
+ * 該当カードまでスクロールして光ること（アプリ全体で1つだけ持つthis.selectedSpotId
+ * に統一した効果の検証）。以前は地図側（MapView）だけが選択状態を持っており、
+ * 3Dで選んでも一覧がスクロールしなかった。
+ * - PC・3D：ピンを選ぶと一覧がスクロールして光る
+ * - PC・2D：別のピンを選ぶと、前のカードの光りが外れ、新しいカードへスクロールする
+ * - 2D→3D切替：切り替えても同じピンの選択状態が保たれ、3Dで別のピンを選ぶと
+ *   一覧がそちらへスクロールし直す
+ */
+async function checkCrossDimensionSelectionScroll(browser, baseUrl, savedPaths) {
+  console.log('\n=== 22本目：2D/3D共通の選択状態・一覧スクロールの検証 ===');
+
+  const context = await browser.newContext({ viewport: VIEWPORTS.pc });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', (e) => pageErrors.push(e.message));
+
+  await page.goto(baseUrl, { waitUntil: 'load' });
+  await page.waitForSelector('#departure-input');
+  await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+  await searchAt(page, '高松築港', 1000);
+
+  // 一覧のDOM順で最後のカード＝PC画面（1920×1080）では初期状態で見えておらず、
+  // 選ぶと実際にスクロールが起きるはずの対象（判定が「常に重なって見える」に
+  // ならないよう、意図的に末尾を選ぶ）。
+  const lastCardSpotId = await page.locator('.spot-card').last().getAttribute('data-spot-id');
+  record('[選択→スクロール] 検証用の最後のカードが見つかる', !!lastCardSpotId);
+
+  /**
+   * 光り（spot-card-glow）はhighlightCard()が付けてから2秒で自動的に外れる
+   * （main.js参照）。スクロールの安定待ち（waitForScrollSettled、最大3秒）を
+   * 挟んでから読むと、フルスイート実行時の負荷次第では2秒を超えてしまい
+   * 光りが既に消えたあとを見てしまうことがあった（実機相当の検証で発覚）。
+   * クリック直後・スクロールの安定待ちより前に読むことで、この揺らぎを避ける。
+   */
+  async function checkGlowImmediately(label, spotId) {
+    const glowing = await page.evaluate(
+      (id) => document.querySelector(`.spot-card[data-spot-id="${id}"]`)?.classList.contains('spot-card-glow'),
+      spotId
+    );
+    record(`${label} 選んだカードが一時的に光る（spot-card-glow）`, glowing === true);
+  }
+
+  /** 指定spotIdのカードが一覧の表示範囲内にあり、選択状態かを見る（光りは別途checkGlowImmediately参照） */
+  async function checkCardScrolledAndGlowed(label, spotId) {
+    const info = await page.evaluate((id) => {
+      const list = document.getElementById('results-list');
+      const card = list.querySelector(`.spot-card[data-spot-id="${id}"]`);
+      if (!card) return { found: false };
+      const listRect = list.getBoundingClientRect();
+      const cardRect = card.getBoundingClientRect();
+      return {
+        found: true,
+        selected: card.classList.contains('spot-card-selected'),
+        scrollTop: list.scrollTop,
+        inView: cardRect.top < listRect.bottom && cardRect.bottom > listRect.top,
+      };
+    }, spotId);
+    record(`${label} カードが見つかる`, info.found, JSON.stringify(info));
+    if (!info.found) return;
+    record(`${label} 選んだカードが一覧の表示範囲内にスクロールされている`, info.inView, JSON.stringify(info));
+    record(`${label} 選んだカードが選択状態（spot-card-selected）になる`, info.selected, JSON.stringify(info));
+  }
+
+  // --- PC・3D：最後のカードに対応するピンを選ぶ ---
+  await page.click('#map-dimension-toggle');
+  const became3d = await page.waitForFunction(
+    () => document.getElementById('map-area').classList.contains('mode-3d'),
+    { timeout: 30000 }
+  ).then(() => true).catch(() => false);
+  record('[PC/3D] 3D化に成功', became3d);
+
+  if (became3d && lastCardSpotId) {
+    await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+    await page.waitForTimeout(500);
+    const scrollTopBefore3d = await page.evaluate(() => document.getElementById('results-list').scrollTop);
+    const pinPos = await page.evaluate((id) => {
+      const map = window.__terrainMapForDebug;
+      const f = map.querySourceFeatures('spots').find((x) => x.properties.id === id);
+      if (!f) return null;
+      const p = map.project(f.geometry.coordinates);
+      return { x: p.x, y: p.y };
+    }, lastCardSpotId);
+    record('[PC/3D] 最後のカードに対応するピンが見つかる', !!pinPos);
+    if (pinPos) {
+      const mapBox = await page.locator('#map-area').boundingBox();
+      await page.mouse.click(mapBox.x + pinPos.x, mapBox.y + pinPos.y);
+      // 【不具合修正】#results-list.scrollTo({behavior:'smooth'})はブラウザの
+      // スムーズスクロールアニメーション（既定で数百ms）が終わるまでscrollTopが
+      // 動き続ける。固定200ms待ちだとアニメーション途中でcardRect/listRectを
+      // 読んでしまい、実際には画面内に収まっているのに「inView:false」と
+      // 誤検出することがあった。scrollTopが2回連続で同じ値になる（＝静止した）
+      // まで待つ。
+      await checkGlowImmediately('[PC/3D]', lastCardSpotId);
+      await waitForScrollSettled(page, '#results-list');
+      await checkCardScrolledAndGlowed('[PC/3D]', lastCardSpotId);
+      const scrollTopAfter3d = await page.evaluate(() => document.getElementById('results-list').scrollTop);
+      record(
+        '[PC/3D] ピンを選ぶと一覧が実際にスクロールする（scrollTopが動く）',
+        scrollTopAfter3d !== scrollTopBefore3d,
+        `${scrollTopBefore3d} -> ${scrollTopAfter3d}`
+      );
+
+      // 必須スクリーンショット：PC・3Dでピンを選び、一覧がスクロールした状態
+      const shotPath = path.join(screenshotDir, 'cross-dimension-pc-3d-selected-scrolled.png');
+      await page.screenshot({ path: shotPath });
+      savedPaths.push(shotPath);
+    }
+  }
+
+  // --- PC・2D：最初のカードに対応するピンを選ぶ（別のカードへ切り替わることを見る） ---
+  await page.click('#map-dimension-toggle');
+  await page.waitForTimeout(300);
+  const firstCardSpotId = await page.locator('.spot-card').first().getAttribute('data-spot-id');
+  record('[選択→スクロール] 検証用の最初のカードが見つかる', !!firstCardSpotId);
+  if (firstCardSpotId) {
+    // 【不具合修正】#spots-mapは3D表示中display:noneになっており
+    // （style.css参照）、2Dへ戻した直後はLeafletの内部再投影
+    // （invalidateSize()、applyMapMode()参照）がrequestAnimationFrame経由で
+    // 遅れて走るため、固定待ち＋手動座標でのクリックだとマーカーの実際の
+    // 画面位置とズレて別のマーカーを誤ってクリックすることがあった
+    // （実際にQ48763306という無関係なピンが選ばれ、それ以降の検証が連鎖的に
+    // 失敗した）。座標を一度だけ読んでmouse.click()するのではなく、
+    // ElementHandle自体をPlaywrightのlocator経由でクリックし、
+    // 可視・安定するまでの自動待ち（actionability check）に任せる。
+    const markerHandle = await page.evaluateHandle((id) => {
+      const mv = window.__mapViewForDebug;
+      return mv.markersBySpotId.get(id)?.getElement() || null;
+    }, firstCardSpotId);
+    const markerEl = markerHandle.asElement();
+    record('[PC/2D] 最初のカードに対応するピンが見つかる', !!markerEl);
+    if (markerEl) {
+      await markerEl.click();
+      await checkGlowImmediately('[PC/2D]', firstCardSpotId);
+      await waitForScrollSettled(page, '#results-list');
+      await checkCardScrolledAndGlowed('[PC/2D]', firstCardSpotId);
+      if (lastCardSpotId) {
+        const lastStillSelected = await page.evaluate(
+          (id) => document.querySelector(`.spot-card[data-spot-id="${id}"]`)?.classList.contains('spot-card-selected'),
+          lastCardSpotId
+        );
+        record('[PC/2D] 別のピンを選ぶと前のカードの選択状態が外れる', lastStillSelected === false);
+      }
+    }
+  }
+
+  // --- 2D→3D切替：2Dで選んだあと3Dへ切り替え、3Dで別のピンを選ぶと
+  //     一覧がそちらへスクロールし直すこと ---
+  if (lastCardSpotId && firstCardSpotId && lastCardSpotId !== firstCardSpotId) {
+    // すでにPC/2Dでfirstを選んだ状態。3Dへ切り替え、同じ選択が保たれることを見る。
+    await page.click('#map-dimension-toggle');
+    const became3dAgain = await page.waitForFunction(
+      () => document.getElementById('map-area').classList.contains('mode-3d'),
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
+    record('[2D→3D切替] 再度3D化に成功', became3dAgain);
+    if (became3dAgain) {
+      await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+      await page.waitForTimeout(500);
+      // 切替直後、同じスポット（firstCardSpotId）の選択が保たれているか
+      const selectedAfterSwitch = await page.evaluate(() => window.__terrainViewForDebug.selectedSpotId);
+      record(
+        '[2D→3D切替] 切替後も同じピンの選択状態が保たれる',
+        selectedAfterSwitch === firstCardSpotId,
+        `selectedAfterSwitch=${selectedAfterSwitch}, expected=${firstCardSpotId}`
+      );
+
+      // 3Dで別のピン（lastCardSpotId）を選び、一覧がそちらへスクロールし直すこと
+      const pinPos2 = await page.evaluate((id) => {
+        const map = window.__terrainMapForDebug;
+        const f = map.querySourceFeatures('spots').find((x) => x.properties.id === id);
+        if (!f) return null;
+        const p = map.project(f.geometry.coordinates);
+        return { x: p.x, y: p.y };
+      }, lastCardSpotId);
+      record('[2D→3D切替] 切替後の検証用ピンが見つかる', !!pinPos2);
+      if (pinPos2) {
+        const mapBox2 = await page.locator('#map-area').boundingBox();
+        await page.mouse.click(mapBox2.x + pinPos2.x, mapBox2.y + pinPos2.y);
+        await checkGlowImmediately('[2D→3D切替、別ピン選択]', lastCardSpotId);
+        await waitForScrollSettled(page, '#results-list');
+        await checkCardScrolledAndGlowed('[2D→3D切替、別ピン選択]', lastCardSpotId);
+        const firstStillSelected = await page.evaluate(
+          (id) => document.querySelector(`.spot-card[data-spot-id="${id}"]`)?.classList.contains('spot-card-selected'),
+          firstCardSpotId
+        );
+        record('[2D→3D切替、別ピン選択] 前に選んでいたカードの選択状態が外れる', firstStillSelected === false);
+      }
+    }
+  }
+
+  if (pageErrors.length > 0) {
+    record('[選択→スクロール] 検証中にページエラーが発生していない', false, pageErrors.join('; '));
+  }
+
+  await context.close();
 }
 
 /**
@@ -2923,6 +3447,8 @@ async function main() {
     await checkDescendTiltChoreography(browser, baseUrl, savedPaths);
     await checkSpotInfoPanel(browser, baseUrl, savedPaths);
     await checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths);
+    await checkMobileBudgetOverlay(browser, baseUrl, savedPaths);
+    await checkCrossDimensionSelectionScroll(browser, baseUrl, savedPaths);
     await checkReturnToOverview(browser, baseUrl, savedPaths);
     await checkBreadcrumbTrail(browser, baseUrl, savedPaths);
     await checkBudgetSlider(browser, baseUrl, savedPaths);

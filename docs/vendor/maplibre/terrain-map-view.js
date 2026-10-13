@@ -87,7 +87,14 @@ const SPOT_FOCUS_DURATION_MS = 2600; // Minami指示：2〜3秒
 // 「帯より上の見える範囲の中心」に変わるため、回転してもピンは見える範囲の
 // 中心に留まり続ける。bottomパディングぶん、中心は画面中央よりbottom/2だけ
 // 上にずれる（MapLibreの仕様）。旧offset[0,-90]と同じ見え方になるようbottom=180にした。
-const REVEAL_ABOVE_BAND_PADDING = { top: 0, right: 0, bottom: 180, left: 0 };
+// 【2026-10-13、22本目修正、Minami指示】これは地図が十分高いときの理想値。
+// スマホで地図の高さが70px程度まで潰れる不具合があったとき、この固定180pxが
+// 地図の高さの半分をはるかに超えてしまい、MapLibreが
+// 「Map cannot fit within canvas with the given bounds, padding, and/or offset」
+// という警告を出していた（Minami実機確認）。地図に最低240pxの高さを設ける
+// CSS側の対策（style.css #map-slot-mobile）と合わせて、ここでも地図の高さの
+// 半分を超えないよう動的に小さくする（getRevealPadding()参照）。
+const REVEAL_ABOVE_BAND_PADDING_MAX = { top: 0, right: 0, bottom: 180, left: 0 };
 // 帯を閉じた後（全体表示・予算操作での復帰）は、上のpaddingを明示的に0へ戻す
 // （MapLibreのpaddingは次のカメラ操作でpaddingを指定しない限りそのまま残り続ける
 // ため、戻し忘れると全体表示の「短い辺の8%・最小ズーム9.5」の構図が狂う）。
@@ -906,6 +913,24 @@ export class TerrainMapView {
    * @param {{stop_lat:number, stop_lon:number}} [departureStation] - 10本目で
    *   bearing計算に使わなくなったが、呼び出し元との互換のため引数は残す。
    */
+  /**
+   * 【2026-10-13、22本目、Minami指示】REVEAL_ABOVE_BAND_PADDING_MAX
+   * （地図が十分高いときの理想値、bottom=180）を、今の地図の高さの半分を
+   * 超えないよう動的に小さくする。超えたまま渡すとMapLibreが
+   * 「Map cannot fit within canvas with the given bounds, padding, and/or
+   * offset」という警告を出す（スマホで地図が70px程度まで潰れていたときに
+   * 実際に発生していた）。CSS側で地図に最低240pxの高さを設けた今も、
+   * 念のためここでも必ずクランプする（CSSが適用されない将来の呼び出し
+   * 経路や、240px未満の極端な画面があっても警告を出さないため）。
+   */
+  getRevealPadding() {
+    const container = this.map?.getContainer();
+    const height = container?.clientHeight || 0;
+    const maxBottom = REVEAL_ABOVE_BAND_PADDING_MAX.bottom;
+    const bottom = height > 0 ? Math.min(maxBottom, Math.floor(height / 2)) : maxBottom;
+    return { top: 0, right: 0, bottom, left: 0 };
+  }
+
   flyToSpot(spot, departureStation) {
     if (!this.map || !isFiniteNumber(spot?.latitude) || !isFiniteNumber(spot?.longitude)) return;
     const token = ++this._flySpotToken;
@@ -913,6 +938,7 @@ export class TerrainMapView {
     // （Minami決定：C。途中でも全体へ戻れるようにする）。
     this._focusedOnSpot = true;
     if (this.onFocusChange) this.onFocusChange(true);
+    const revealPadding = this.getRevealPadding();
 
     if (prefersReducedMotion()) {
       this.map.flyTo({
@@ -920,7 +946,7 @@ export class TerrainMapView {
         zoom: SPOT_FOCUS_ZOOM,
         pitch: SPOT_FOCUS_PITCH,
         duration: REDUCED_MOTION_FLY_DURATION_MS,
-        padding: REVEAL_ABOVE_BAND_PADDING,
+        padding: revealPadding,
         essential: true,
       });
       if (this.onOverheadSettled) this.onOverheadSettled(spot);
@@ -933,7 +959,7 @@ export class TerrainMapView {
       zoom: SPOT_FOCUS_ZOOM,
       pitch: 0,
       duration: SPOT_FOCUS_DURATION_MS,
-      padding: REVEAL_ABOVE_BAND_PADDING,
+      padding: revealPadding,
       essential: true,
     });
 
@@ -948,7 +974,7 @@ export class TerrainMapView {
           pitch: SPOT_FOCUS_PITCH,
           duration: TILT_DURATION_MS,
           center: [spot.longitude, spot.latitude],
-          padding: REVEAL_ABOVE_BAND_PADDING,
+          padding: revealPadding,
         });
         this.map.once('moveend', () => {
           if (token !== this._flySpotToken || !this.map) return;

@@ -178,11 +178,79 @@ export class MapView {
 
     // PC/スマホの切り替えやタブが非表示（display:none）のタイミングで
     // 呼ばれるとコンテナ寸法が0のままfitBoundsが不正確になるため、
-    // 表示反映後（次フレーム）にサイズ再計算とfitBoundsのやり直しを行う
+    // 表示反映後（次フレーム）にサイズ再計算とfitBoundsのやり直しを行う。
+    // 【不具合修正】このrAFの時点でまだ非表示（2D/3D切替で#spots-mapが
+    // display:noneのまま）なら、ここでinvalidateSize()等を呼んでも
+    // 直せない（isContainerVisible()参照）どころか、Leaflet内部の投影情報を
+    // かえって壊す。表示されるまで待つ必要はなく、表示されたとき
+    // （main.jsのapplyMapMode()、layout-controller.jsのinvalidateMapSize()
+    // 経由）に改めてforceMarkerReposition()・refitBounds()が呼ばれるため、
+    // ここでは「今見えているときだけ」行えばよい。
     requestAnimationFrame(() => {
-      if (this.map) this.map.invalidateSize();
+      if (!this.isContainerVisible()) return;
+      this.forceMarkerReposition();
       this.refitBounds();
     });
+  }
+
+  /**
+   * 【2026-10-13、22本目、不具合修正】コンテナが実際に画面上で表示されて
+   * いるか（displayがnoneの祖先が無いか）を見る。Leafletのmap.getSize()は
+   * invalidateSize()を呼ぶまで古い値をキャッシュし続けるため「今現在
+   * 見えているか」の判定には使えない（非表示（2D/3D切替でdisplay:noneに
+   * なった直後）にrender()のfitToBudget()が「前回の非ゼロサイズ」を信じて
+   * 0サイズのDOMに対しfitBounds相当の処理を呼び、Leaflet内部の投影情報を
+   * 壊していたことが根本原因だった。既存のapplyBudget()・fitToBudget()の
+   * 「getSize()が0なら保留する」ガードは、タブを一度も開いていない
+   * （invalidateSize()が一度も呼ばれておらずキャッシュ自体が0の）場合は
+   * 機能するが、このケース（キャッシュは非ゼロのまま実体だけ非表示になった
+   * 場合）は素通りしてしまっていた）。
+   * 【不具合修正】当初はoffsetParent !== nullで判定していたが、
+   * verify-render（jsdom）はレイアウトエンジンを持たずoffsetParentが常に
+   * nullを返すため、jsdom環境では常に「非表示」と誤判定されてしまい、
+   * 帯の反映・地図のフィット等が軒並み動かなくなる副作用が出た。
+   * レイアウトに依存しない、祖先のcomputed display（CSSカスケードの結果。
+   * jsdomでも計算できる）を直接たどる方式に変更した。
+   */
+  isContainerVisible() {
+    if (!this.map) return false;
+    let el = this.map.getContainer();
+    while (el) {
+      if (getComputedStyle(el).display === 'none') return false;
+      el = el.parentElement;
+    }
+    return true;
+  }
+
+  /**
+   * 【2026-10-13、22本目、不具合修正】display:noneから復帰した直後、または
+   * コンテナのサイズがまだ安定していないタイミングでマーカーが作られた・
+   * 更新されたとき、invalidateSize()を呼ぶだけでは一部のマーカーの画面上の
+   * 位置が直らないことがPlaywrightでの実機相当検証で判明した（136件中44件が
+   * 本来の位置から数千px単位でずれたまま＝実際にクリックすると無関係な
+   * 別の場所を押してしまう）。コンテナサイズ自体はinvalidateSize()で
+   * 正しく更新されるが、マーカーの再投影は別イベント（'viewreset'等）
+   * 頼みらしく、発生しないことがあった（2D/3D切替直後・裏の¥2000全域
+   * 先読み(scheduleMaxBudgetPrefetch)によるrender()のやり直しの両方で
+   * 再現する、同じ根本原因）。
+   * invalidateSize()でサイズを確定→setView()で中心・ズームを明示的に
+   * 再設定してpixelOriginを作り直す→既存マーカー全件へmarker.update()で
+   * 個々の位置を再計算させる、の3段階を間にフレームを挟まず同期的に呼ぶ
+   * ことで、イベント発火のタイミングに依存せず確実に直す
+   * （2D/3D切替（main.jsのapplyMapMode()）・このrender()完了後の両方で使う
+   * 共通処理のためメソッド化した）。
+   */
+  forceMarkerReposition() {
+    // 【不具合修正】map.setView(map.getCenter(), ...)は、地図がまだ一度も
+    // 中心・ズームを与えられていない（Leaflet内部の_loadedがfalseの）場合に
+    // 「Set map center and zoom first.」を投げる。共有リンクで開いた詳細が
+    // 帯の外のスポットだった場合等、fitToBudget()がbounds空で早期returnし、
+    // 地図がまだ一度もfitBounds/setViewされていない状態でこれが呼ばれる
+    // ケースが実機相当の検証（verify-render）で見つかった。
+    if (!this.map || !this.map._loaded) return;
+    this.map.invalidateSize();
+    this.map.setView(this.map.getCenter(), this.map.getZoom(), { animate: false });
+    this.markersBySpotId.forEach((marker) => marker.update());
   }
 
   /**
@@ -209,7 +277,12 @@ export class MapView {
     // マーカーの見た目の塗り替えはコンテナが実寸を持つまで保留する
     // （タブが開かれてinvalidateMapSize()が呼ばれた時点で、呼び出し元が
     // 改めてapplyBudget(this.lastBudget)を呼び直せば反映される）。
-    if (!this.map || this.map.getSize().x === 0 || this.map.getSize().y === 0) {
+    // 【不具合修正、22本目】map.getSize()はinvalidateSize()を呼ぶまで古い
+    // 非ゼロ値をキャッシュし続けるため、「タブを一度も開いていない」場合
+    // （キャッシュ自体が0）は検出できるが、「2D/3D切替で今まさに非表示に
+    // なった」場合（キャッシュは前回の非ゼロ値のまま）は検出できなかった。
+    // isContainerVisible()（DOMのoffsetParentを直接見る）に変更した。
+    if (!this.isContainerVisible()) {
       return bandCount;
     }
 
@@ -246,10 +319,16 @@ export class MapView {
     });
     this.lastBounds = bounds;
     if (bounds.length === 0) return;
-    // コンテナが0×0（地図タブを一度も開いていないスマホ等）の間は呼ばない
-    // （applyBudget()と同じ理由。lastBoundsは保存済みのため、タブが開かれて
-    // invalidateMapSize()のrefitBounds()が呼ばれた時点で正しく反映される）。
-    if (this.map.getSize().x === 0 || this.map.getSize().y === 0) return;
+    // コンテナが非表示（地図タブを一度も開いていないスマホ・2D/3D切替で
+    // 今まさにdisplay:noneになった直後等）の間は呼ばない（applyBudget()と
+    // 同じ理由。lastBoundsは保存済みのため、表示されてinvalidateMapSize()の
+    // refitBounds()が呼ばれた時点で正しく反映される）。
+    // 【不具合修正、22本目】map.getSize()の古い非ゼロキャッシュを信じて
+    // ここを素通りし、実体が0サイズのDOMに対してgetBoundsZoom()/
+    // fitBounds()相当を呼んでしまい、Leaflet内部の投影情報を壊す
+    // （render()の裏取得が2D/3D切替直後に走った場合に再現）不具合があった
+    // ため、isContainerVisible()（DOMを直接見る）に変更した。
+    if (!this.isContainerVisible()) return;
     // 【2026-10-10】¥2000選択時に点が画面端からはみ出る不具合をMinamiが
     // スクリーンショットで発見（主に3D側だったが、余白は2Dも合わせて広げる）。
     const options = { padding: [48, 48], maxZoom: 16 };
@@ -268,6 +347,24 @@ export class MapView {
    * 描画された場合や、レイアウト切り替えでコンテナサイズが変わった際に使う */
   refitBounds() {
     if (this.map && this.lastBounds.length > 0) {
+      // 【不具合修正、22本目】スマホで「一覧」タブを見ながら検索し、初めて
+      // 「地図」タブを開いたとき、ピンの位置が画面外にずれる不具合が実機相当の
+      // 検証で見つかった。原因はLeafletの実装そのもの：invalidateSize()は
+      // `if (!this._loaded) return this;` を内部で持ち、地図がまだ一度も
+      // fitBounds/setViewされていない（_loadedがfalse）間は何もしない。
+      // さらにgetSize()は`this._size && !this._sizeChanged`の間はコンテナを
+      // 再計測せず、作成時（非表示・0×0だった時点）にキャッシュした値を
+      // 返し続ける。結果、invalidateSize()を呼んでもコンテナが正しい寸法に
+      // なったことが地図に伝わらず、この直後のfitBounds()がgetBoundsZoom()を
+      // 0×0基準で計算して最大ズーム（16）に張り付いてしまっていた。
+      // _loadedがまだfalseのときだけ、Leaflet内部のキャッシュ（_size・
+      // _sizeChanged）を直接リセットし、次の計測でコンテナの実寸を
+      // 強制的に測り直させる（invalidateSize()では代替できないため、
+      // Leaflet内部プロパティへの直接アクセスで対処する）。
+      if (!this.map._loaded) {
+        this.map._size = null;
+        this.map._sizeChanged = true;
+      }
       this.map.fitBounds(this.lastBounds, { padding: [36, 36], maxZoom: 16 });
     }
   }
@@ -351,6 +448,17 @@ export class MapView {
       if (this._reachCircleLabel) { this.map?.removeLayer(this._reachCircleLabel); this._reachCircleLabel = null; }
       return;
     }
+    // 【不具合修正、22本目】スマホで「一覧」タブを見ている間（#spots-mapが
+    // display:none）に予算を動かすと、既存の円へsetLatLng/setRadius/
+    // setStyle()を呼んだときに「Cannot read properties of undefined
+    // (reading 'subtract')」を投げることがPlaywrightの実機相当検証で
+    // 判明した（applyBudget()・fitToBudget()が既に同じ理由で持つ
+    // 「コンテナが非表示の間は保留する」ガードが、この円の塗り替えには
+    // 無かったため）。半径の値（_reachCircleRadiusKm、検証用）の更新だけは
+    // 常に行い、実際の描画操作はコンテナが見えているときだけ行う（見えた
+    // ときに改めてupdateReachCircle()が呼ばれれば反映される設計のため、
+    // ここで保留しても表示が古いまま固定されることはない）。
+    if (!this.isContainerVisible()) return;
     const opts = style === 'settled'
       ? { color: '#2F6FB2', weight: 1.5, opacity: 0.35, fillColor: '#2F6FB2', fillOpacity: 0.07 }
       : { color: '#2F6FB2', weight: 1.5, opacity: 0.55, fillColor: '#2F6FB2', fillOpacity: 0.12 };

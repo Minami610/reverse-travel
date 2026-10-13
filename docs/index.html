@@ -1178,10 +1178,15 @@ header p {
   min-height: 0;
 }
 
-/* スマホの「地図」タブ：パネルの残り高さいっぱいに広がる */
+/* スマホの「地図」タブ：パネルの残り高さいっぱいに広がる。
+   【2026-10-13、22本目、Minami決定】min-height:0のままだと、画面が低い・
+   検索後の要約バー等で上側が伸びた場合に地図が70px程度まで潰れることが
+   実機で起きていた（地図がほぼ見えない・3Dのpaddingが地図の高さを超えて
+   MapLibreの警告が出る、の両方の原因）。240pxを下回らないようにし、
+   それでも収まらない場合はbody側のスクロールに任せる（上のbody定義参照）。 */
 #map-slot-mobile {
   flex: 1;
-  min-height: 0;
+  min-height: 240px;
 }
 
 /* 検索前は非表示。JSが#app-layoutに has-results クラスを付けたときのみ表示する。
@@ -1361,6 +1366,16 @@ header p {
   color: white;
 }
 
+/* 【2026-10-13、22本目、Minami決定】スマホでは地図の下端いっぱいに予算操作帯
+   （#mobile-budget-overlay）を出すため、2D/3D切替ボタンは左下から左上へ
+   移す（出典ボタンも下記で左上・2D/3Dボタンの下へ移す）。 */
+@media (max-width: 759px) {
+  #map-dimension-toggle {
+    top: 8px;
+    bottom: auto;
+  }
+}
+
 /* 3D準備中インジケータ（4本目②）。2Dの地図は消さず、これを右下に小さく重ねるだけ */
 #terrain-loading-indicator {
   position: absolute;
@@ -1376,6 +1391,20 @@ header p {
   color: white;
   font-size: 0.75rem;
   font-weight: 600;
+}
+
+/* 【2026-10-13、22本目、Minami決定】スマホでは地図の下端いっぱいに予算操作帯
+   を出すため、出典（attribution）コントロール（2D=Leaflet・3D=MapLibreとも
+   既定は右下）を左上・2D/3D切替ボタンの下へ移す。方位磁針（MapLibre既定は
+   右上）・「全体を見る」（右上、view-all-btn参照）は右側のまま変更しない。 */
+@media (max-width: 759px) {
+  #map-area .leaflet-bottom.leaflet-right,
+  #map-area .maplibregl-ctrl-bottom-right {
+    top: 46px;
+    left: 8px;
+    bottom: auto;
+    right: auto;
+  }
 }
 
 /* 【2026-10-16、12本目①、Minami決定：A＋C】地図の下に固定で出す情報「帯」
@@ -1411,11 +1440,87 @@ header p {
 }
 
 @media (max-width: 759px) {
+  /* 【2026-10-13、22本目、Minami決定：B】予算操作帯（#mobile-budget-overlay、
+     bottom:8px・高さ44px）のすぐ上に出す。48px→58px（8+44+余白6px）。 */
   .spot-info-panel {
     left: 8px;
     right: 8px;
-    bottom: 48px;
+    bottom: 58px;
   }
+}
+
+/* 【2026-10-13、22本目、Minami決定：B】スマホの検索後、地図の一番下に重ねて
+   出す予算操作帯。「−」「スライダー」「＋」「¥800・16件（または「この金額で
+   探す」）」を1行に収める。PCでは常に非表示にする（JS側は検索後にhidden属性を
+   外すだけで、幅の判定はしていないため、ここで確実にPCを除外する）。 */
+.mobile-budget-overlay {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  height: 44px;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background-color: rgba(255, 255, 255, 0.97);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  padding: 0 0.5rem;
+}
+
+@media (min-width: 760px) {
+  .mobile-budget-overlay {
+    display: none !important;
+  }
+}
+
+.mobile-budget-overlay #mobile-budget-decrement,
+.mobile-budget-overlay #mobile-budget-increment {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  background-color: white;
+  color: var(--color-main-deep);
+  font-size: 1.1rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mobile-budget-overlay #mobile-budget-decrement:disabled,
+.mobile-budget-overlay #mobile-budget-increment:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.mobile-budget-overlay input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+#mobile-budget-search-btn {
+  flex-shrink: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  background-color: white;
+  color: var(--color-text-sub);
+}
+
+/* スライダーを動かして、まだ検索し直していない間だけ押せるボタンらしい見た目にする
+   （main.jsのupdateMobileBudgetOverlay()がこのクラスを付け外しする）。 */
+#mobile-budget-search-btn.mobile-budget-search-btn-pending {
+  background-color: var(--color-main);
+  color: white;
 }
 
 .spot-info-close {
@@ -2511,6 +2616,33 @@ header p {
    適用したいため、ここでは上書きしない（過去にここで元の大きい値へ
    戻してしまい、縮小指示が効かなくなっていた反省を踏まえている）。 */
 @media (max-width: 759px) {
+  /* 【2026-10-13、22本目、Minami決定】地図に最低の高さ（240px、下の
+     #map-slot-mobileのmin-height参照）を設けたため、画面が低い端末
+     （例：400×464）では「ヘッダー＋要約バー＋タブ＋地図240px＋フッター」の
+     合計がビューポート高さを超えることがある。従来はbody{overflow:hidden}で
+     どの要素も一切はみ出さない設計だったが、これだと地図を240px未満に
+     潰す以外に逃げ場が無くなってしまう。
+     【不具合修正】当初はheightもauto（min-height:100vh）に変えていたが、
+     これだと#map-area{height:100%}のようなパーセント指定の高さが、bodyの
+     「明示的な高さ」が無くなったことで途中から軒並み解決できなくなり、
+     #map-areaの実際の高さが0になる regression が起きた（実機確認：
+     #map-slot-mobileは240pxを確保できているのに、その子の#map-areaだけ
+     height:0pxになっていた）。heightはこれまでどおり100vh（明示的な値）の
+     ままにし、overflowだけhidden→autoに変える：100vhという箱の大きさ自体は
+     変えず、中身がそれより高くなったときだけスクロールで逃がす。 */
+  body {
+    overflow-y: auto;
+  }
+
+  /* 上のbodyのスクロールが実際に効くよう、はみ出しを押しとどめていた
+     中間の祖先（.app-layout・.layout-right）のoverflow:hiddenも
+     visibleにする（#results-listなど、個別に持つ内部スクロール領域は
+     このoverflow指定とは独立のため、一覧のスクロール自体は変わらない）。 */
+  .app-layout,
+  .layout-right {
+    overflow: visible;
+  }
+
   .container {
     padding: 0.5rem 0.75rem;
   }
@@ -2544,6 +2676,17 @@ header p {
   .form-group-budget {
     flex: 0 0 auto;
     width: 100%;
+  }
+
+  /* 【2026-10-13、22本目、Minami決定：B】検索後（#app-layout.has-results）は、
+     スマホでは予算の操作を地図の下の#mobile-budget-overlayに任せるため、
+     「条件を変える」でフォームを開いたときも予算欄は出さない（出発駅と
+     検索ボタンだけにする）。まだ一度も検索していない間（has-resultsが
+     付く前）は、ここで隠さず通常どおりフォーム内に予算欄を表示する
+     （最初の検索に予算が必要なため）。 */
+  #app-layout.has-results .form-group-budget,
+  #app-layout.has-results #budget-band-preview {
+    display: none;
   }
 }
 
@@ -2841,6 +2984,26 @@ header p {
       <!-- 【2026-10-15、11本目②】寄っているときだけ出す「全体を見る」ボタン
            （Minami決定：C）。右上の方角ボタン（3Dのみ）の下に重ならないよう配置。 -->
       <button type="button" id="view-all-btn" class="view-all-btn" hidden>全体を見る</button>
+      <!-- 【2026-10-13、22本目、Minami決定：B】スマホの検索後、地図の一番下に
+           予算操作を重ねて出す（検索フォームの予算欄は、スマホでは「条件を
+           変える」を開いても出さない設計に変えたため）。PCでは出さない
+           （CSS側で出し分け）。「¥800・16件」の表示は、スライダーを動かして
+           まだ検索し直していない間は「¥900で探す」のような押せるボタンに
+           変わる（main.jsのupdateMobileBudgetOverlay()参照）。 -->
+      <div id="mobile-budget-overlay" class="mobile-budget-overlay" hidden>
+        <button type="button" id="mobile-budget-decrement" aria-label="予算を100円減らす">−</button>
+        <input
+          type="range"
+          id="mobile-budget-slider"
+          min="200"
+          max="2000"
+          step="100"
+          value="500"
+          aria-label="予算（往復）をスライダーで変更"
+        >
+        <button type="button" id="mobile-budget-increment" aria-label="予算を100円増やす">＋</button>
+        <button type="button" id="mobile-budget-search-btn"></button>
+      </div>
     </div>
   </div>
 
@@ -4438,11 +4601,79 @@ class MapView {
 
     // PC/スマホの切り替えやタブが非表示（display:none）のタイミングで
     // 呼ばれるとコンテナ寸法が0のままfitBoundsが不正確になるため、
-    // 表示反映後（次フレーム）にサイズ再計算とfitBoundsのやり直しを行う
+    // 表示反映後（次フレーム）にサイズ再計算とfitBoundsのやり直しを行う。
+    // 【不具合修正】このrAFの時点でまだ非表示（2D/3D切替で#spots-mapが
+    // display:noneのまま）なら、ここでinvalidateSize()等を呼んでも
+    // 直せない（isContainerVisible()参照）どころか、Leaflet内部の投影情報を
+    // かえって壊す。表示されるまで待つ必要はなく、表示されたとき
+    // （main.jsのapplyMapMode()、layout-controller.jsのinvalidateMapSize()
+    // 経由）に改めてforceMarkerReposition()・refitBounds()が呼ばれるため、
+    // ここでは「今見えているときだけ」行えばよい。
     requestAnimationFrame(() => {
-      if (this.map) this.map.invalidateSize();
+      if (!this.isContainerVisible()) return;
+      this.forceMarkerReposition();
       this.refitBounds();
     });
+  }
+
+  /**
+   * 【2026-10-13、22本目、不具合修正】コンテナが実際に画面上で表示されて
+   * いるか（displayがnoneの祖先が無いか）を見る。Leafletのmap.getSize()は
+   * invalidateSize()を呼ぶまで古い値をキャッシュし続けるため「今現在
+   * 見えているか」の判定には使えない（非表示（2D/3D切替でdisplay:noneに
+   * なった直後）にrender()のfitToBudget()が「前回の非ゼロサイズ」を信じて
+   * 0サイズのDOMに対しfitBounds相当の処理を呼び、Leaflet内部の投影情報を
+   * 壊していたことが根本原因だった。既存のapplyBudget()・fitToBudget()の
+   * 「getSize()が0なら保留する」ガードは、タブを一度も開いていない
+   * （invalidateSize()が一度も呼ばれておらずキャッシュ自体が0の）場合は
+   * 機能するが、このケース（キャッシュは非ゼロのまま実体だけ非表示になった
+   * 場合）は素通りしてしまっていた）。
+   * 【不具合修正】当初はoffsetParent !== nullで判定していたが、
+   * verify-render（jsdom）はレイアウトエンジンを持たずoffsetParentが常に
+   * nullを返すため、jsdom環境では常に「非表示」と誤判定されてしまい、
+   * 帯の反映・地図のフィット等が軒並み動かなくなる副作用が出た。
+   * レイアウトに依存しない、祖先のcomputed display（CSSカスケードの結果。
+   * jsdomでも計算できる）を直接たどる方式に変更した。
+   */
+  isContainerVisible() {
+    if (!this.map) return false;
+    let el = this.map.getContainer();
+    while (el) {
+      if (getComputedStyle(el).display === 'none') return false;
+      el = el.parentElement;
+    }
+    return true;
+  }
+
+  /**
+   * 【2026-10-13、22本目、不具合修正】display:noneから復帰した直後、または
+   * コンテナのサイズがまだ安定していないタイミングでマーカーが作られた・
+   * 更新されたとき、invalidateSize()を呼ぶだけでは一部のマーカーの画面上の
+   * 位置が直らないことがPlaywrightでの実機相当検証で判明した（136件中44件が
+   * 本来の位置から数千px単位でずれたまま＝実際にクリックすると無関係な
+   * 別の場所を押してしまう）。コンテナサイズ自体はinvalidateSize()で
+   * 正しく更新されるが、マーカーの再投影は別イベント（'viewreset'等）
+   * 頼みらしく、発生しないことがあった（2D/3D切替直後・裏の¥2000全域
+   * 先読み(scheduleMaxBudgetPrefetch)によるrender()のやり直しの両方で
+   * 再現する、同じ根本原因）。
+   * invalidateSize()でサイズを確定→setView()で中心・ズームを明示的に
+   * 再設定してpixelOriginを作り直す→既存マーカー全件へmarker.update()で
+   * 個々の位置を再計算させる、の3段階を間にフレームを挟まず同期的に呼ぶ
+   * ことで、イベント発火のタイミングに依存せず確実に直す
+   * （2D/3D切替（main.jsのapplyMapMode()）・このrender()完了後の両方で使う
+   * 共通処理のためメソッド化した）。
+   */
+  forceMarkerReposition() {
+    // 【不具合修正】map.setView(map.getCenter(), ...)は、地図がまだ一度も
+    // 中心・ズームを与えられていない（Leaflet内部の_loadedがfalseの）場合に
+    // 「Set map center and zoom first.」を投げる。共有リンクで開いた詳細が
+    // 帯の外のスポットだった場合等、fitToBudget()がbounds空で早期returnし、
+    // 地図がまだ一度もfitBounds/setViewされていない状態でこれが呼ばれる
+    // ケースが実機相当の検証（verify-render）で見つかった。
+    if (!this.map || !this.map._loaded) return;
+    this.map.invalidateSize();
+    this.map.setView(this.map.getCenter(), this.map.getZoom(), { animate: false });
+    this.markersBySpotId.forEach((marker) => marker.update());
   }
 
   /**
@@ -4469,7 +4700,12 @@ class MapView {
     // マーカーの見た目の塗り替えはコンテナが実寸を持つまで保留する
     // （タブが開かれてinvalidateMapSize()が呼ばれた時点で、呼び出し元が
     // 改めてapplyBudget(this.lastBudget)を呼び直せば反映される）。
-    if (!this.map || this.map.getSize().x === 0 || this.map.getSize().y === 0) {
+    // 【不具合修正、22本目】map.getSize()はinvalidateSize()を呼ぶまで古い
+    // 非ゼロ値をキャッシュし続けるため、「タブを一度も開いていない」場合
+    // （キャッシュ自体が0）は検出できるが、「2D/3D切替で今まさに非表示に
+    // なった」場合（キャッシュは前回の非ゼロ値のまま）は検出できなかった。
+    // isContainerVisible()（DOMのoffsetParentを直接見る）に変更した。
+    if (!this.isContainerVisible()) {
       return bandCount;
     }
 
@@ -4506,10 +4742,16 @@ class MapView {
     });
     this.lastBounds = bounds;
     if (bounds.length === 0) return;
-    // コンテナが0×0（地図タブを一度も開いていないスマホ等）の間は呼ばない
-    // （applyBudget()と同じ理由。lastBoundsは保存済みのため、タブが開かれて
-    // invalidateMapSize()のrefitBounds()が呼ばれた時点で正しく反映される）。
-    if (this.map.getSize().x === 0 || this.map.getSize().y === 0) return;
+    // コンテナが非表示（地図タブを一度も開いていないスマホ・2D/3D切替で
+    // 今まさにdisplay:noneになった直後等）の間は呼ばない（applyBudget()と
+    // 同じ理由。lastBoundsは保存済みのため、表示されてinvalidateMapSize()の
+    // refitBounds()が呼ばれた時点で正しく反映される）。
+    // 【不具合修正、22本目】map.getSize()の古い非ゼロキャッシュを信じて
+    // ここを素通りし、実体が0サイズのDOMに対してgetBoundsZoom()/
+    // fitBounds()相当を呼んでしまい、Leaflet内部の投影情報を壊す
+    // （render()の裏取得が2D/3D切替直後に走った場合に再現）不具合があった
+    // ため、isContainerVisible()（DOMを直接見る）に変更した。
+    if (!this.isContainerVisible()) return;
     // 【2026-10-10】¥2000選択時に点が画面端からはみ出る不具合をMinamiが
     // スクリーンショットで発見（主に3D側だったが、余白は2Dも合わせて広げる）。
     const options = { padding: [48, 48], maxZoom: 16 };
@@ -4528,6 +4770,24 @@ class MapView {
    * 描画された場合や、レイアウト切り替えでコンテナサイズが変わった際に使う */
   refitBounds() {
     if (this.map && this.lastBounds.length > 0) {
+      // 【不具合修正、22本目】スマホで「一覧」タブを見ながら検索し、初めて
+      // 「地図」タブを開いたとき、ピンの位置が画面外にずれる不具合が実機相当の
+      // 検証で見つかった。原因はLeafletの実装そのもの：invalidateSize()は
+      // `if (!this._loaded) return this;` を内部で持ち、地図がまだ一度も
+      // fitBounds/setViewされていない（_loadedがfalse）間は何もしない。
+      // さらにgetSize()は`this._size && !this._sizeChanged`の間はコンテナを
+      // 再計測せず、作成時（非表示・0×0だった時点）にキャッシュした値を
+      // 返し続ける。結果、invalidateSize()を呼んでもコンテナが正しい寸法に
+      // なったことが地図に伝わらず、この直後のfitBounds()がgetBoundsZoom()を
+      // 0×0基準で計算して最大ズーム（16）に張り付いてしまっていた。
+      // _loadedがまだfalseのときだけ、Leaflet内部のキャッシュ（_size・
+      // _sizeChanged）を直接リセットし、次の計測でコンテナの実寸を
+      // 強制的に測り直させる（invalidateSize()では代替できないため、
+      // Leaflet内部プロパティへの直接アクセスで対処する）。
+      if (!this.map._loaded) {
+        this.map._size = null;
+        this.map._sizeChanged = true;
+      }
       this.map.fitBounds(this.lastBounds, { padding: [36, 36], maxZoom: 16 });
     }
   }
@@ -4611,6 +4871,17 @@ class MapView {
       if (this._reachCircleLabel) { this.map?.removeLayer(this._reachCircleLabel); this._reachCircleLabel = null; }
       return;
     }
+    // 【不具合修正、22本目】スマホで「一覧」タブを見ている間（#spots-mapが
+    // display:none）に予算を動かすと、既存の円へsetLatLng/setRadius/
+    // setStyle()を呼んだときに「Cannot read properties of undefined
+    // (reading 'subtract')」を投げることがPlaywrightの実機相当検証で
+    // 判明した（applyBudget()・fitToBudget()が既に同じ理由で持つ
+    // 「コンテナが非表示の間は保留する」ガードが、この円の塗り替えには
+    // 無かったため）。半径の値（_reachCircleRadiusKm、検証用）の更新だけは
+    // 常に行い、実際の描画操作はコンテナが見えているときだけ行う（見えた
+    // ときに改めてupdateReachCircle()が呼ばれれば反映される設計のため、
+    // ここで保留しても表示が古いまま固定されることはない）。
+    if (!this.isContainerVisible()) return;
     const opts = style === 'settled'
       ? { color: '#2F6FB2', weight: 1.5, opacity: 0.35, fillColor: '#2F6FB2', fillOpacity: 0.07 }
       : { color: '#2F6FB2', weight: 1.5, opacity: 0.55, fillColor: '#2F6FB2', fillOpacity: 0.12 };
@@ -4976,8 +5247,27 @@ class LayoutController {
     // 遅延読込。main.jsが生成後にthis.terrainMapViewを差し替える）。
     requestAnimationFrame(() => {
       if (this.mapView.map) {
+        // 【2026-10-13、22本目、不具合修正】invalidateSize()単体だと既存
+        // マーカーの画面上の位置が直らないことがあったため、forceMarkerReposition()
+        // （invalidateSize+setView+marker.update()の3段階、map-view.js参照）に
+        // 統一した。
+        // 【不具合修正、2回目】「一覧」タブを見ながら検索した場合、render()の
+        // fitToBudget()はコンテナが非表示（isContainerVisible()がfalse）の間は
+        // 何もしない設計のため、地図を一度もfitBounds/setViewしていない
+        // （Leaflet内部のmap._loadedがfalseのまま）。forceMarkerReposition()は
+        // _loadedがfalseだと何もせず戻る安全策を持つため、この順番
+        // （forceMarkerReposition→refitBounds）だと「まだ一度もfitされていない
+        // 地図」に対してマーカーの再投影が素通りされ、ずれた位置のまま残って
+        // しまっていた（実機相当の検証、[2D/sp]のピンクリックで発覚：
+        // 画面外のx座標でクリックが失敗していた）。refitBounds()
+        // （fitBounds()を呼び、_loadedを確定させる）を先に行ってから
+        // forceMarkerReposition()（確定した地図を基準にマーカーを再投影）を
+        // 呼ぶ順に直した（refitBounds()自体が、地図がまだ一度もfitBounds/
+        // setViewされていない場合のLeaflet内部キャッシュの問題に対処する。
+        // map-view.jsのrefitBounds()のコメント参照）。
         this.mapView.map.invalidateSize();
         this.mapView.refitBounds();
+        this.mapView.forceMarkerReposition();
         // コンテナが0×0の間にスライダーが動かされ、マーカーの塗り替えを
         // 保留していた場合（MapView.applyBudget参照）、実寸を得たここで
         // 改めて反映する。
@@ -5475,10 +5765,21 @@ class ReverseTravel {
     this.spotFinder = null;
     this.routeFormatter = null;
     this.mapView = new MapView('spots-map');
+    // 【2026-10-13、22本目修正、Cowork指摘】選ばれたピンは、2D・3Dそれぞれが
+    // 自分の selectedSpotId を持つのではなく、アプリ全体で1つだけ持つ
+    // （以前はscrollSelectedCardIntoView()がthis.mapView.selectedSpotId
+    // （2D側）しか見ておらず、3Dでピンを選んでも一覧がスクロールしなかった）。
+    // 2D・3Dを切り替えても同じピンが選ばれたままになるよう、この値を正として
+    // 両方のビューに反映する（applyMapMode()参照）。
+    this.selectedSpotId = null;
     // 【2026-10-15、11本目①】吹き出し（ポップアップ）を廃止し、地図の下の
     // 固定情報枠に統一した（Minami決定：A）。ピン選択の通知（onSelectionChange）
     // は既存のまま流用し、一覧のハイライトに加えて情報枠も開く。
-    this.mapView.onSelectionChange = (spotId) => { this.highlightCard(spotId); this.showSpotInfoPanel(spotId); };
+    this.mapView.onSelectionChange = (spotId) => {
+      this.selectedSpotId = spotId;
+      this.highlightCard(spotId);
+      this.showSpotInfoPanel(spotId);
+    };
     this.mapView.onFocusChange = () => this.updateViewAllButton();
     // 3D地図のインスタンスは3D切替が実際に行われるまで作らない（4本目②：
     // terrain-map-view.jsはMapLibre本体と同じく遅延読込のため、クラス自体が
@@ -5537,6 +5838,11 @@ class ReverseTravel {
       budgetDisplay: document.getElementById('budget-display'),
       budgetBandPreview: document.getElementById('budget-band-preview'),
       budgetDecrement: document.getElementById('budget-decrement'),
+      mobileBudgetOverlay: document.getElementById('mobile-budget-overlay'),
+      mobileBudgetSlider: document.getElementById('mobile-budget-slider'),
+      mobileBudgetDecrement: document.getElementById('mobile-budget-decrement'),
+      mobileBudgetIncrement: document.getElementById('mobile-budget-increment'),
+      mobileBudgetSearchBtn: document.getElementById('mobile-budget-search-btn'),
       budgetIncrement: document.getElementById('budget-increment'),
       searchBtn: document.getElementById('search-btn'),
       appLayout: document.getElementById('app-layout'),
@@ -5681,6 +5987,26 @@ class ReverseTravel {
       this.elements.budgetInput.value = value;
       this.updateBudgetUI();
       this.updateMapBudgetLive(value);
+    });
+
+    // 【2026-10-13、22本目、Minami決定：B】スマホの検索後は、予算の操作を
+    // 地図の下に重ねた帯（#mobile-budget-overlay）で行う。±・スライダーとも
+    // PC版と同じ#budget-inputを更新するだけで、以降の表示反映は
+    // updateBudgetUI()に一本化する（二重に状態を持たない）。
+    this.elements.mobileBudgetDecrement?.addEventListener('click', () => {
+      this.stepBudget(-100);
+    });
+    this.elements.mobileBudgetIncrement?.addEventListener('click', () => {
+      this.stepBudget(100);
+    });
+    this.elements.mobileBudgetSlider?.addEventListener('input', () => {
+      const value = parseInt(this.elements.mobileBudgetSlider.value, 10);
+      this.elements.budgetInput.value = value;
+      this.updateBudgetUI();
+      this.updateMapBudgetLive(value);
+    });
+    this.elements.mobileBudgetSearchBtn?.addEventListener('click', () => {
+      this.performSearch();
     });
 
     this.updateBudgetUI();
@@ -5970,7 +6296,42 @@ class ReverseTravel {
     this.elements.budgetSlider.value = value; // ±ボタン・共有リンク復元等どの経路で変わっても表示を揃える
     this.elements.budgetDecrement.disabled = value <= min;
     this.elements.budgetIncrement.disabled = value >= max;
+    // 【2026-10-13、22本目】スマホの地図下の予算操作帯も、#budget-inputを
+    // 正としてここで揃える（どちらの操作（PC欄・スマホ帯）で変えても同期する）。
+    if (this.elements.mobileBudgetSlider) this.elements.mobileBudgetSlider.value = value;
+    if (this.elements.mobileBudgetDecrement) this.elements.mobileBudgetDecrement.disabled = value <= min;
+    if (this.elements.mobileBudgetIncrement) this.elements.mobileBudgetIncrement.disabled = value >= max;
+    this.updateMobileBudgetOverlay(value);
     this.updateSearchButtonState();
+  }
+
+  /**
+   * 【2026-10-13、22本目、Minami決定：B】地図下の予算操作帯の「¥800・16件」
+   * 表示。まだこの金額で検索していない（#budget-inputの値が直近の検索条件と
+   * 違う）間は「¥900で探す」のような押せる見た目のボタンに変える。
+   * 上の要約バー（「富山駅前・往復¥800　▼条件を変える」）の金額も、操作に
+   * 合わせてその場で変える（Minami指示。検索してからでないと反映されない
+   * のでは「操作に合わせて変える」ことにならないため）。
+   */
+  updateMobileBudgetOverlay(budget) {
+    const btn = this.elements.mobileBudgetSearchBtn;
+    if (btn) {
+      const pending = this.lastSearchedBudget !== null && budget !== this.lastSearchedBudget;
+      if (pending) {
+        btn.textContent = `¥${formatThousands(budget)}で探す`;
+        btn.classList.add('mobile-budget-search-btn-pending');
+      } else {
+        const count = this.currentAllSpots?.length
+          ? this.filterBandFromAllSpots(this.currentAllSpots, budget).bandSpots.length
+          : 0;
+        btn.textContent = `¥${formatThousands(budget)}・${count}件`;
+        btn.classList.remove('mobile-budget-search-btn-pending');
+      }
+    }
+    // 要約バーはまだ一度も検索していない間は出ていない（hidden）ため、
+    // その間はテキストを更新しない（更新しても見えないが、念のため早期returnする）。
+    if (this.lastSearchedBudget === null) return;
+    this.updateSearchSummaryText(this.currentDepartureStationId, budget);
   }
 
   /**
@@ -6535,6 +6896,10 @@ class ReverseTravel {
     if (this.elements.searchSummary) this.elements.searchSummary.hidden = false;
     this.updateSearchSummaryText(departureStationId, budget);
     this.setFormCollapsed(true);
+    // 【2026-10-13、22本目、Minami決定：B】スマホの予算操作帯も、要約バーと
+    // 同じく初回検索で初めてhidden属性を外す（以降は常に出し続ける）。
+    if (this.elements.mobileBudgetOverlay) this.elements.mobileBudgetOverlay.hidden = false;
+    this.updateMobileBudgetOverlay(budget);
 
     // 【2026-10-13、10本目②】「この条件で検索」を押した結果の表示なので、
     // 出発駅から近い順に点が波のように広がって出る演出を行う（Minami指示）。
@@ -6599,7 +6964,11 @@ class ReverseTravel {
         // スクロール＋光らせる（highlightCardはスマホで一覧が非表示のときは
         // 自然に何もしない）。【2026-10-15、11本目①】吹き出しは廃止し、
         // 同じ通知で情報枠も開く。
-        this.terrainMapView.onSelectionChange = (spotId) => { this.highlightCard(spotId); this.showSpotInfoPanel(spotId); };
+        this.terrainMapView.onSelectionChange = (spotId) => {
+          this.selectedSpotId = spotId;
+          this.highlightCard(spotId);
+          this.showSpotInfoPanel(spotId);
+        };
         this.terrainMapView.onFocusChange = () => this.updateViewAllButton();
         this.layoutController.terrainMapView = this.terrainMapView; // 遅延生成のため後から差し替える
       }
@@ -6654,12 +7023,53 @@ class ReverseTravel {
     }
     // 直前までdisplay:noneだった側が実寸を持つよう、表示反映後にリサイズする
     requestAnimationFrame(() => {
-      if (this.mapMode === '3d') this.terrainMapView?.resize();
-      else if (this.mapView.map) this.mapView.map.invalidateSize();
+      if (this.mapMode === '3d') {
+        this.terrainMapView?.resize();
+      } else if (this.mapView.map) {
+        // 【2026-10-13、22本目、不具合修正】display:noneから復帰した直後、
+        // 既存マーカー（#spots-mapのL.marker群）の画面上の位置が直らない
+        // ことがPlaywrightでの実機相当検証で判明した（136件中44件が、
+        // 本来の位置から数千px単位でずれた場所に表示されたまま＝実際に
+        // クリックすると無関係な別の場所を押してしまう）。根本原因・調査の
+        // 経緯はmap-view.jsのforceMarkerReposition()参照（render()完了後にも
+        // 同じ問題が起きるため、そちらと処理を共通化した）。
+        this.mapView.forceMarkerReposition();
+      }
     });
     // 【2026-10-15、11本目②】「全体を見る」ボタンの表示判定は2D/3Dそれぞれ
     // 独立して持っているため、切り替えのたびに今表示中の側の状態に合わせ直す。
     this.updateViewAllButton();
+    // 【2026-10-13、22本目、Minami決定】2D・3Dを切り替えても選んでいたピンは
+    // 選ばれたままにする。
+    this.reapplySelectionAfterModeSwitch();
+  }
+
+  /**
+   * 【2026-10-13、22本目、Minami決定】2D・3Dの切り替え後、選択中のピン
+   * （this.selectedSpotId、アプリ全体で1つだけ持つ）を、これから表示される
+   * 側のビューへ反映し直す。薄い色のピン（帯より安い）でもcurrentAllSpotsには
+   * あるため選択自体は引き継げる。検索し直し直後等でcurrentAllSpotsに見つから
+   * ない場合は選択を諦める（エラーにしない。Minami指示）。
+   */
+  reapplySelectionAfterModeSwitch() {
+    if (!this.selectedSpotId) return;
+    const spot = this.currentAllSpots?.find((s) => s.id === this.selectedSpotId);
+    if (!spot) {
+      this.selectedSpotId = null;
+      return;
+    }
+    if (this.mapMode === '3d') {
+      // 3D側はsetSelectedSpot()自体がonSelectionChangeを呼ばない設計
+      // （実際のクリック操作時はクリックハンドラ側で別途呼んでいる）ため、
+      // ここで一覧ハイライト・情報枠の表示も明示的に行う。
+      this.terrainMapView?.setSelectedSpot(spot);
+      this.highlightCard(spot.id);
+      this.showSpotInfoPanel(spot.id);
+    } else {
+      // 2D側のsetSelected()はonSelectionChange経由でhighlightCard・
+      // showSpotInfoPanelも行うため、ここでは呼ばなくてよい。
+      this.mapView.setSelected(spot.id);
+    }
   }
 
   // ========================================
@@ -7227,9 +7637,10 @@ class ReverseTravel {
     this.elements.resultsList.innerHTML = html;
 
     // 一覧の再描画でカードのDOMが作り直されるため、選択中のスポットが
-    // あれば（地図側の状態を正として）ハイライトを再適用する
-    if (this.mapView.selectedSpotId) {
-      this.highlightCard(this.mapView.selectedSpotId);
+    // あれば（アプリ全体で1つだけ持つthis.selectedSpotIdを正として）
+    // ハイライトを再適用する
+    if (this.selectedSpotId) {
+      this.highlightCard(this.selectedSpotId);
     }
   }
 
@@ -7281,12 +7692,19 @@ class ReverseTravel {
    * サイズが0になり位置計算ができない。その場合は何もせず、
    * 「一覧」タブに切り替えられたタイミング（LayoutControllerの
    * onListTabActivated経由）で改めて呼び出される。
+   *
+   * 【2026-10-13、22本目修正、Cowork指摘】以前はthis.mapView.selectedSpotId
+   * （2D側だけが持つ状態）を見ていたため、3Dでピンを選んだときは一覧が
+   * スクロールしなかった。アプリ全体で1つだけ持つthis.selectedSpotIdを見る
+   * （2D・3Dどちらの選択でもこの値が更新される。onSelectionChange参照）。
    */
   scrollSelectedCardIntoView() {
-    const spotId = this.mapView.selectedSpotId;
+    const spotId = this.selectedSpotId;
     if (!spotId) return;
 
     const list = this.elements.resultsList;
+    // 帯より安い「薄い色のピン」は一覧にカードが無いため、ここで静かに
+    // 終わる（エラーにしない。Minami指示）。
     const card = list.querySelector(`.spot-card[data-spot-id="${spotId}"]`);
     if (!card) return;
 
@@ -7354,6 +7772,7 @@ class ReverseTravel {
     if (this.elements.spotInfoContent) this.elements.spotInfoContent.innerHTML = '';
     this.mapView.clearSelected();
     this.terrainMapView?.clearSelected();
+    this.selectedSpotId = null;
   }
 
   /**

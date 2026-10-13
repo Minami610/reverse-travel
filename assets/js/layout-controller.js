@@ -89,8 +89,27 @@ export class LayoutController {
     // 遅延読込。main.jsが生成後にthis.terrainMapViewを差し替える）。
     requestAnimationFrame(() => {
       if (this.mapView.map) {
+        // 【2026-10-13、22本目、不具合修正】invalidateSize()単体だと既存
+        // マーカーの画面上の位置が直らないことがあったため、forceMarkerReposition()
+        // （invalidateSize+setView+marker.update()の3段階、map-view.js参照）に
+        // 統一した。
+        // 【不具合修正、2回目】「一覧」タブを見ながら検索した場合、render()の
+        // fitToBudget()はコンテナが非表示（isContainerVisible()がfalse）の間は
+        // 何もしない設計のため、地図を一度もfitBounds/setViewしていない
+        // （Leaflet内部のmap._loadedがfalseのまま）。forceMarkerReposition()は
+        // _loadedがfalseだと何もせず戻る安全策を持つため、この順番
+        // （forceMarkerReposition→refitBounds）だと「まだ一度もfitされていない
+        // 地図」に対してマーカーの再投影が素通りされ、ずれた位置のまま残って
+        // しまっていた（実機相当の検証、[2D/sp]のピンクリックで発覚：
+        // 画面外のx座標でクリックが失敗していた）。refitBounds()
+        // （fitBounds()を呼び、_loadedを確定させる）を先に行ってから
+        // forceMarkerReposition()（確定した地図を基準にマーカーを再投影）を
+        // 呼ぶ順に直した（refitBounds()自体が、地図がまだ一度もfitBounds/
+        // setViewされていない場合のLeaflet内部キャッシュの問題に対処する。
+        // map-view.jsのrefitBounds()のコメント参照）。
         this.mapView.map.invalidateSize();
         this.mapView.refitBounds();
+        this.mapView.forceMarkerReposition();
         // コンテナが0×0の間にスライダーが動かされ、マーカーの塗り替えを
         // 保留していた場合（MapView.applyBudget参照）、実寸を得たここで
         // 改めて反映する。
