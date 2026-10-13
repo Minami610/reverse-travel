@@ -1730,6 +1730,120 @@ header p {
   background-color: var(--color-accent-deep);
 }
 
+/* 「この先へ」（3本目、feature/kono-saki）。暗い色の枠に3件、1件を横長の1行で
+   表示する（デザイン③）：左に56px四方の小さい写真、中央に名前・一言、右に運賃。
+   3件で縦が260px前後に収まることを確認済み（verify-layoutのスクリーンショット参照）。 */
+.onward-section {
+  margin-top: 1.5rem;
+  padding: 0.75rem 0.75rem 0.9rem;
+  background-color: var(--color-text);
+  border-radius: 8px;
+  color: white;
+}
+
+.onward-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+  color: white;
+}
+
+.onward-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.onward-card {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  background-color: white;
+  border-radius: 6px;
+  padding: 0.3rem;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+
+.onward-card:hover,
+.onward-card:focus-visible {
+  transform: translateY(-1px);
+  outline: 2px solid var(--color-hover);
+  outline-offset: -2px;
+}
+
+.onward-image {
+  width: 56px;
+  height: 56px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.onward-image.spot-image-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--color-main-light, #e8f5d0);
+  font-size: 1.3rem;
+}
+
+.onward-body {
+  flex: 1 1 auto;
+  min-width: 0; /* 子要素のテキスト省略(ellipsis)のため */
+}
+
+.onward-name {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.onward-heart {
+  display: inline-flex;
+  color: var(--color-accent-deep);
+  flex-shrink: 0;
+}
+
+.onward-heart svg {
+  width: 14px;
+  height: 14px;
+}
+
+.onward-blurb {
+  margin: 0.1rem 0 0;
+  font-size: 0.72rem;
+  color: var(--color-text-sub);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.onward-fare {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex-shrink: 0;
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--color-main-deep);
+  text-align: right;
+}
+
+/* 金額・差額を別行のspanに分け、それぞれ1行に収める（スマホ幅で名前・一言の省略を
+   防ぐため運賃側は2行を許容するが、「（追加な」「し）」のような文字の途中で
+   折り返させない） */
+.onward-fare-amount,
+.onward-fare-diff {
+  white-space: nowrap;
+}
+
 /* ========================================
    メッセージ
    ======================================== */
@@ -2508,6 +2622,7 @@ class GTFSLoader {
     this.stopsMetadata = null;
     this.routeInfo = null;
     this.routeDetails = null; // 出発駅ID → {到着駅ID: {事業者ID: RouteEntry}}（経路・所要時間、詳細はgenerate-route-details.js）
+    this.routeSequences = null; // route_id → {direction_id: [station_id, ...]}（3本目「この先へ」機能、同じ路線の先の判定用）
     this.stations = null; // 駅ID → {display_name, stop_lat, stop_lon, stops: [{stop_id, operator_id, mode}]}
     this.spots = null; // QID → スポット詳細の辞書
     this.spotsByStation = null; // stop_id → [{qid, distance}, ...] の参照配列
@@ -2582,7 +2697,7 @@ class GTFSLoader {
       codesToFetch.map(async (codeStr) => {
         try {
           const base = `data/pref/${codeStr}/`;
-          const [fareData, stopsMetadata, stations, routeInfo, routeDetailsIndexed, spotsData] =
+          const [fareData, stopsMetadata, stations, routeInfo, routeDetailsIndexed, spotsData, routeSequences] =
             await Promise.all([
               this.fetchJson(`${base}fare-lookup-tables.json`),
               this.fetchJson(`${base}stops-metadata.json`),
@@ -2590,11 +2705,12 @@ class GTFSLoader {
               this.fetchJson(`${base}route-info.json`),
               this.fetchJson(`${base}route-details.json`),
               this.fetchJson(`${base}spots-by-station.json`),
+              this.fetchJson(`${base}route-sequences.json`),
             ]);
           return {
             codeStr, fareData, stopsMetadata, stations,
             routeInfo, routeDetails: decodeRouteDetails(routeDetailsIndexed),
-            spotsData,
+            spotsData, routeSequences,
           };
         } catch (error) {
           console.warn(`⚠️ 都道府県コード${codeStr}のデータ取得に失敗しました（${error.message}）。この県はスキップします`);
@@ -2608,13 +2724,14 @@ class GTFSLoader {
     this.stopsMetadata = this.stopsMetadata || [];
     this.routeInfo = this.routeInfo || {};
     this.routeDetails = this.routeDetails || {};
+    this.routeSequences = this.routeSequences || {};
     this.stations = this.stations || {};
     const spotRegions = [];
     if (this._loadedSpotRegions) spotRegions.push(...this._loadedSpotRegions);
 
     for (const result of results) {
       if (!result) continue;
-      const { codeStr, fareData, stopsMetadata, stations, routeInfo, routeDetails, spotsData } = result;
+      const { codeStr, fareData, stopsMetadata, stations, routeInfo, routeDetails, spotsData, routeSequences } = result;
       this.loadedPrefCodes.add(codeStr);
 
       // 県内通し番号→station_idの復元に使う（resolveStationId参照）。
@@ -2626,6 +2743,7 @@ class GTFSLoader {
       this.stopsMetadata.push(...stopsMetadata);
       Object.assign(this.routeInfo, routeInfo);
       Object.assign(this.routeDetails, routeDetails);
+      Object.assign(this.routeSequences, routeSequences);
       Object.assign(this.stations, stations);
       spotRegions.push(spotsData);
     }
@@ -2647,6 +2765,7 @@ class GTFSLoader {
       stopsMetadata: this.stopsMetadata,
       routeInfo: this.routeInfo,
       routeDetails: this.routeDetails,
+      routeSequences: this.routeSequences,
       stations: this.stations,
       spots: this.spots,
       spotsByStation: this.spotsByStation,
@@ -2797,6 +2916,23 @@ function operatorLabelWord(routeInfo, routeId) {
 }
 
 /**
+ * 「この先へ」の一言「同じ○○で」用の呼び方（2026-10-10、Minami指摘）。
+ * GTFSのroute_typeで言い分ける：0=路面電車・1=地下鉄・2=鉄道→「電車」、
+ * 3=バス→「バス」、それ以外（4=フェリー等、route_type不明含む）→「便」。
+ * is_community_operatorはここでは見ない（「同じ便」という呼び方自体の
+ * 区別が目的で、コミュニティバスかどうかは関係ないため）。
+ * @param {object} routeInfo - route-info.json
+ * @param {string|undefined} routeId
+ * @returns {string} "電車" | "バス" | "便"
+ */
+function sameRouteWord(routeInfo, routeId) {
+  const routeType = parseInt(routeInfo?.[routeId]?.route_type, 10);
+  if (routeType === 0 || routeType === 1 || routeType === 2) return '電車';
+  if (routeType === 3) return 'バス';
+  return '便';
+}
+
+/**
  * 出発駅ID→到達駅IDの便数情報（行き・帰りの小さい方。ビルド時に確定済みの値を
  * そのまま引くだけ）を解決する。estimateRideMinutes/estimateSelectionMinutesと
  * 同じ、reachBy='direct'|'transfer'の分岐構造を踏襲する。
@@ -2893,6 +3029,30 @@ function estimateSelectionMinutes(routeDetails, departureStationId, station, rou
   }
   const parsed = parseRouteEntry(lookupRouteEntry(routeDetails, departureStationId, station.station_id, station.viaOperator));
   return routeEntryMinutesWithWait(parsed, routeInfo);
+}
+
+/**
+ * 到達駅への「最後の区間」の事業者・route_id・乗車駅・降車駅を解決する
+ * （3本目「この先へ」機能、assets/js/onward-candidates.jsの「2) 同じ路線の先」判定用）。
+ * reachBy='transfer'（事業者をまたぐ乗換）のときは2本目のレッグ（乗換地点→到達駅）を、
+ * reachBy='direct'のエントリが同一事業者内の隠れた乗換（長さ8のRouteEntry）のときは
+ * その2本目のレッグ（via→到達駅）を「最後の区間」とする。
+ * @returns {{operatorId:string, routeId:string, legOriginId:string, legDestId:string}|null}
+ */
+function resolveLastLeg(routeDetails, departureStationId, station) {
+  function fromEntry(fromId, toId, operatorId) {
+    const parsed = parseRouteEntry(lookupRouteEntry(routeDetails, fromId, toId, operatorId));
+    if (!parsed) return null;
+    if (parsed.type === 'direct') {
+      return { operatorId, routeId: parsed.route_id, legOriginId: fromId, legDestId: toId };
+    }
+    return { operatorId, routeId: parsed.legs[1].route_id, legOriginId: parsed.via, legDestId: toId };
+  }
+  if (station.reachBy === 'transfer' && station.transferAt) {
+    const [, op2] = station.legOperators;
+    return fromEntry(station.transferAt, station.station_id, op2);
+  }
+  return fromEntry(departureStationId, station.station_id, station.viaOperator);
 }
 
 
@@ -4091,11 +4251,192 @@ async function shareOrCopy(text, url) {
 }
 
 
+// ----- onward-candidates.js -----
+/**
+ * onward-candidates.js - 「この先へ」候補の計算（2026-10-10、3本目。feature/kono-sakiブランチ）
+ *
+ * 詳細画面の下に出す3件の候補を、優先順位 2)→1)→3) で選ぶ。
+ * 1) すぐ近く：今と同じ到達駅（station_id）から行ける別のスポットのうち、
+ *    徒歩20分以内（直線距離÷時速4km）のもの。20分を超える候補はこの種類に入れない。
+ * 2) 同じ路線の先：今の最後の区間と同じ事業者・同じ路線・同じ向きで、さらに先の駅から
+ *    行けるスポット（route-sequences.json＝路線ごとの停車パターンが必要。無ければ
+ *    0件扱いになるだけで、1)・3)で埋まる＝壊れない）。候補自身の最後の区間も同じ
+ *    事業者・路線であることを確認する（候補への一番安い行き方が別路線経由なら対象外）。
+ * 3) 少し足せば：直線5km以内・運賃が今より高く上限（¥2000）以下のスポット。
+ *
+ * 「+¥X」は「出発駅から候補への往復運賃－出発駅から今の場所への往復運賃」
+ * （今の場所から乗り直す運賃ではない。Minamiさんの定義どおり）。
+ * 候補の運賃は常に¥2000以下（allSpots自体がMAX_BUDGET=2000のcalculateReachable()から
+ * 作られているため自然に満たされるが、呼び出し元の前提が変わっても壊れないよう
+ * ここでも明示的に上限チェックする）。
+ * 候補にも応援マーク判定（route-duration.jsのestimateTripFrequency）をそのまま使う
+ * （main.js側）。
+ *
+ * 計算にはallSpots（計算済み、検索1回につき1回でよい）だけを使い、
+ * GTFS生データの読み込みは行わない（型は全てビルド時生成の軽量JSON）。
+ * 実測：allSpots計算済みの状態からの候補計算は1ms未満〜数ms程度（スマホ相当で50ms以内の目安を満たす）。
+ */
+
+const NEARBY_KM = 5;
+const WALK_KM_PER_HOUR = 4; // Minami指定：直線距離÷時速4km
+const NEARBY_WALK_MAX_MIN = 20; // これを超える徒歩時間の候補は「すぐ近く」に入れない
+const ONWARD_COUNT = 3;
+const ONWARD_MAX_FARE = 2000;
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function walkMinutesForKm(km) {
+  return (km / WALK_KM_PER_HOUR) * 60;
+}
+
+/** spotのsource_*フィールドから、fare-calculator.js準拠の「駅」相当オブジェクトを組み立てる */
+function stationLikeFromSpot(spot) {
+  return {
+    reachBy: spot.source_reach_by,
+    transferAt: spot.source_transfer_at,
+    viaOperator: spot.source_via_operator,
+    legOperators: spot.source_leg_operators,
+    station_id: spot.source_station_id,
+  };
+}
+
+/**
+ * route-sequences.json（route_id→[[station_id,...], ...]＝重複排除済みの停車パターンの配列）
+ * から、legOriginIdがlegDestIdより手前にあるパターンを探し、legDestIdより後ろの
+ * station_id集合を返す。
+ * 【重要】1つの路線に複数の停車パターンがありうる（循環線・枝分かれ・便によって
+ * 停車パターンが違う等）ため、全パターンを試す。legOriginId（共通の乗車駅）だけでは
+ * 前後どちらの駅も拾ってしまう（双方向が同じroute_idを使う鉄道路線で、手前の駅を
+ * 「先」と誤判定するバグが調査で見つかった）ため、必ずlegOriginId→legDestIdの順で
+ * 先に出てくるパターンを選ぶこと。
+ * 【2026-10-10追記、Minami指摘】循環線（最初と最後の停留所が同じ、または1つの
+ * パターンの中で同じ停留所を2回通る）では、乗車駅・降車駅のどちらかにパターンが
+ * 再び戻ってくる地点（＝一周してきた場合の再訪問）より先は「後ろ」に含めない。
+ * そうしないと、一周後に再登場する乗車駅自身（＝利用者が実際に乗った場所）が
+ * 「先にある場所」として誤って案内されてしまう。
+ */
+function stationsAfter(routeSequences, routeId, legOriginId, legDestId) {
+  const patterns = routeSequences?.[routeId];
+  if (!patterns) return new Set();
+  const after = new Set();
+  for (const seq of patterns) {
+    const originIdx = seq.indexOf(legOriginId);
+    const destIdx = seq.indexOf(legDestId);
+    if (originIdx === -1 || destIdx === -1 || originIdx >= destIdx) continue;
+    let endIdx = seq.length;
+    const nextOriginIdx = seq.indexOf(legOriginId, destIdx + 1);
+    const nextDestIdx = seq.indexOf(legDestId, destIdx + 1);
+    if (nextOriginIdx !== -1) endIdx = Math.min(endIdx, nextOriginIdx);
+    if (nextDestIdx !== -1) endIdx = Math.min(endIdx, nextDestIdx);
+    for (const stationId of seq.slice(destIdx + 1, endIdx)) after.add(stationId);
+  }
+  return after;
+}
+
+/**
+ * 今の停留所（legDestId）から候補の停留所まで、同じ事業者・同じ路線で直行した場合の
+ * 所要時間（分）をroute-details.jsonから引く。解決できなければnull
+ * （呼び出し側は一言を「同じバスでその先」にフォールバックする）。
+ */
+function sameRouteMinutes(routeDetails, operatorId, fromStationId, toStationId) {
+  const parsed = parseRouteEntry(lookupRouteEntry(routeDetails, fromStationId, toStationId, operatorId));
+  if (!parsed || parsed.type !== 'direct') return null;
+  return parsed.duration_min;
+}
+
+/**
+ * @param {object} context - {routeDetails, routeSequences, departureStationId, allSpots, maxBudget}
+ * @param {object} currentSpot - 今見ている詳細画面のスポット（allSpots由来のオブジェクト）
+ * @returns {Array<{spot:object, type:'same-route'|'nearby'|'stretch', extraFare:number,
+ *   sameRouteMinutes?:number, walkMinutes?:number, straightKm?:number, routeId?:string}>}
+ *   最大ONWARD_COUNT件。routeId（type='same-route'のみ）は一言「同じ電車/バス/便で」の
+ *   呼び分け（route-duration.jsのsameRouteWord()）にroute-info.jsonを引くための路線ID。
+ */
+function buildOnwardCandidates(context, currentSpot) {
+  const { routeDetails, routeSequences, departureStationId, allSpots, maxBudget = ONWARD_MAX_FARE } = context;
+  const effectiveMaxFare = Math.min(maxBudget, ONWARD_MAX_FARE);
+  const others = allSpots.filter((s) => s.id !== currentSpot.id && s.source_round_trip_fare <= effectiveMaxFare);
+
+  // 1) すぐ近く：同じ到達駅から行け、かつ徒歩20分以内（直線距離÷時速4km）
+  const type1 = others
+    .map((s) => {
+      if (s.source_station_id !== currentSpot.source_station_id) return null;
+      if (s.latitude == null || s.longitude == null || currentSpot.latitude == null || currentSpot.longitude == null) {
+        return { spot: s, walkMinutes: null };
+      }
+      const km = haversineKm(currentSpot.latitude, currentSpot.longitude, s.latitude, s.longitude);
+      return { spot: s, walkMinutes: walkMinutesForKm(km) };
+    })
+    .filter((entry) => entry && (entry.walkMinutes === null || entry.walkMinutes <= NEARBY_WALK_MAX_MIN));
+
+  // 2) 同じ路線の先：今の最後の区間と同じ事業者・同じ路線・同じ向きで、さらに先の駅
+  let type2 = [];
+  const lastLeg = resolveLastLeg(routeDetails, departureStationId, stationLikeFromSpot(currentSpot));
+  if (lastLeg) {
+    const after = stationsAfter(routeSequences, lastLeg.routeId, lastLeg.legOriginId, lastLeg.legDestId);
+    if (after.size > 0) {
+      type2 = others
+        .filter((s) => {
+          if (!after.has(s.source_station_id)) return false;
+          const sLast = resolveLastLeg(routeDetails, departureStationId, stationLikeFromSpot(s));
+          return sLast && sLast.routeId === lastLeg.routeId && sLast.operatorId === lastLeg.operatorId;
+        })
+        .map((s) => ({
+          spot: s,
+          sameRouteMinutes: sameRouteMinutes(routeDetails, lastLeg.operatorId, lastLeg.legDestId, s.source_station_id),
+          routeId: lastLeg.routeId,
+        }));
+    }
+  }
+
+  // 3) 少し足せば：直線5km以内・運賃が今より高く上限以下。追加額が小さい順
+  const type3 = others
+    .filter((s) => s.source_round_trip_fare > currentSpot.source_round_trip_fare)
+    .map((s) => {
+      if (s.latitude == null || s.longitude == null || currentSpot.latitude == null || currentSpot.longitude == null) return null;
+      const km = haversineKm(currentSpot.latitude, currentSpot.longitude, s.latitude, s.longitude);
+      return km <= NEARBY_KM ? { spot: s, straightKm: km } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.spot.source_round_trip_fare - b.spot.source_round_trip_fare);
+
+  const chosen = [];
+  const pushUnique = (list, type) => {
+    for (const entry of list) {
+      if (chosen.length >= ONWARD_COUNT) break;
+      if (chosen.some((c) => c.spot.id === entry.spot.id)) continue;
+      chosen.push({
+        spot: entry.spot,
+        type,
+        extraFare: entry.spot.source_round_trip_fare - currentSpot.source_round_trip_fare,
+        sameRouteMinutes: entry.sameRouteMinutes,
+        walkMinutes: entry.walkMinutes,
+        straightKm: entry.straightKm,
+        routeId: entry.routeId,
+      });
+    }
+  };
+  pushUnique(type2, 'same-route');
+  pushUnique(type1, 'nearby');
+  pushUnique(type3, 'stretch');
+
+  return chosen;
+}
+
+
 // ----- main.js -----
 /**
  * main.js - 逆引き旅行アプリ UIロジック
  * 検索画面、結果表示、スポット詳細を管理
  */
+
 
 
 
@@ -4115,6 +4456,11 @@ const BUDGET_STEP = 100;
 /** 予算→帯の表示ラベル（例: budget=1000 → "¥801〜¥1000"） */
 function formatBandLabel(budget) {
   return `¥${budget - BAND_WIDTH + 1}〜¥${budget}`;
+}
+
+/** 数字を3桁区切りにする（例: 1740 → "1,740"。「この先へ」の運賃表記用） */
+function formatThousands(n) {
+  return n.toLocaleString('ja-JP');
 }
 
 // ☆（マイリスト）・共有ボタンの線画アイコン（2026-10-09、文字"★"/"☆"/"⇧"から
@@ -4159,6 +4505,10 @@ class ReverseTravel {
     this.currentDepartureStationName = null;
     this.currentDeparturePrefCode = null; // お気に入り保存・共有URL組み立てに使う（prefCodeそのものは検索結果に含まれないため別途保持）
     this.currentSpots = []; // 検索結果（おすすめ順、地図のピンもこの集合のまま）
+    this.detailHistory = []; // 「この先へ」で辿った詳細画面の履歴（スポットオブジェクトのスタック）。
+    // 戻るボタンは、これが空でなければ直前のスポット詳細に戻し、空なら一覧に戻す
+    // （3本目「この先へ」機能。openSpotDetailById/openSharedSpotForStationなど、
+    // 一覧・共有リンクから新規に詳細を開く経路ではこのスタックをリセットする）。
     this.currentReachableCount = 0; // 帯内の到達駅数（デバッグ・将来利用のため保持。表示の分岐には使わない）
     this.currentBudget = null; // 帯の見出し・0件時のボタン計算に使う直近の検索予算
     this.currentHasCheaperSpots = false; // 帯は0件だが、予算以下にはスポットがあるか（0件案内文の出し分けに使う）
@@ -4290,8 +4640,16 @@ class ReverseTravel {
 
     this.updateBudgetUI();
 
+    // 【2026-10-10追記】スマホ本体の戻る操作（ジェスチャー・物理ボタン）と
+    // 画面上の「← 戻る」ボタンを同じ動きにするため、ボタン側はhistory.back()を
+    // 呼ぶだけにし、実際の画面切り替えはpopstateハンドラ（goBackInDetail()）に
+    // 一本化する。共有リンクのURLパラメータと干渉しないよう、pushState/
+    // replaceStateはURLを変えず（第3引数を省略）状態オブジェクトだけを積む。
     this.elements.backBtn.addEventListener('click', () => {
-      this.showResultsList();
+      history.back();
+    });
+    window.addEventListener('popstate', () => {
+      this.goBackInDetail();
     });
 
     this.elements.sortSelect.addEventListener('change', (e) => {
@@ -4502,11 +4860,18 @@ class ReverseTravel {
           ? `<a href="${feed.license_url}" target="_blank" rel="noopener">${feed.license_label}</a>`
           : feed.license_label;
 
+        // 【2026-10-13、19本目修正】版名から日付が取れないフィード（例：万葉線
+        // 「20260825_01」）は、formatFeedVersionShort()がnullを返す。その場合は
+        // 「フィード版」の項目自体を出さず「対象期間」だけにする（期間で代わりに
+        // 表示すると同じ期間が2回並んで出ていたため）。
+        const feedVersionShort = formatFeedVersionShort(feed.feed_version);
+        const feedVersionLine = feedVersionShort ? `フィード版：${feedVersionShort} ／ ` : '';
+
         return `
           <li>
             <strong>${publisher}</strong>（${feed.source_category_label}）
             <span class="feed-meta">公開元サイト：${publisherLink}</span>
-            <span class="feed-meta">フィード版：${feed.feed_version || '不明'} ／ 対象期間：${period}</span>
+            <span class="feed-meta">${feedVersionLine}対象期間：${period}</span>
             <span class="feed-meta">取得日：${fetchedAt} ／ ライセンス：${licenseText}</span>
           </li>
         `;
@@ -5046,6 +5411,8 @@ class ReverseTravel {
       this.updateSearchButtonState();
 
       this.displayResults(bandSpots, stationId, prefCode, reachableCount, alignedBudget, hasCheaperSpots);
+      this.detailHistory = []; // 共有リンク・マイリストからの新規の詳細表示なので履歴をリセットする
+      history.pushState({}, ''); // スマホの戻る操作で一覧に戻れるよう、履歴を1つ積む（URLは変えない）
       this.showSpotDetail(spotForDetail);
       return true;
     } catch (error) {
@@ -5505,9 +5872,7 @@ class ReverseTravel {
             <button type="button" class="favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}" aria-label="${fav ? 'マイリストから外す' : 'マイリストに保存'}">${starIconHtml(fav)}</button>
             <button type="button" class="share-btn" data-spot-id="${spot.id}" aria-label="共有">${shareIconHtml()}</button>
           </div>
-          ${spot.image
-            ? `<img src="${spot.image}" alt="${spot.name}" class="spot-image">`
-            : `<div class="spot-image spot-image-placeholder" aria-hidden="true">🏞️</div>`}
+          ${renderSpotImageHtml(spot, 'spot-image')}
           <h3>${spot.name}</h3>
           <p class="spot-description">${this.formatDescription(spot)}</p>
           <p class="spot-summary">${this.formatSpotSummary(spot)}</p>
@@ -5585,7 +5950,25 @@ class ReverseTravel {
   /** spotIdからスポット詳細画面を開く（地図ポップアップの「詳細を見る」ボタン用） */
   openSpotDetailById(spotId) {
     const spot = this.currentSpots.find((s) => s.id === spotId);
-    if (spot) this.showSpotDetail(spot);
+    if (spot) {
+      this.detailHistory = []; // 一覧からの新規の詳細表示なので「この先へ」の履歴をリセットする
+      history.pushState({}, ''); // スマホの戻る操作で一覧に戻れるよう、履歴を1つ積む
+      this.showSpotDetail(spot);
+    }
+  }
+
+  /**
+   * 戻る操作（画面上の「← 戻る」ボタン・スマホ本体の戻る操作のどちらからも呼ばれる）。
+   * 「この先へ」で辿った履歴があれば直前のスポット詳細に戻す（1回で1つ前に戻る）。
+   * 履歴が無ければ一覧に戻す。
+   */
+  goBackInDetail() {
+    if (this.detailHistory.length > 0) {
+      const previousSpot = this.detailHistory.pop();
+      this.showSpotDetail(previousSpot);
+    } else {
+      this.showResultsList();
+    }
   }
 
   /**
@@ -5607,12 +5990,103 @@ class ReverseTravel {
     this.elements.appLayout.setAttribute('data-view', 'results');
   }
 
-  showSpotDetail(spot) {
+  /**
+   * 「この先へ」カードの運賃表記：「往復¥1,740（+¥120）」。差が0のときは
+   * 「往復¥980（追加なし）」（Minami指示：「+¥0」という表記をやめる）。
+   * スマホ幅では運賃欄の横幅が限られるため2行で折り返すが、金額と差額をそれぞれ
+   * nowrapのspanに分けることで「（追加な」「し）」のような文字の途中での
+   * 折り返しを防ぐ（2026-10-10、375px幅のスクリーンショット確認で発覚）。
+   */
+  formatOnwardFare(cand) {
+    const fareText = `往復¥${formatThousands(cand.spot.source_round_trip_fare)}`;
+    const diffText = cand.extraFare === 0 ? '追加なし' : `+¥${formatThousands(cand.extraFare)}`;
+    return `<span class="onward-fare-amount">${fareText}</span><span class="onward-fare-diff">（${diffText}）</span>`;
+  }
+
+  /**
+   * 「この先へ」カードの一言。種類ごとに文言を変える（Minami指示）。
+   * - 同じ路線の先：「同じ電車/バス/便で約◯分先」（今の停留所→候補の停留所の所要時間。
+   *   出せなければ「同じ電車/バス/便でその先」）。呼び方はGTFSのroute_typeで言い分ける
+   *   （route-duration.jsのsameRouteWord()。0・1・2=電車、3=バス、それ以外=便）。
+   *   【2026-10-10修正】ことでん志度線（route_type=2、鉄道）の候補が「同じバスで」と
+   *   表示されていたのをMinamiが指摘、事業者名ではなくroute_typeで判定するよう修正。
+   * - すぐ近く：「ここから歩いて約◯分」（直線距離÷時速4km。座標が無ければ空）
+   * - 少し足せば：「ここから約◯km」
+   */
+  formatOnwardBlurb(cand) {
+    if (cand.type === 'same-route') {
+      const word = sameRouteWord(this.data.routeInfo, cand.routeId);
+      return cand.sameRouteMinutes != null
+        ? `同じ${word}で約${Math.round(cand.sameRouteMinutes)}分先`
+        : `同じ${word}でその先`;
+    }
+    if (cand.type === 'nearby') {
+      return cand.walkMinutes != null ? `ここから歩いて約${Math.round(cand.walkMinutes)}分` : '';
+    }
+    if (cand.type === 'stretch') {
+      return cand.straightKm != null ? `ここから約${cand.straightKm.toFixed(1)}km` : '';
+    }
+    return '';
+  }
+
+  /**
+   * 「この先へ」セクションのHTML（3本目機能）。暗い枠に、1件を横長1行にして3件
+   * （デザイン③）：左に56px四方の小さい写真、中央に名前・一言、右に運賃。
+   * 応援マーク対象の候補には小さいハートを名前の横に添える（2本目のオレンジ説明枠は
+   * ここでは出さない。タップ後の詳細画面で確認できる）。
+   * 候補が1件も無いとき（計算失敗・出発駅未確定時含む）はセクションごと省く。
+   */
+  renderOnwardSection(candidates) {
+    if (!candidates || candidates.length === 0) return '';
+    const cards = candidates.map((cand) => {
+      const freqInfo = this.buildFrequencyDisplay(cand.spot);
+      const heart = freqInfo?.isBadgeEligible ? `<span class="onward-heart">${HEART_FILLED_SVG}</span>` : '';
+      return `
+        <div class="onward-card" data-spot-id="${cand.spot.id}" role="button" tabindex="0">
+          ${cand.spot.image
+            ? `<img src="${cand.spot.image}" alt="${cand.spot.name}" class="onward-image">`
+            : `<div class="onward-image spot-image-placeholder" aria-hidden="true">🏞️</div>`}
+          <div class="onward-body">
+            <div class="onward-name">${heart}${cand.spot.name}</div>
+            <p class="onward-blurb">${this.formatOnwardBlurb(cand)}</p>
+          </div>
+          <p class="onward-fare">${this.formatOnwardFare(cand)}</p>
+        </div>
+      `;
+    }).join('');
+    return `
+      <div class="onward-section">
+        <h3 class="onward-title">この先へ</h3>
+        <div class="onward-cards">${cards}</div>
+      </div>
+    `;
+  }
+
+  async showSpotDetail(spot) {
     this._currentDetailSpot = spot; // 詳細画面の☆・共有ボタンから参照する
     const routeInfoHtml = this.routeFormatter && this.currentDepartureStationId
       ? this.routeFormatter.format(this.currentDepartureStationId, spot)
       : '';
     const fav = isFavorite(spot.id);
+
+    // 「この先へ」候補（3本目機能）。allSpots自体は検索時に計算済み・キャッシュ済みのため、
+    // ここでの追加計算はルート・駅名等の軽量JSONを読むだけで済む（GTFS生データは読まない）。
+    let onwardHtml = '';
+    if (this.currentDepartureStationId && this.data?.routeDetails) {
+      try {
+        const { allSpots } = await this.computeSearchResult(this.currentDepartureStationId, MAX_BUDGET);
+        const candidates = buildOnwardCandidates({
+          routeDetails: this.data.routeDetails,
+          routeSequences: this.data.routeSequences,
+          departureStationId: this.currentDepartureStationId,
+          allSpots,
+          maxBudget: MAX_BUDGET,
+        }, spot);
+        onwardHtml = this.renderOnwardSection(candidates);
+      } catch (error) {
+        console.error('「この先へ」候補の計算に失敗:', error);
+      }
+    }
 
     const html = `
       <h2>${spot.name}</h2>
@@ -5620,15 +6094,14 @@ class ReverseTravel {
         <button type="button" class="favorite-btn detail-favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}" aria-label="${fav ? 'マイリストから外す' : 'マイリストに保存'}">${starIconHtml(fav)}<span class="btn-label">${fav ? '保存済み' : 'マイリストに保存'}</span></button>
         <button type="button" class="share-btn detail-share-btn" data-spot-id="${spot.id}" aria-label="共有">${shareIconHtml()}<span class="btn-label">共有</span></button>
       </div>
-      ${spot.image
-        ? `<img src="${spot.image}" alt="${spot.name}" class="detail-image">`
-        : `<div class="detail-image spot-image-placeholder" aria-hidden="true">🏞️</div>`}
+      ${renderSpotImageHtml(spot, 'detail-image')}
       <p>${spot.description || (spot.wikipedia_url ? '詳細はWikipediaの記事を参照してください' : 'より詳しい情報がありません')}</p>
       <p class="spot-pageviews">月間ページビュー数: ${spot.pageviews || 'データなし'}</p>
       <p class="spot-distance">最寄駅からの距離: ${spot.distance?.toFixed(1) || '不明'}km</p>
       ${routeInfoHtml}
       ${spot.wikidata_url ? `<a href="${spot.wikidata_url}" target="_blank">Wikidataで見る</a>` : ''}
       ${spot.wikipedia_url ? `<a href="${spot.wikipedia_url}" target="_blank">Wikipediaで見る</a>` : ''}
+      ${onwardHtml}
     `;
 
     this.elements.detailContent.innerHTML = html;
@@ -5643,13 +6116,96 @@ class ReverseTravel {
     this.elements.detailContent.querySelector('.detail-share-btn')?.addEventListener('click', () => {
       this.shareSpot(spot);
     });
+
+    // 「この先へ」カードのタップ：今のスポットを履歴に積んでから、候補の詳細へ移る
+    // （戻るボタンでこのスポットの詳細に1タップで戻れるようにするため）。
+    this.elements.detailContent.querySelectorAll('.onward-card').forEach((card) => {
+      card.addEventListener('click', () => {
+        const candidateId = card.getAttribute('data-spot-id');
+        this.openOnwardCandidate(candidateId);
+      });
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          this.openOnwardCandidate(card.getAttribute('data-spot-id'));
+        }
+      });
+    });
   }
+
+  /**
+   * 「この先へ」カードのタップ時に、候補スポットの詳細画面へ移る。
+   * 今表示中のスポットを履歴に積んでから、allSpots（計算済み）からQIDで探して開く。
+   */
+  async openOnwardCandidate(candidateId) {
+    if (!candidateId || !this.currentDepartureStationId) return;
+    try {
+      const { allSpots } = await this.computeSearchResult(this.currentDepartureStationId, MAX_BUDGET);
+      const candidate = allSpots.find((s) => s.id === candidateId);
+      if (!candidate) return;
+      if (this._currentDetailSpot) this.detailHistory.push(this._currentDetailSpot);
+      history.pushState({}, ''); // スマホの戻る操作で1つ前の詳細に戻れるよう、履歴を1つ積む
+      this.showSpotDetail(candidate);
+    } catch (error) {
+      console.error('「この先へ」候補の表示に失敗:', error);
+    }
+  }
+}
+
+/**
+ * 景勝地の写真<img>を、読み込み失敗時のフォールバック付きで組み立てる。
+ * 【2026-10-13、19本目修正、18本目の調査で判明】spot.imageのURLが存在しても
+ * 実際の読み込みに失敗することがあり、従来はonerrorハンドラが無かったため
+ * ブラウザ標準の壊れた画像アイコンになっていた（spot.imageが元々無い場合の
+ * 「写真がないときの絵」プレースホルダーとは別経路で、そちらには出ない）。
+ * onerrorで同じプレースホルダーに差し替える。
+ * カード・詳細画面・マイリストとも同じカードHTML組み立て経路を通るため、
+ * ここ1箇所を直せば全箇所に効く。
+ * @param {{image: string|null, name: string}} spot
+ * @param {string} className - "spot-image" または "detail-image"
+ */
+function renderSpotImageHtml(spot, className) {
+  if (!spot.image) {
+    return `<div class="${className} spot-image-placeholder" aria-hidden="true">🏞️</div>`;
+  }
+  return `<img src="${spot.image}" alt="${spot.name}" class="${className}" onerror="this.outerHTML='<div class=&quot;${className} spot-image-placeholder&quot; aria-hidden=&quot;true&quot;>🏞️</div>'">`;
 }
 
 /** GTFSの日付形式（YYYYMMDD）を "YYYY-MM-DD" に整形する */
 function formatGtfsDate(yyyymmdd) {
   if (!yyyymmdd || yyyymmdd.length !== 8) return yyyymmdd || '不明';
   return `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
+}
+
+/**
+ * 【2026-10-13、18本目、Minami決定：A】出典画面の「フィード版」を短く表示する。
+ * GTFS変換ソフト「その筋屋」が付与する利用条件の注意書き（日本バス情報協会の
+ * 関係者・支持者は利用禁止、CCライセンスでの登録禁止、等）が、一部の事業者の
+ * feed_versionにそのまま含まれていることがある（対象7件、詳細はCLAUDE.md
+ * 「その筋屋の注意書きの扱い」参照）。データは使い続けると判断したが、画面には
+ * 原文を出さず日付（＋改正と分かる語があればそれ）だけを短く示す。
+ * data-sources.json自体のfeed_versionは変更しない（表示だけで短くする）。
+ *
+ * 抽出規則：
+ * 1. 先頭が「YYYY/MM/DD」（GTFS出力日時の形式）→ その日付をそのまま使う
+ * 2. 文中に「YYYY年MM月DD日」（その筋屋の説明欄の形式）→ その日付を使う
+ * 3. どちらにも一致しなければ null を返す（「フィード版」の項目自体を
+ *    呼び出し側で出さない。【19本目修正】期間で代わりに表示すると
+ *    「フィード版：2026-09-01〜2027-08-31 ／ 対象期間：2026-09-01〜2027-08-31」
+ *    のように同じ期間が2回並んで出ていたため）
+ * 日付が取れた場合、feed_version中に「改正」の語があれば末尾に付ける
+ * （「運賃改定」等、"改正"を含まない語は付けない＝原文の言い回しを増幅しない）。
+ * @returns {string|null}
+ */
+function formatFeedVersionShort(feedVersion) {
+  if (!feedVersion) return null;
+  const slashMatch = feedVersion.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+  const kanjiMatch = !slashMatch && feedVersion.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+  const m = slashMatch || kanjiMatch;
+  if (!m) return null;
+  const [, y, mo, d] = m;
+  const dateStr = `${y}/${mo.padStart(2, '0')}/${d.padStart(2, '0')}`;
+  return feedVersion.includes('改正') ? `${dateStr}改正` : dateStr;
 }
 
 /**
