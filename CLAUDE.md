@@ -290,4 +290,5 @@ generate-spots-by-region.jsを手動実行したときだけ有効で、旧経�
    b. 新版が出ていれば、該当県を`node scripts/build-prefecture.js {コード} --force`で再ビルドし、`npm run bundle` → `npm run verify-render` → `npm run verify-regression` → `npm run verify-local` を通してから公開（push）する。
    c. 新版が出ていなければ、上記2の仕組みにより次回ビルドで自動的に理由付き除外される。除外後に当該県を`--force`で再ビルド・公開すれば、期限切れデータを使わずに済む（検索結果からは当該事業者が消えるが、ビルド自体は失敗にならない）。
    d. いずれの場合も、再ビルド後は必ずフル検証（bundle/verify-render/verify-regression/verify-local）を通してから公開すること。
-4. **2026-10-06時点の状況**：立山町営バス（`tateyamatown.tateyama`、`feed_end_date=20261010`）はこの日時点でgtfs-data.jpに新版なし。2026-10-11以降に上記3を実施すること。
+4. **2026-10-13時点の状況**：立山町営バス（`tateyamatown.tateyama`）は2026-10-13に新版（`feed_version=2026/10/13改正-見える化ver2.6e`、`feed_start_date=20261013`、`feed_end_date=20270331`）で再ビルド・公開済み。**次にこのフィードの期限切れに注意すべき日は2027-03-31。**
+   なお、この再ビルドで路線数が26→4、停留所数が121→52に減ったが、生のGTFSファイル（routes.txt・stops.txt等）を新旧直接比較し、新版で新規追加された停留所が0件・「stops.txtにはあるが代表日に走る便がない」という中間状態も0件であることを確認済み（解析側の不具合ではなく、町の実際のダイヤ改正による路線縮小。詳細はgit logの該当コミット参照）。
