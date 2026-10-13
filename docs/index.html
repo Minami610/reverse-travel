@@ -4506,7 +4506,7 @@ class ReverseTravel {
           <li>
             <strong>${publisher}</strong>（${feed.source_category_label}）
             <span class="feed-meta">公開元サイト：${publisherLink}</span>
-            <span class="feed-meta">フィード版：${feed.feed_version || '不明'} ／ 対象期間：${period}</span>
+            <span class="feed-meta">フィード版：${formatFeedVersionShort(feed.feed_version, feed.feed_start_date, feed.feed_end_date)} ／ 対象期間：${period}</span>
             <span class="feed-meta">取得日：${fetchedAt} ／ ライセンス：${licenseText}</span>
           </li>
         `;
@@ -5650,6 +5650,39 @@ class ReverseTravel {
 function formatGtfsDate(yyyymmdd) {
   if (!yyyymmdd || yyyymmdd.length !== 8) return yyyymmdd || '不明';
   return `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
+}
+
+/**
+ * 【2026-10-13、18本目、Minami決定：A】出典画面の「フィード版」を短く表示する。
+ * GTFS変換ソフト「その筋屋」が付与する利用条件の注意書き（日本バス情報協会の
+ * 関係者・支持者は利用禁止、CCライセンスでの登録禁止、等）が、一部の事業者の
+ * feed_versionにそのまま含まれていることがある（対象7件、詳細はCLAUDE.md
+ * 「その筋屋の注意書きの扱い」参照）。データは使い続けると判断したが、画面には
+ * 原文を出さず日付（＋改正と分かる語があればそれ）だけを短く示す。
+ * data-sources.json自体のfeed_versionは変更しない（表示だけで短くする）。
+ *
+ * 抽出規則（日付が取れない場合は対象期間にフォールバック）：
+ * 1. 先頭が「YYYY/MM/DD」（GTFS出力日時の形式）→ その日付をそのまま使う
+ * 2. 文中に「YYYY年MM月DD日」（その筋屋の説明欄の形式）→ その日付を使う
+ * 3. どちらにも一致しなければ、feed_start_date〜feed_end_date（対象期間）を表示する
+ * 日付が取れた場合、feed_version中に「改正」の語があれば末尾に付ける
+ * （「運賃改定」等、"改正"を含まない語は付けない＝原文の言い回しを増幅しない）。
+ */
+function formatFeedVersionShort(feedVersion, startDate, endDate) {
+  if (feedVersion) {
+    const slashMatch = feedVersion.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+    const kanjiMatch = !slashMatch && feedVersion.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+    const m = slashMatch || kanjiMatch;
+    if (m) {
+      const [, y, mo, d] = m;
+      const dateStr = `${y}/${mo.padStart(2, '0')}/${d.padStart(2, '0')}`;
+      return feedVersion.includes('改正') ? `${dateStr}改正` : dateStr;
+    }
+  }
+  if (startDate && endDate) {
+    return `${formatGtfsDate(startDate)}〜${formatGtfsDate(endDate)}`;
+  }
+  return feedVersion || '不明';
 }
 
 /**

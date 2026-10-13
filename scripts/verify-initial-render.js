@@ -1977,6 +1977,153 @@ async function checkFrequencyDisplayLogic() {
 }
 
 /**
+ * main.jsのformatFeedVersionShort()と同じ組み立て規則をこのテストファイル側に
+ * 再実装したもの（buildExpectedCoverageText()と同じ考え方：ハードコードした
+ * 期待文字列ではなく、実データに対して独立に計算した期待値と比較する）。
+ */
+function buildExpectedFeedVersionShort(feedVersion, startDate, endDate) {
+  if (feedVersion) {
+    const slashMatch = feedVersion.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+    const kanjiMatch = !slashMatch && feedVersion.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+    const m = slashMatch || kanjiMatch;
+    if (m) {
+      const [, y, mo, d] = m;
+      const dateStr = `${y}/${mo.padStart(2, '0')}/${d.padStart(2, '0')}`;
+      return feedVersion.includes('改正') ? `${dateStr}改正` : dateStr;
+    }
+  }
+  if (startDate && endDate) {
+    const fmt = (yyyymmdd) => (yyyymmdd && yyyymmdd.length === 8
+      ? `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`
+      : yyyymmdd || '不明');
+    return `${fmt(startDate)}〜${fmt(endDate)}`;
+  }
+  return feedVersion || '不明';
+}
+
+/**
+ * 【2026-10-13、18本目、Minami決定：A】出典画面の「フィード版」短縮表示の検証。
+ * GTFS変換ソフト「その筋屋」の利用条件の注意書き（日本バス情報協会の関係者・
+ * 支持者は利用禁止、CCライセンスでの登録禁止、等）が一部の事業者の
+ * feed_versionにそのまま含まれている（対象7件、CLAUDE.md「その筋屋の
+ * 注意書きの扱い」参照）。データは使い続けるが、画面には原文を出さない。
+ * 1) 合成データで3通り（注意書きつき／日付だけ／日付なし→対象期間）を確認
+ * 2) 実際の#about-feed-listの描画に、既知の注意書き文言が1件も残っていないこと、
+ *    各行の表示が独立再実装した期待値と一致することを、実データ全件で確認
+ */
+async function checkFeedVersionShortening(html) {
+  console.log('\n=== 出典画面「フィード版」短縮表示の検証（18本目） ===');
+  let ok = true;
+
+  // 1) 合成データでの3パターン
+  const syntheticCases = [
+    {
+      label: '注意書きつき（その筋屋、GTFS出力日時形式）',
+      feedVersion: '2026/07/13 17:12:12 （GTFS出力日時） 付加情報：20240401_2024年04月01日（小矢部市営バス） その筋屋 2.510【日本バス情報協会の関係者・支持者は利用禁止。GTFSデータリポジトリへのCCライセンスでの登録禁止】 https://gtfs-jp.org/bus/',
+      start: '20260401', end: '20270331',
+      expected: '2026/07/13',
+    },
+    {
+      label: '日付だけ（改正の語あり、その筋屋の説明欄形式）',
+      feedVersion: '20260316_2026年03月16日（R8.3めぐーる改正） その筋屋 1.664',
+      start: '20260316', end: '20270315',
+      expected: '2026/03/16改正',
+    },
+    {
+      label: '日付なし→対象期間にフォールバック',
+      feedVersion: 'ことでんバス_20261001-20270331',
+      start: '20261001', end: '20270331',
+      expected: '2026-10-01〜2027-03-31',
+    },
+  ];
+  for (const c of syntheticCases) {
+    const actual = buildExpectedFeedVersionShort(c.feedVersion, c.start, c.end);
+    const pass = actual === c.expected;
+    ok = ok && pass;
+    console.log(pass
+      ? `✅ ${c.label} → "${actual}"`
+      : `❌ ${c.label}：期待"${c.expected}" 実際"${actual}"`);
+  }
+
+  // 2) 実データ・実際の描画での確認
+  const dataSourcesPath = path.join(docsDir, 'data/national/data-sources.json');
+  if (!fs.existsSync(dataSourcesPath)) {
+    console.log('❌ docs/data/national/data-sources.json が見つかりません');
+    return false;
+  }
+  const manifest = JSON.parse(fs.readFileSync(dataSourcesPath, 'utf-8'));
+  const feeds = manifest.feeds || [];
+  if (feeds.length === 0) {
+    console.log('❌ data-sources.json にfeedsがありません');
+    return false;
+  }
+
+  const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'dangerously', pretendToBeVisual: true });
+  const { window } = dom;
+  stubMatchMedia(window, true);
+  stubFetch(window);
+  await new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 50);
+    if (window.document.readyState === 'complete') done();
+    else window.addEventListener('load', done);
+  });
+  const doc = window.document;
+  await waitFor(() => !/読み込み中/.test(doc.getElementById('app-footer')?.textContent || ''), 5000);
+  doc.getElementById('about-data-btn')?.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await waitFor(() => (doc.getElementById('about-feed-list')?.querySelectorAll('li').length || 0) > 0, 5000);
+
+  const listItems = [...doc.querySelectorAll('#about-feed-list li')];
+  const listText = doc.getElementById('about-feed-list')?.textContent || '';
+
+  // 既知の注意書き文言が1件も残っていないこと（原文を変えたわけではなく、
+  // 表示だけ短くする方針のため、これが唯一の「漏れていないか」の検出手段）
+  const disclaimerPhrases = ['その筋屋', '日本バス情報協会', '利用禁止', '登録禁止'];
+  const leakedPhrases = disclaimerPhrases.filter((p) => listText.includes(p));
+  const noLeak = leakedPhrases.length === 0;
+  ok = ok && noLeak;
+  console.log(noLeak
+    ? '✅ 出典一覧に「その筋屋」の注意書き文言が残っていない'
+    : `❌ 出典一覧に注意書き文言が残っている: ${leakedPhrases.join('、')}`);
+
+  // listItemsはmanifest.feedsと同じ順序で描画される（populateDataSources()が
+  // feeds.map()でそのまま組み立てるため）。件数が一致することも併せて確認する。
+  const countOk = listItems.length === feeds.length;
+  ok = ok && countOk;
+  console.log(countOk
+    ? `✅ 出典一覧の件数（${listItems.length}）がfeeds件数と一致`
+    : `❌ 出典一覧の件数（${listItems.length}）がfeeds件数（${feeds.length}）と不一致`);
+
+  if (countOk) {
+    let mismatchCount = 0;
+    const table = [];
+    for (let i = 0; i < feeds.length; i++) {
+      const feed = feeds[i];
+      const expected = buildExpectedFeedVersionShort(feed.feed_version, feed.feed_start_date, feed.feed_end_date);
+      const itemText = listItems[i].textContent;
+      const rendered = itemText.includes(`フィード版：${expected} ／`);
+      if (!rendered) mismatchCount += 1;
+      const isKnownDisclaimerFeed = disclaimerPhrases.some((p) => (feed.feed_version || '').includes(p));
+      if (isKnownDisclaimerFeed || mismatchCount > 0 && table.length < 20) {
+        table.push({ operator: feed.operator_id, expected, rendered });
+      }
+    }
+    ok = ok && mismatchCount === 0;
+    console.log(mismatchCount === 0
+      ? `✅ 全${feeds.length}件のフィード版表示が、独立再計算した期待値と一致`
+      : `❌ ${mismatchCount}件のフィード版表示が期待値と不一致`);
+    if (table.length > 0) {
+      console.log('  （注意書き対象・不一致ぶんの詳細）');
+      for (const row of table) {
+        console.log(`   - ${row.operator}: 期待"${row.expected}" 一致=${row.rendered}`);
+      }
+    }
+  }
+
+  window.close();
+  return ok;
+}
+
+/**
  * 共有文（favorites.jsのbuildSpotShareText）が、市町村名の有無・便数情報の有無で
  * 正しく文面を組み立てる／省略することを確認する（2026-10-10、Minami指示：
  * 「市町村が無いときは括弧ごと省く」）。
@@ -2100,6 +2247,7 @@ async function main() {
   const frequencyDisplayLogicOk = await checkFrequencyDisplayLogic();
   const shareTextMunicipalityOk = await checkShareTextMunicipalityAndFrequency();
   const operatorClassificationOk = await checkOperatorClassification();
+  const feedVersionShorteningOk = await checkFeedVersionShortening(html);
 
   if (
     publishedOk && desktopOk && mobileOk && cardsOk && loadingStateOk && transferDisplayOk &&
@@ -2107,7 +2255,7 @@ async function main() {
     searchButtonStateOk && favoritesStorageOk && favoriteCardToggleOk && sharedSpotBandBypassOk &&
     sharedSpotSidMismatchOk && sharedSpotAmbiguousNameOk && sharedListMixedDepartureOk &&
     serviceFrequencyComputationOk && frequencyDisplayLogicOk && shareTextMunicipalityOk &&
-    operatorClassificationOk
+    operatorClassificationOk && feedVersionShorteningOk
   ) {
     console.log('\n✅ 検証成功: 初期表示・検索結果カードともに想定通りです');
   } else {
