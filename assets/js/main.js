@@ -9,7 +9,7 @@ import { SpotFinder } from './spot-finder.js';
 import { RouteFormatter } from './route-formatter.js';
 import { estimateTripFrequency, formatDayLabel, operatorLabelWord, sameRouteWord } from './route-duration.js';
 import { buildOnwardCandidates } from './onward-candidates.js';
-import { MapView, isFiniteNumber } from './map-view.js';
+import { MapView, isFiniteNumber, formatReachRadiusKm } from './map-view.js';
 import { isWebglLikelySupported, loadTerrainModule, preloadTerrainModuleWhenIdle } from './terrain-loader.js';
 import { LayoutController } from './layout-controller.js';
 import {
@@ -169,6 +169,7 @@ class ReverseTravel {
       mobileBudgetDecrement: document.getElementById('mobile-budget-decrement'),
       mobileBudgetIncrement: document.getElementById('mobile-budget-increment'),
       mobileBudgetSearchBtn: document.getElementById('mobile-budget-search-btn'),
+      mobileBudgetDistance: document.getElementById('mobile-budget-distance'),
       budgetIncrement: document.getElementById('budget-increment'),
       searchBtn: document.getElementById('search-btn'),
       appLayout: document.getElementById('app-layout'),
@@ -635,29 +636,45 @@ class ReverseTravel {
    * 【2026-10-13、22本目、Minami決定：B】地図下の予算操作帯の「¥800・16件」
    * 表示。まだこの金額で検索していない（#budget-inputの値が直近の検索条件と
    * 違う）間は「¥900で探す」のような押せる見た目のボタンに変える。
-   * 上の要約バー（「富山駅前・往復¥800　▼条件を変える」）の金額も、操作に
-   * 合わせてその場で変える（Minami指示。検索してからでないと反映されない
-   * のでは「操作に合わせて変える」ことにならないため）。
+   * 【2026-10-14、25本目、Minami決定：B】地図上の「最大◯km先まで」ラベルを
+   * 廃止した代わりに、ここへ距離を出す。検索済みのときはボタンの文言自体に
+   * 「・最大◯km」を含める。まだ検索していない（スライダーを動かした直後）
+   * ときは、ボタンは「¥◯で探す」のまま変えず、別のspan（#mobile-budget-
+   * distance）に「最大◯km」とだけ出す（動かすたびに変わる）。
+   * 【不具合修正】以前はここで上の要約バー（#search-summary-text）の金額も
+   * その場で書き換えていたが、これだと一覧タブの見出し（「往復¥◯〜¥◯で
+   * 行ける場所」、最後に検索した金額のまま）と食い違う（Cowork指摘）。
+   * 要約バーは「最後に検索した条件」を表す場所なので、ここでは触らない
+   * （検索確定時はdisplayResults()が別途updateSearchSummaryText()を呼ぶ）。
    */
   updateMobileBudgetOverlay(budget) {
     const btn = this.elements.mobileBudgetSearchBtn;
-    if (btn) {
-      const pending = this.lastSearchedBudget !== null && budget !== this.lastSearchedBudget;
-      if (pending) {
-        btn.textContent = `¥${formatThousands(budget)}で探す`;
-        btn.classList.add('mobile-budget-search-btn-pending');
-      } else {
-        const count = this.currentAllSpots?.length
-          ? this.filterBandFromAllSpots(this.currentAllSpots, budget).bandSpots.length
-          : 0;
-        btn.textContent = `¥${formatThousands(budget)}・${count}件`;
-        btn.classList.remove('mobile-budget-search-btn-pending');
+    const distanceEl = this.elements.mobileBudgetDistance;
+    if (!btn) return;
+    const pending = this.lastSearchedBudget !== null && budget !== this.lastSearchedBudget;
+    const radiusKm = this.mapView.computeReachRadiusKm(budget);
+    const distanceText = `最大${formatReachRadiusKm(radiusKm)}`;
+    if (pending) {
+      btn.textContent = `¥${formatThousands(budget)}で探す`;
+      btn.classList.add('mobile-budget-search-btn-pending');
+      if (distanceEl) {
+        distanceEl.textContent = distanceText;
+        distanceEl.hidden = false;
+      }
+    } else {
+      const count = this.currentAllSpots?.length
+        ? this.filterBandFromAllSpots(this.currentAllSpots, budget).bandSpots.length
+        : 0;
+      // 【25本目】375px幅でも1行に収まるよう、まず件数込みの文言を試し、
+      // はみ出す（scrollWidth>clientWidth）場合だけ件数を落として距離を残す
+      // （Minami指示：「収まらないときは件数より距離を優先する」）。
+      btn.classList.remove('mobile-budget-search-btn-pending');
+      if (distanceEl) distanceEl.hidden = true;
+      btn.textContent = `¥${formatThousands(budget)}・${count}件・${distanceText}`;
+      if (btn.scrollWidth > btn.clientWidth + 1) {
+        btn.textContent = `¥${formatThousands(budget)}・${distanceText}`;
       }
     }
-    // 要約バーはまだ一度も検索していない間は出ていない（hidden）ため、
-    // その間はテキストを更新しない（更新しても見えないが、念のため早期returnする）。
-    if (this.lastSearchedBudget === null) return;
-    this.updateSearchSummaryText(this.currentDepartureStationId, budget);
   }
 
   /**
@@ -698,7 +715,12 @@ class ReverseTravel {
       return;
     }
     el.hidden = false;
-    el.textContent = `往復¥${formatThousands(budget - BAND_WIDTH + 1)}〜¥${formatThousands(budget)}で行ける場所 ${count}件`;
+    // 【2026-10-14、25本目、Minami決定：B】地図上の「最大◯km先まで」ラベルを
+    // 廃止した代わりに、PCのこのプレビュー文言の末尾に出す。スライダーに
+    // 合わせて変わる（呼び出し元のupdateMapBudgetLive()がスライダー操作の
+    // たびに呼ぶため）。
+    const radiusKm = this.mapView.computeReachRadiusKm(budget);
+    el.textContent = `往復¥${formatThousands(budget - BAND_WIDTH + 1)}〜¥${formatThousands(budget)}で行ける場所 ${count}件・最大${formatReachRadiusKm(radiusKm)}先まで`;
   }
 
   /**
@@ -1225,7 +1247,6 @@ class ReverseTravel {
     // 【2026-10-13、22本目、Minami決定：B】スマホの予算操作帯も、要約バーと
     // 同じく初回検索で初めてhidden属性を外す（以降は常に出し続ける）。
     if (this.elements.mobileBudgetOverlay) this.elements.mobileBudgetOverlay.hidden = false;
-    this.updateMobileBudgetOverlay(budget);
 
     // 【2026-10-13、10本目②】「この条件で検索」を押した結果の表示なので、
     // 出発駅から近い順に点が波のように広がって出る演出を行う（Minami指示）。
@@ -1239,6 +1260,12 @@ class ReverseTravel {
       this.terrainMapView.fitToBudget(budget);
     }
 
+    // 【2026-10-14、25本目、不具合修正】updateMobileBudgetOverlay()・
+    // updateBudgetBandPreview()はどちらもthis.mapView.computeReachRadiusKm()
+    // （mapView._lastSpots・departureLatLngを参照）で距離を出すため、
+    // 必ずmapView.render()のあとに呼ぶ。以前はrender()より前に呼んでおり、
+    // 検索直後だけ前回の検索結果の距離を一瞬表示してしまっていた。
+    this.updateMobileBudgetOverlay(budget);
     this.updateBudgetBandPreview(budget, spots.length);
 
     // 起動時点では出発駅が無く3Dを開始できなかったため、最初の検索結果が

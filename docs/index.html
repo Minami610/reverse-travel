@@ -1515,8 +1515,30 @@ header p {
   min-width: 0;
 }
 
+/* 【2026-10-14、25本目】地図上の「最大◯km先まで」ラベル廃止の代わりに、
+   スライダーを動かしている間だけ距離を出す小さな文字（main.js参照）。
+   検索ボタンと違って押せないため、縮むだけで伸びない・省略もしない
+   （「375pxでも1行に収まるよう…収まらないときは件数より距離を優先する」
+   というMinami指示により、距離側は最後まで隠さない）。 */
+#mobile-budget-distance {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--color-text-sub);
+  white-space: nowrap;
+}
+
+/* 【2026-10-14、25本目、不具合修正】flex-shrink:1のままだと、距離表示
+   （#mobile-budget-distance）が増えた分だけスライダー・このボタン双方が
+   圧縮を分け合い、375px幅では「¥1,000で探す」という最小限の文言すら
+   収まらず省略記号で切れることが実測で判明した（scrollWidth92px>
+   clientWidth78px）。ボタンの文言は押せる操作の案内文であり省略されては
+   困るため、flex-shrink:0にしてボタンは縮めず、伸び縮みしてよい
+   スライダー側だけで調整する（max-width:45%は、それでもなお収まらない
+   極端なケースの保険として残す）。 */
 #mobile-budget-search-btn {
   flex-shrink: 0;
+  min-width: 0;
   max-width: 45%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1728,25 +1750,6 @@ header p {
 
 .map-departure-tooltip::before {
   border-top-color: var(--color-accent-deep);
-}
-
-/* 【2026-10-14、10本目②】予算の到達範囲の円のラベル（2D・3D共通の見た目）。
-   オレンジの点より目立たない青系にする（Minami指示）。 */
-.reach-circle-label {
-  background-color: rgba(47, 111, 178, 0.88);
-  color: white;
-  border: none;
-  font-weight: 600;
-  font-size: 0.75rem;
-  padding: 0.15rem 0.5rem;
-  border-radius: 4px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-  white-space: nowrap;
-  pointer-events: none;
-}
-
-.reach-circle-label::before {
-  display: none; /* Leafletの吹き出し用の三角形は不要（円のラベルなので） */
 }
 
 /* 【2026-10-14、10本目②】検索を押した直後、出発駅から近い順に点が波のように
@@ -3028,6 +3031,13 @@ header p {
           aria-label="予算（往復）をスライダーで変更"
         >
         <button type="button" id="mobile-budget-increment" aria-label="予算を100円増やす">＋</button>
+        <!-- 【2026-10-14、25本目、Minami決定：B】地図の上の「最大◯km先まで」
+             ラベルを廃止した代わりに、この帯に距離を出す。まだこの金額で
+             検索していない（ボタンが「¥◯で探す」のとき）だけ表示し、
+             動かすたびに変わる（main.jsのupdateMobileBudgetOverlay()参照）。
+             検索済みのときはボタン自体の文言に「・最大◯km」を含めるため
+             このspanは隠す。 -->
+        <span id="mobile-budget-distance" hidden></span>
         <button type="button" id="mobile-budget-search-btn"></button>
       </div>
     </div>
@@ -4470,7 +4480,6 @@ const MAP_BAND_WIDTH = 200;
 // 【2026-10-13、10本目②】予算の到達範囲の円・波の演出用の定数・関数。
 // 同じ理由（バンドル後は同一スクリプトスコープ）で、他ファイル（onward-candidates.js
 // 等）の同種の関数と衝突しない名前にしている。
-const REACH_CIRCLE_LABEL_BEARING = 45; // ラベルを置く方位角（出発駅の吹き出しと重ならない向き）
 const WAVE_DURATION_MS = 1000; // Minami指示：検索後、点を波のように出す所要時間（全体で1秒前後）
 // 【2026-10-13、12本目①】選んだピンが下の情報帯（高さ40px前後）に隠れないよう、
 // 地図をずらす量（px）。帯はスマホでは地図下端から48px浮かせて出すため
@@ -4490,19 +4499,9 @@ function reachHaversineKm(lat1, lon1, lat2, lon2) {
   return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
-function reachDestinationPoint(lat, lon, bearingDeg, distanceKm) {
-  const delta = distanceKm / EARTH_RADIUS_KM;
-  const theta = toRadReach(bearingDeg);
-  const phi1 = toRadReach(lat);
-  const lambda1 = toRadReach(lon);
-  const phi2 = Math.asin(Math.sin(phi1) * Math.cos(delta) + Math.cos(phi1) * Math.sin(delta) * Math.cos(theta));
-  const lambda2 = lambda1 + Math.atan2(
-    Math.sin(theta) * Math.sin(delta) * Math.cos(phi1),
-    Math.cos(delta) - Math.sin(phi1) * Math.sin(phi2)
-  );
-  return { lat: toDegReach(phi2), lon: toDegReach(lambda2) };
-}
-
+/** 到達円の半径表記（例: 0.8km, 12km）。10km未満は小数第1位まで、以上は整数に丸める。
+ * 【2026-10-14、25本目】地図上のラベルを廃止し、main.jsのスマホ予算操作帯・PCの
+ * 帯件数プレビューで距離を出すため、main.jsからimportして使えるようexportする。 */
 function formatReachRadiusKm(km) {
   if (!(km > 0)) return '0km';
   return km < 10 ? `${Math.round(km * 10) / 10}km` : `${Math.round(km)}km`;
@@ -4526,7 +4525,6 @@ class MapView {
     this._lastSpots = []; // 【2026-10-13、10本目②】到達円の半径計算用（出発駅からの距離はここから出す）
     this._departureStation = null;
     this._reachCircle = null;
-    this._reachCircleLabel = null;
     this._reachCircleRadiusKm = 0;
     this._circlePaintScheduled = false;
     this._pendingCircleRadiusKm = null;
@@ -4870,16 +4868,7 @@ class MapView {
    * @param {{style?: 'live'|'settled'}} [opts] - settled:検索確定後（薄くする）
    */
   updateReachCircle(budget, { style = 'live' } = {}) {
-    if (!this.departureLatLng || !this._lastSpots || this._lastSpots.length === 0) {
-      this._pendingCircleRadiusKm = 0;
-    } else {
-      const [lat, lon] = this.departureLatLng;
-      this._pendingCircleRadiusKm = this._lastSpots.reduce((max, s) => {
-        if (!isFiniteNumber(s.latitude) || !isFiniteNumber(s.longitude)) return max;
-        if (s.source_round_trip_fare > budget) return max;
-        return Math.max(max, reachHaversineKm(lat, lon, s.latitude, s.longitude));
-      }, 0);
-    }
+    this._pendingCircleRadiusKm = this.computeReachRadiusKm(budget);
     this._pendingCircleStyle = style;
     if (this._circlePaintScheduled) return;
     this._circlePaintScheduled = true;
@@ -4889,12 +4878,29 @@ class MapView {
     });
   }
 
+  /**
+   * 【2026-10-14、25本目】指定した予算以内で一番遠い場所までの直線距離（km）。
+   * 円の半径そのものの計算で、地図上のラベルを廃止した代わりに
+   * main.jsがスマホの予算操作帯・PCの帯件数プレビューの距離表示に使う
+   * （円の描画と同じ値を使うことで、見た目の円と数字が必ず一致する）。
+   * @param {number} budget
+   * @returns {number}
+   */
+  computeReachRadiusKm(budget) {
+    if (!this.departureLatLng || !this._lastSpots || this._lastSpots.length === 0) return 0;
+    const [lat, lon] = this.departureLatLng;
+    return this._lastSpots.reduce((max, s) => {
+      if (!isFiniteNumber(s.latitude) || !isFiniteNumber(s.longitude)) return max;
+      if (s.source_round_trip_fare > budget) return max;
+      return Math.max(max, reachHaversineKm(lat, lon, s.latitude, s.longitude));
+    }, 0);
+  }
+
   _paintReachCircle(radiusKm, style) {
     this.ensureMap();
-    this._reachCircleRadiusKm = radiusKm; // 検証用（verify-layout.js参照）
+    this._reachCircleRadiusKm = radiusKm; // 検証用（verify-layout.js参照）・スマホ予算操作帯の距離表示
     if (!this.map || !radiusKm || radiusKm <= 0 || !this.departureLatLng) {
       if (this._reachCircle) { this.map?.removeLayer(this._reachCircle); this._reachCircle = null; }
-      if (this._reachCircleLabel) { this.map?.removeLayer(this._reachCircleLabel); this._reachCircleLabel = null; }
       return;
     }
     // 【不具合修正、22本目】スマホで「一覧」タブを見ている間（#spots-mapが
@@ -4919,21 +4925,6 @@ class MapView {
       this._reachCircle.setRadius(radiusMeters);
       this._reachCircle.setStyle(opts);
     }
-
-    const edge = reachDestinationPoint(this.departureLatLng[0], this.departureLatLng[1], REACH_CIRCLE_LABEL_BEARING, radiusKm);
-    const labelLatLng = [edge.lat, edge.lon];
-    if (!this._reachCircleLabel) {
-      this._reachCircleLabel = L.marker(labelLatLng, {
-        icon: L.divIcon({ className: 'reach-circle-label-anchor', html: '', iconSize: [0, 0] }),
-        interactive: false,
-        zIndexOffset: -1000,
-      })
-        .addTo(this.map)
-        .bindTooltip('', { permanent: true, direction: 'center', className: 'reach-circle-label' });
-    } else {
-      this._reachCircleLabel.setLatLng(labelLatLng);
-    }
-    this._reachCircleLabel.setTooltipContent(`最大${formatReachRadiusKm(radiusKm)}先まで`);
   }
 
   /**
@@ -5869,6 +5860,7 @@ class ReverseTravel {
       mobileBudgetDecrement: document.getElementById('mobile-budget-decrement'),
       mobileBudgetIncrement: document.getElementById('mobile-budget-increment'),
       mobileBudgetSearchBtn: document.getElementById('mobile-budget-search-btn'),
+      mobileBudgetDistance: document.getElementById('mobile-budget-distance'),
       budgetIncrement: document.getElementById('budget-increment'),
       searchBtn: document.getElementById('search-btn'),
       appLayout: document.getElementById('app-layout'),
@@ -6335,29 +6327,45 @@ class ReverseTravel {
    * 【2026-10-13、22本目、Minami決定：B】地図下の予算操作帯の「¥800・16件」
    * 表示。まだこの金額で検索していない（#budget-inputの値が直近の検索条件と
    * 違う）間は「¥900で探す」のような押せる見た目のボタンに変える。
-   * 上の要約バー（「富山駅前・往復¥800　▼条件を変える」）の金額も、操作に
-   * 合わせてその場で変える（Minami指示。検索してからでないと反映されない
-   * のでは「操作に合わせて変える」ことにならないため）。
+   * 【2026-10-14、25本目、Minami決定：B】地図上の「最大◯km先まで」ラベルを
+   * 廃止した代わりに、ここへ距離を出す。検索済みのときはボタンの文言自体に
+   * 「・最大◯km」を含める。まだ検索していない（スライダーを動かした直後）
+   * ときは、ボタンは「¥◯で探す」のまま変えず、別のspan（#mobile-budget-
+   * distance）に「最大◯km」とだけ出す（動かすたびに変わる）。
+   * 【不具合修正】以前はここで上の要約バー（#search-summary-text）の金額も
+   * その場で書き換えていたが、これだと一覧タブの見出し（「往復¥◯〜¥◯で
+   * 行ける場所」、最後に検索した金額のまま）と食い違う（Cowork指摘）。
+   * 要約バーは「最後に検索した条件」を表す場所なので、ここでは触らない
+   * （検索確定時はdisplayResults()が別途updateSearchSummaryText()を呼ぶ）。
    */
   updateMobileBudgetOverlay(budget) {
     const btn = this.elements.mobileBudgetSearchBtn;
-    if (btn) {
-      const pending = this.lastSearchedBudget !== null && budget !== this.lastSearchedBudget;
-      if (pending) {
-        btn.textContent = `¥${formatThousands(budget)}で探す`;
-        btn.classList.add('mobile-budget-search-btn-pending');
-      } else {
-        const count = this.currentAllSpots?.length
-          ? this.filterBandFromAllSpots(this.currentAllSpots, budget).bandSpots.length
-          : 0;
-        btn.textContent = `¥${formatThousands(budget)}・${count}件`;
-        btn.classList.remove('mobile-budget-search-btn-pending');
+    const distanceEl = this.elements.mobileBudgetDistance;
+    if (!btn) return;
+    const pending = this.lastSearchedBudget !== null && budget !== this.lastSearchedBudget;
+    const radiusKm = this.mapView.computeReachRadiusKm(budget);
+    const distanceText = `最大${formatReachRadiusKm(radiusKm)}`;
+    if (pending) {
+      btn.textContent = `¥${formatThousands(budget)}で探す`;
+      btn.classList.add('mobile-budget-search-btn-pending');
+      if (distanceEl) {
+        distanceEl.textContent = distanceText;
+        distanceEl.hidden = false;
+      }
+    } else {
+      const count = this.currentAllSpots?.length
+        ? this.filterBandFromAllSpots(this.currentAllSpots, budget).bandSpots.length
+        : 0;
+      // 【25本目】375px幅でも1行に収まるよう、まず件数込みの文言を試し、
+      // はみ出す（scrollWidth>clientWidth）場合だけ件数を落として距離を残す
+      // （Minami指示：「収まらないときは件数より距離を優先する」）。
+      btn.classList.remove('mobile-budget-search-btn-pending');
+      if (distanceEl) distanceEl.hidden = true;
+      btn.textContent = `¥${formatThousands(budget)}・${count}件・${distanceText}`;
+      if (btn.scrollWidth > btn.clientWidth + 1) {
+        btn.textContent = `¥${formatThousands(budget)}・${distanceText}`;
       }
     }
-    // 要約バーはまだ一度も検索していない間は出ていない（hidden）ため、
-    // その間はテキストを更新しない（更新しても見えないが、念のため早期returnする）。
-    if (this.lastSearchedBudget === null) return;
-    this.updateSearchSummaryText(this.currentDepartureStationId, budget);
   }
 
   /**
@@ -6398,7 +6406,12 @@ class ReverseTravel {
       return;
     }
     el.hidden = false;
-    el.textContent = `往復¥${formatThousands(budget - BAND_WIDTH + 1)}〜¥${formatThousands(budget)}で行ける場所 ${count}件`;
+    // 【2026-10-14、25本目、Minami決定：B】地図上の「最大◯km先まで」ラベルを
+    // 廃止した代わりに、PCのこのプレビュー文言の末尾に出す。スライダーに
+    // 合わせて変わる（呼び出し元のupdateMapBudgetLive()がスライダー操作の
+    // たびに呼ぶため）。
+    const radiusKm = this.mapView.computeReachRadiusKm(budget);
+    el.textContent = `往復¥${formatThousands(budget - BAND_WIDTH + 1)}〜¥${formatThousands(budget)}で行ける場所 ${count}件・最大${formatReachRadiusKm(radiusKm)}先まで`;
   }
 
   /**
@@ -6925,7 +6938,6 @@ class ReverseTravel {
     // 【2026-10-13、22本目、Minami決定：B】スマホの予算操作帯も、要約バーと
     // 同じく初回検索で初めてhidden属性を外す（以降は常に出し続ける）。
     if (this.elements.mobileBudgetOverlay) this.elements.mobileBudgetOverlay.hidden = false;
-    this.updateMobileBudgetOverlay(budget);
 
     // 【2026-10-13、10本目②】「この条件で検索」を押した結果の表示なので、
     // 出発駅から近い順に点が波のように広がって出る演出を行う（Minami指示）。
@@ -6939,6 +6951,12 @@ class ReverseTravel {
       this.terrainMapView.fitToBudget(budget);
     }
 
+    // 【2026-10-14、25本目、不具合修正】updateMobileBudgetOverlay()・
+    // updateBudgetBandPreview()はどちらもthis.mapView.computeReachRadiusKm()
+    // （mapView._lastSpots・departureLatLngを参照）で距離を出すため、
+    // 必ずmapView.render()のあとに呼ぶ。以前はrender()より前に呼んでおり、
+    // 検索直後だけ前回の検索結果の距離を一瞬表示してしまっていた。
+    this.updateMobileBudgetOverlay(budget);
     this.updateBudgetBandPreview(budget, spots.length);
 
     // 起動時点では出発駅が無く3Dを開始できなかったため、最初の検索結果が

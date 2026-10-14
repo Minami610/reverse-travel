@@ -179,13 +179,21 @@ async function waitForWaveRevealSettled(page, { timeout = 3000, interval = 100 }
  * 【22本目】要素のscrollTo({behavior:'smooth'})アニメーションが終わる
  * （scrollTopが2回連続で同じ値になる）まで待つ。固定時間待ちだと、
  * アニメーション途中のscrollTopを基準に「表示範囲内か」を誤判定しうる。
+ * 【25本目、不具合修正】フルスイート実行時の負荷が高いと、クリック
+ * ハンドラ（setSelected→highlightCard→scrollSelectedCardIntoView→
+ * list.scrollTo()）の実行自体がイベント発火から遅れることがあり、
+ * 最初の2回の計測（0ms・100ms時点）がどちらも「スクロールが始まる前の
+ * 古い値」のまま一致してしまい、実際にはこれから動くスクロールを
+ * 「もう静止した」と誤判定して即returnしていた（PC/2Dで選んだカードが
+ * 画面内に入らないまま終わる不具合として再現。1回のreadで安定判定しない、
+ * 最低でもminDuration経過するまでは判定しないようにして直した）。
  */
-async function waitForScrollSettled(page, selector, { timeout = 3000, interval = 100 } = {}) {
+async function waitForScrollSettled(page, selector, { timeout = 3000, interval = 100, minDuration = 400 } = {}) {
   let last = null;
   const start = Date.now();
   while (Date.now() - start < timeout) {
     const current = await page.evaluate((sel) => document.querySelector(sel)?.scrollTop, selector);
-    if (current === last) return;
+    if (current === last && Date.now() - start >= minDuration) return;
     last = current;
     await page.waitForTimeout(interval);
   }
@@ -799,7 +807,9 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
       }, budget);
       await page.waitForTimeout(150);
       const previewText = await page.locator('#budget-band-preview').textContent();
-      const sliderCountMatch = previewText.match(/(\d+)件$/);
+      // 【25本目①、不具合修正】末尾に「・最大◯km先まで」が付くようになったため、
+      // 件数は文字列の末尾ではなく「件」の前の数字を見る。
+      const sliderCountMatch = previewText.match(/(\d+)件/);
       const sliderCount = sliderCountMatch ? parseInt(sliderCountMatch[1], 10) : null;
 
       record(
@@ -876,6 +886,7 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
         circleKm: mv._reachCircleRadiusKm,
       };
     });
+    const previewBeforeDragText = await page.locator('#budget-band-preview').textContent();
     await page.evaluate(() => {
       const el = document.getElementById('budget-slider');
       el.value = 2000;
@@ -906,6 +917,22 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
       markersDuringDrag.circleKm > markersBeforeDrag.circleKm,
       `変更前${markersBeforeDrag.circleKm}km → ドラッグ中${markersDuringDrag.circleKm}km`
     );
+    // 【25本目①、不具合修正】地図上の「最大◯km先まで」ラベルを廃止した代わりに、
+    // PCの帯件数プレビュー（#budget-band-preview）の末尾に距離を出す。
+    // スライダーに合わせて変わること（円の半径と同じ値のはず）。
+    const previewDuringDragText = await page.locator('#budget-band-preview').textContent();
+    record(
+      'PCの帯件数プレビューに距離（最大◯km先まで）が入る',
+      /最大[\d.]+km先まで$/.test(previewDuringDragText || ''),
+      previewDuringDragText
+    );
+    record(
+      'PCでスライダーを動かすと、帯件数プレビューの距離表示が変わる',
+      previewDuringDragText !== previewBeforeDragText,
+      JSON.stringify({ previewBeforeDragText, previewDuringDragText })
+    );
+    const mapLabelCountPc = await page.evaluate(() => document.querySelectorAll('.reach-circle-label').length);
+    record('PC・2Dの地図の上に「最大◯km先まで」のラベルが無い', mapLabelCountPc === 0, `count=${mapLabelCountPc}`);
 
     const pendingClass = await page.evaluate(() => document.getElementById('search-btn').classList.contains('search-btn-pending'));
     record('スライダー操作後、「この条件で検索」ボタンが強調表示になる', pendingClass);
@@ -919,6 +946,37 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
       '「この条件で検索」を押すと一覧が変わる（¥1000→¥2000の帯に変化）',
       JSON.stringify(cardsAfterSearch) !== JSON.stringify(cardsBefore)
     );
+
+    await context.close();
+  }
+
+  // --- 3.5) 【25本目】必須スクリーンショット：PC・検索直後と、スライダー
+  //     操作中の帯件数プレビュー（距離入り）。実際のPC幅（1920×1080）で、
+  //     左カラムのフォーム＋帯プレビューが見える範囲を撮る。 ---
+  {
+    const context = await browser.newContext({ viewport: VIEWPORTS.pc });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '富山駅前', 1000);
+    await page.waitForTimeout(1500); // ¥2000全域の裏取得が終わり、距離の値が確定するまで待つ
+    await waitForWaveRevealSettled(page);
+
+    const formBox = await page.locator('#layout-left').boundingBox();
+    const settledPath = path.join(screenshotDir, 'budget-distance-pc-settled.png');
+    await page.screenshot({ path: settledPath, clip: formBox });
+    savedPaths.push(settledPath);
+
+    await page.evaluate(() => {
+      const el = document.getElementById('budget-slider');
+      el.value = 1700;
+      el.dispatchEvent(new Event('input'));
+    });
+    await page.waitForTimeout(200);
+    const midDragPcPath = path.join(screenshotDir, 'budget-distance-pc-mid-drag.png');
+    await page.screenshot({ path: midDragPcPath, clip: formBox });
+    savedPaths.push(midDragPcPath);
 
     await context.close();
   }
@@ -2803,6 +2861,14 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
         .filter((m) => m.getElement()?.style.display !== 'none').length,
       circleKm: window.__mapViewForDebug._reachCircleRadiusKm,
     }));
+    before2d.summaryText = await page.locator('#search-summary-text').textContent();
+    before2d.bandHeading = await page.locator('#results-band-heading').textContent();
+    // 【25本目③】検索済みの帯のボタンは「¥◯・◯件・最大◯km」の形（距離入り）。
+    record(
+      `[${label}/2D] 検索済みの帯のボタンに距離（最大◯km）が入る`,
+      /最大[\d.]+km/.test(await page.locator('#mobile-budget-search-btn').textContent()),
+      await page.locator('#mobile-budget-search-btn').textContent()
+    );
     await page.click('#mobile-budget-increment');
     await page.click('#mobile-budget-increment');
     await page.waitForTimeout(200);
@@ -2827,11 +2893,34 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       () => document.getElementById('mobile-budget-search-btn').classList.contains('mobile-budget-search-btn-pending')
     );
     record(`[${label}/2D] 金額を変えると帯のボタンが「〜で探す」に変わる`, pendingClass && /で探す$/.test(pendingText || ''), pendingText);
-    const summaryTextDuringDrag = await page.locator('#search-summary-text').textContent();
+    // 【25本目①】地図上の「最大◯km先まで」ラベルは廃止。代わりに、操作帯の
+    // 距離spanが動かすたびに変わる（ボタンの文言は「¥◯で探す」のまま）。
+    const distanceInfo = await page.evaluate(() => ({
+      hidden: document.getElementById('mobile-budget-distance').hidden,
+      text: document.getElementById('mobile-budget-distance').textContent,
+    }));
     record(
-      `[${label}/2D] 要約バーの金額が操作に合わせてその場で変わる（検索前、¥1,000）`,
-      (summaryTextDuringDrag || '').includes('¥1,000'),
-      summaryTextDuringDrag
+      `[${label}/2D] スライダーを動かしている間、ボタンの近くに距離（最大◯km）が出る`,
+      !distanceInfo.hidden && /最大[\d.]+km/.test(distanceInfo.text),
+      JSON.stringify(distanceInfo)
+    );
+    const mapLabelCount2d = await page.evaluate(() => document.querySelectorAll('.reach-circle-label').length);
+    record(`[${label}/2D] 地図の上に「最大◯km先まで」のラベルが無い`, mapLabelCount2d === 0, `count=${mapLabelCount2d}`);
+    // 【25本目②、不具合修正】スライダーを動かしただけでは、上の要約バー・
+    // 一覧の見出しは最後に検索した条件のまま変わらないこと（Cowork指摘の
+    // 再発防止：以前はupdateMobileBudgetOverlay()が要約バーもその場で
+    // 書き換えており、一覧の見出しと食い違っていた）。
+    const summaryTextDuringDrag = await page.locator('#search-summary-text').textContent();
+    const bandHeadingDuringDrag = await page.locator('#results-band-heading').textContent();
+    record(
+      `[${label}/2D] スライダーを動かしても、上の要約バーの金額は変わらない（最後に検索した条件のまま）`,
+      summaryTextDuringDrag === before2d.summaryText,
+      JSON.stringify({ before: before2d.summaryText, during: summaryTextDuringDrag })
+    );
+    record(
+      `[${label}/2D] スライダーを動かしても、一覧の見出しは変わらない（要約バーと同じ金額のまま）`,
+      bandHeadingDuringDrag === before2d.bandHeading,
+      JSON.stringify({ before: before2d.bandHeading, during: bandHeadingDuringDrag })
     );
     const midDragPath2d = path.join(screenshotDir, `mobile-budget-overlay-mid-drag-2d-${label}.png`);
     await page.screenshot({ path: midDragPath2d });
@@ -2852,11 +2941,22 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
     const afterOverlaySearch = await page.evaluate(() => ({
       cards: document.querySelectorAll('.spot-card').length,
       pendingClass: document.getElementById('mobile-budget-search-btn').classList.contains('mobile-budget-search-btn-pending'),
+      summaryText: document.getElementById('search-summary-text').textContent,
+      bandHeading: document.getElementById('results-band-heading').textContent,
     }));
     record(
       `[${label}/2D] 「この金額で探す」を押すと一覧が変わり、帯のボタンが件数表示に戻る`,
       afterOverlaySearch.cards !== before2d.cards && !afterOverlaySearch.pendingClass,
       JSON.stringify({ before: before2d.cards, after: afterOverlaySearch })
+    );
+    // 【25本目②】「¥◯で探す」を押すと、上の要約バー・一覧の見出しが
+    // そろって新しい金額に変わること（要約バー末尾の金額＝見出しの上限額）。
+    const summaryBudget = parseInt((afterOverlaySearch.summaryText.match(/¥([\d,]+)$/) || [])[1]?.replace(/,/g, ''), 10);
+    const headingBudget = parseInt((afterOverlaySearch.bandHeading.match(/〜¥([\d,]+)で/) || [])[1]?.replace(/,/g, ''), 10);
+    record(
+      `[${label}/2D] 「この金額で探す」を押すと、要約バーの金額が変わり、一覧の見出しとそろう`,
+      afterOverlaySearch.summaryText !== before2d.summaryText && summaryBudget === headingBudget,
+      JSON.stringify({ afterOverlaySearch, summaryBudget, headingBudget })
     );
 
     if (pageErrors.length > 0) {
@@ -2902,6 +3002,9 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       if (compassBox3d) {
         record(`[${label}/3D] 方角ボタンが2D/3D切替ボタンと重ならない`, !rectsOverlap(compassBox3d, toggleBox3d), JSON.stringify({ compassBox3d, toggleBox3d }));
       }
+
+      const mapLabelCount3d = await page.evaluate(() => document.querySelectorAll('.reach-circle-label').length);
+      record(`[${label}/3D] 地図の上に「最大◯km先まで」のラベルが無い`, mapLabelCount3d === 0, `count=${mapLabelCount3d}`);
 
       const mapTab3dPath = path.join(screenshotDir, `mobile-budget-overlay-3d-${label}.png`);
       await page.screenshot({ path: mapTab3dPath });
@@ -2951,6 +3054,8 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       // ＋を2回：円だけ変わり、点のフィルタ（帯の判定）は変わらない
       const filterBefore = await page.evaluate(() => JSON.stringify(window.__terrainMapForDebug.getFilter('spots-circle')));
       const circleBefore3d = await page.evaluate(() => window.__terrainViewForDebug._reachCircleRadiusKm);
+      const summaryBefore3d = await page.locator('#search-summary-text').textContent();
+      const headingBefore3d = await page.locator('#results-band-heading').textContent();
       await page.click('#mobile-budget-increment');
       await page.click('#mobile-budget-increment');
       await page.waitForTimeout(300);
@@ -2958,6 +3063,22 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       const circleAfter3d = await page.evaluate(() => window.__terrainViewForDebug._reachCircleRadiusKm);
       record(`[${label}/3D] 予算操作帯の＋を2回押しても点の絞り込み（帯フィルタ）は変わらない`, filterBefore === filterAfter, JSON.stringify({ filterBefore, filterAfter }));
       record(`[${label}/3D] 予算操作帯の＋を2回押すと円の半径は大きくなる`, circleAfter3d > circleBefore3d, JSON.stringify({ circleBefore3d, circleAfter3d }));
+      const distanceInfo3d = await page.evaluate(() => ({
+        hidden: document.getElementById('mobile-budget-distance').hidden,
+        text: document.getElementById('mobile-budget-distance').textContent,
+      }));
+      record(
+        `[${label}/3D] スライダーを動かしている間、ボタンの近くに距離（最大◯km）が出る`,
+        !distanceInfo3d.hidden && /最大[\d.]+km/.test(distanceInfo3d.text),
+        JSON.stringify(distanceInfo3d)
+      );
+      const summaryDuring3d = await page.locator('#search-summary-text').textContent();
+      const headingDuring3d = await page.locator('#results-band-heading').textContent();
+      record(
+        `[${label}/3D] スライダーを動かしても、上の要約バー・一覧の見出しは変わらない`,
+        summaryDuring3d === summaryBefore3d && headingDuring3d === headingBefore3d,
+        JSON.stringify({ summaryBefore3d, summaryDuring3d, headingBefore3d, headingDuring3d })
+      );
       const midDragPath3d = path.join(screenshotDir, `mobile-budget-overlay-mid-drag-3d-${label}.png`);
       await page.screenshot({ path: midDragPath3d });
       savedPaths.push(midDragPath3d);

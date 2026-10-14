@@ -113,7 +113,6 @@ const REACH_CIRCLE_SOURCE_ID = 'reach-circle';
 const REACH_CIRCLE_FILL_LAYER_ID = 'reach-circle-fill';
 const REACH_CIRCLE_LINE_LAYER_ID = 'reach-circle-line';
 const REACH_CIRCLE_POINTS = 72; // 円を近似する多角形の頂点数（5°刻み）
-const REACH_CIRCLE_LABEL_BEARING = 45; // ラベルを置く方位角（出発駅の吹き出し・コンパスボタンと重ならない向き）
 const WAVE_DURATION_MS = 1000; // Minami指示：検索後、点を波のように出す所要時間（全体で1秒前後）
 // 【2026-10-15、11本目①】選んだピンの強調（吹き出し廃止の代わり）。circleレイヤーは
 // 単一のpaintプロパティしか持てないため、選択中の1件だけ別ソース・別レイヤーで
@@ -169,12 +168,6 @@ function destinationPoint(lat, lon, bearingDeg, distanceKm) {
     Math.cos(delta) - Math.sin(phi1) * Math.sin(phi2)
   );
   return { lat: toDeg(phi2), lon: toDeg(lambda2) };
-}
-
-/** 到達円のラベル表記（例: 0.8km, 12km）。10km未満は小数第1位まで、以上は整数に丸める。 */
-function formatRadiusKm(km) {
-  if (!(km > 0)) return '0km';
-  return km < 10 ? `${Math.round(km * 10) / 10}km` : `${Math.round(km)}km`;
 }
 
 function prefersReducedMotion() {
@@ -243,7 +236,6 @@ export class TerrainMapView {
     this._pendingCircleRadiusKm = null;
     this._pendingCircleStyle = 'live';
     this._circlePaintScheduled = false;
-    this._reachCircleLabelMarker = null;
     this._waveFrame = null; // requestAnimationFrameのID（検索後の点の波の演出）
     this._waveToken = 0; // 保留中の波の演出を無効化する世代カウンタ（新しい検索・render()で進める）
   }
@@ -773,8 +765,6 @@ export class TerrainMapView {
     const dep = this._lastDepartureStation;
     if (!source || !dep || !radiusKm || radiusKm <= 0) {
       if (source) source.setData({ type: 'FeatureCollection', features: [] });
-      if (this._reachCircleLabelMarker) this._reachCircleLabelMarker.remove();
-      this._reachCircleLabelMarker = null;
       return;
     }
     const ring = [];
@@ -792,22 +782,6 @@ export class TerrainMapView {
       : { fill: 0.12, line: 0.55 };
     this.map.setPaintProperty(REACH_CIRCLE_FILL_LAYER_ID, 'fill-opacity', opacities.fill);
     this.map.setPaintProperty(REACH_CIRCLE_LINE_LAYER_ID, 'line-opacity', opacities.line);
-
-    const labelPoint = destinationPoint(dep.stop_lat, dep.stop_lon, REACH_CIRCLE_LABEL_BEARING, radiusKm);
-    if (!this._reachCircleLabelMarker) {
-      const el = document.createElement('div');
-      el.className = 'reach-circle-label';
-      // 【不具合修正】setLngLat()より先にaddTo()すると、_lngLatが未設定のまま
-      // マーカーが地図に登録され、後続のカメラ移動（moveイベント）のたびに
-      // マーカーの再配置処理がundefined.lngを読んで例外を投げていた
-      // （実機・verify-layoutで"Cannot read properties of undefined (reading 'lng')"
-      // として発覚）。setLngLat()を先に呼んでからaddTo()する。
-      this._reachCircleLabelMarker = new maplibregl.Marker({ element: el, anchor: 'center' })
-        .setLngLat([labelPoint.lon, labelPoint.lat])
-        .addTo(this.map);
-    }
-    this._reachCircleLabelMarker.getElement().textContent = `最大${formatRadiusKm(radiusKm)}先まで`;
-    this._reachCircleLabelMarker.setLngLat([labelPoint.lon, labelPoint.lat]);
   }
 
   /**
@@ -1148,6 +1122,5 @@ export class TerrainMapView {
       this.map = null;
     }
     this.departureMarker = null;
-    this._reachCircleLabelMarker = null;
   }
 }

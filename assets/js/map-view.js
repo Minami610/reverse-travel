@@ -21,7 +21,6 @@ const MAP_BAND_WIDTH = 200;
 // 【2026-10-13、10本目②】予算の到達範囲の円・波の演出用の定数・関数。
 // 同じ理由（バンドル後は同一スクリプトスコープ）で、他ファイル（onward-candidates.js
 // 等）の同種の関数と衝突しない名前にしている。
-const REACH_CIRCLE_LABEL_BEARING = 45; // ラベルを置く方位角（出発駅の吹き出しと重ならない向き）
 const WAVE_DURATION_MS = 1000; // Minami指示：検索後、点を波のように出す所要時間（全体で1秒前後）
 // 【2026-10-13、12本目①】選んだピンが下の情報帯（高さ40px前後）に隠れないよう、
 // 地図をずらす量（px）。帯はスマホでは地図下端から48px浮かせて出すため
@@ -41,20 +40,10 @@ function reachHaversineKm(lat1, lon1, lat2, lon2) {
   return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
-function reachDestinationPoint(lat, lon, bearingDeg, distanceKm) {
-  const delta = distanceKm / EARTH_RADIUS_KM;
-  const theta = toRadReach(bearingDeg);
-  const phi1 = toRadReach(lat);
-  const lambda1 = toRadReach(lon);
-  const phi2 = Math.asin(Math.sin(phi1) * Math.cos(delta) + Math.cos(phi1) * Math.sin(delta) * Math.cos(theta));
-  const lambda2 = lambda1 + Math.atan2(
-    Math.sin(theta) * Math.sin(delta) * Math.cos(phi1),
-    Math.cos(delta) - Math.sin(phi1) * Math.sin(phi2)
-  );
-  return { lat: toDegReach(phi2), lon: toDegReach(lambda2) };
-}
-
-function formatReachRadiusKm(km) {
+/** 到達円の半径表記（例: 0.8km, 12km）。10km未満は小数第1位まで、以上は整数に丸める。
+ * 【2026-10-14、25本目】地図上のラベルを廃止し、main.jsのスマホ予算操作帯・PCの
+ * 帯件数プレビューで距離を出すため、main.jsからimportして使えるようexportする。 */
+export function formatReachRadiusKm(km) {
   if (!(km > 0)) return '0km';
   return km < 10 ? `${Math.round(km * 10) / 10}km` : `${Math.round(km)}km`;
 }
@@ -77,7 +66,6 @@ export class MapView {
     this._lastSpots = []; // 【2026-10-13、10本目②】到達円の半径計算用（出発駅からの距離はここから出す）
     this._departureStation = null;
     this._reachCircle = null;
-    this._reachCircleLabel = null;
     this._reachCircleRadiusKm = 0;
     this._circlePaintScheduled = false;
     this._pendingCircleRadiusKm = null;
@@ -421,16 +409,7 @@ export class MapView {
    * @param {{style?: 'live'|'settled'}} [opts] - settled:検索確定後（薄くする）
    */
   updateReachCircle(budget, { style = 'live' } = {}) {
-    if (!this.departureLatLng || !this._lastSpots || this._lastSpots.length === 0) {
-      this._pendingCircleRadiusKm = 0;
-    } else {
-      const [lat, lon] = this.departureLatLng;
-      this._pendingCircleRadiusKm = this._lastSpots.reduce((max, s) => {
-        if (!isFiniteNumber(s.latitude) || !isFiniteNumber(s.longitude)) return max;
-        if (s.source_round_trip_fare > budget) return max;
-        return Math.max(max, reachHaversineKm(lat, lon, s.latitude, s.longitude));
-      }, 0);
-    }
+    this._pendingCircleRadiusKm = this.computeReachRadiusKm(budget);
     this._pendingCircleStyle = style;
     if (this._circlePaintScheduled) return;
     this._circlePaintScheduled = true;
@@ -440,12 +419,29 @@ export class MapView {
     });
   }
 
+  /**
+   * 【2026-10-14、25本目】指定した予算以内で一番遠い場所までの直線距離（km）。
+   * 円の半径そのものの計算で、地図上のラベルを廃止した代わりに
+   * main.jsがスマホの予算操作帯・PCの帯件数プレビューの距離表示に使う
+   * （円の描画と同じ値を使うことで、見た目の円と数字が必ず一致する）。
+   * @param {number} budget
+   * @returns {number}
+   */
+  computeReachRadiusKm(budget) {
+    if (!this.departureLatLng || !this._lastSpots || this._lastSpots.length === 0) return 0;
+    const [lat, lon] = this.departureLatLng;
+    return this._lastSpots.reduce((max, s) => {
+      if (!isFiniteNumber(s.latitude) || !isFiniteNumber(s.longitude)) return max;
+      if (s.source_round_trip_fare > budget) return max;
+      return Math.max(max, reachHaversineKm(lat, lon, s.latitude, s.longitude));
+    }, 0);
+  }
+
   _paintReachCircle(radiusKm, style) {
     this.ensureMap();
-    this._reachCircleRadiusKm = radiusKm; // 検証用（verify-layout.js参照）
+    this._reachCircleRadiusKm = radiusKm; // 検証用（verify-layout.js参照）・スマホ予算操作帯の距離表示
     if (!this.map || !radiusKm || radiusKm <= 0 || !this.departureLatLng) {
       if (this._reachCircle) { this.map?.removeLayer(this._reachCircle); this._reachCircle = null; }
-      if (this._reachCircleLabel) { this.map?.removeLayer(this._reachCircleLabel); this._reachCircleLabel = null; }
       return;
     }
     // 【不具合修正、22本目】スマホで「一覧」タブを見ている間（#spots-mapが
@@ -470,21 +466,6 @@ export class MapView {
       this._reachCircle.setRadius(radiusMeters);
       this._reachCircle.setStyle(opts);
     }
-
-    const edge = reachDestinationPoint(this.departureLatLng[0], this.departureLatLng[1], REACH_CIRCLE_LABEL_BEARING, radiusKm);
-    const labelLatLng = [edge.lat, edge.lon];
-    if (!this._reachCircleLabel) {
-      this._reachCircleLabel = L.marker(labelLatLng, {
-        icon: L.divIcon({ className: 'reach-circle-label-anchor', html: '', iconSize: [0, 0] }),
-        interactive: false,
-        zIndexOffset: -1000,
-      })
-        .addTo(this.map)
-        .bindTooltip('', { permanent: true, direction: 'center', className: 'reach-circle-label' });
-    } else {
-      this._reachCircleLabel.setLatLng(labelLatLng);
-    }
-    this._reachCircleLabel.setTooltipContent(`最大${formatReachRadiusKm(radiusKm)}先まで`);
   }
 
   /**

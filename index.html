@@ -160,6 +160,13 @@
           aria-label="予算（往復）をスライダーで変更"
         >
         <button type="button" id="mobile-budget-increment" aria-label="予算を100円増やす">＋</button>
+        <!-- 【2026-10-14、25本目、Minami決定：B】地図の上の「最大◯km先まで」
+             ラベルを廃止した代わりに、この帯に距離を出す。まだこの金額で
+             検索していない（ボタンが「¥◯で探す」のとき）だけ表示し、
+             動かすたびに変わる（main.jsのupdateMobileBudgetOverlay()参照）。
+             検索済みのときはボタン自体の文言に「・最大◯km」を含めるため
+             このspanは隠す。 -->
+        <span id="mobile-budget-distance" hidden></span>
         <button type="button" id="mobile-budget-search-btn"></button>
       </div>
     </div>

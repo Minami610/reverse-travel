@@ -835,8 +835,30 @@ header p {
   min-width: 0;
 }
 
+/* 【2026-10-14、25本目】地図上の「最大◯km先まで」ラベル廃止の代わりに、
+   スライダーを動かしている間だけ距離を出す小さな文字（main.js参照）。
+   検索ボタンと違って押せないため、縮むだけで伸びない・省略もしない
+   （「375pxでも1行に収まるよう…収まらないときは件数より距離を優先する」
+   というMinami指示により、距離側は最後まで隠さない）。 */
+#mobile-budget-distance {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--color-text-sub);
+  white-space: nowrap;
+}
+
+/* 【2026-10-14、25本目、不具合修正】flex-shrink:1のままだと、距離表示
+   （#mobile-budget-distance）が増えた分だけスライダー・このボタン双方が
+   圧縮を分け合い、375px幅では「¥1,000で探す」という最小限の文言すら
+   収まらず省略記号で切れることが実測で判明した（scrollWidth92px>
+   clientWidth78px）。ボタンの文言は押せる操作の案内文であり省略されては
+   困るため、flex-shrink:0にしてボタンは縮めず、伸び縮みしてよい
+   スライダー側だけで調整する（max-width:45%は、それでもなお収まらない
+   極端なケースの保険として残す）。 */
 #mobile-budget-search-btn {
   flex-shrink: 0;
+  min-width: 0;
   max-width: 45%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1048,25 +1070,6 @@ header p {
 
 .map-departure-tooltip::before {
   border-top-color: var(--color-accent-deep);
-}
-
-/* 【2026-10-14、10本目②】予算の到達範囲の円のラベル（2D・3D共通の見た目）。
-   オレンジの点より目立たない青系にする（Minami指示）。 */
-.reach-circle-label {
-  background-color: rgba(47, 111, 178, 0.88);
-  color: white;
-  border: none;
-  font-weight: 600;
-  font-size: 0.75rem;
-  padding: 0.15rem 0.5rem;
-  border-radius: 4px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-  white-space: nowrap;
-  pointer-events: none;
-}
-
-.reach-circle-label::before {
-  display: none; /* Leafletの吹き出し用の三角形は不要（円のラベルなので） */
 }
 
 /* 【2026-10-14、10本目②】検索を押した直後、出発駅から近い順に点が波のように
