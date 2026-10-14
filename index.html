@@ -132,6 +132,33 @@
       <!-- 3D切替中だけ表示。2Dの地図は消さずに裏で残したまま、準備ができたら
            #map-area.mode-3dが付いて3Dに切り替わる（4本目②、Minami指示）。 -->
       <p id="terrain-loading-indicator" hidden>3D地図を準備しています…</p>
+      <!-- 【2026-10-14、23本目、Minami決定：B】方位磁針の代わりに「つかんで
+           回すハンドル」を置く（3Dのみ、CSSの#map-area.mode-3dで出し分け）。
+           見ただけで触り方が分かるよう、縁にギザギザ（つまみの刻み）と
+           ↺↻の矢印を付け、中央に北を指す針（赤い先端）を入れて方位磁針を
+           兼ねる。縁（.map-rotate-face含む、中央の北に戻すボタンを除く）を
+           つかんでなぞると地図が連続的に回り、中央を押すと北に戻る
+           （assets/js/terrain-map-view.js参照）。 -->
+      <div
+        id="map-rotate-handle"
+        class="map-rotate-handle"
+        tabindex="0"
+        role="slider"
+        aria-valuemin="0"
+        aria-valuemax="359"
+        aria-valuenow="0"
+        aria-label="地図の向きを回す（中央を押すと北に戻る）"
+      >
+        <div class="map-rotate-face">
+          <span class="map-rotate-arrow map-rotate-arrow-ccw" aria-hidden="true">↺</span>
+          <span class="map-rotate-arrow map-rotate-arrow-cw" aria-hidden="true">↻</span>
+          <svg id="map-rotate-needle" class="map-rotate-needle" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12,2 L15.5,13 L12,10.5 L8.5,13 Z" class="map-rotate-needle-n"></path>
+            <path d="M12,22 L15.5,13 L12,15.5 L8.5,13 Z" class="map-rotate-needle-s"></path>
+          </svg>
+          <button type="button" id="map-rotate-reset" class="map-rotate-reset" aria-label="北を上に戻す"></button>
+        </div>
+      </div>
       <!-- 【2026-10-15、11本目①】地図の吹き出し（ポップアップ）の代わりに、
            地図の下中央に固定で出す情報枠（Minami決定：A）。2D・3D共通、
            どちらのピンを押しても同じ枠を使い回す。 -->

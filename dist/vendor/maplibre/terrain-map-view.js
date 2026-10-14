@@ -175,6 +175,22 @@ function prefersReducedMotion() {
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
+/**
+ * 【2026-10-14、23本目】点(px,py)が中心(cx,cy)から見てどの向きにあるかを、
+ * 12時方向を0度とした時計回りの角度（度）で返す。CSSのrotate()と同じ向きの
+ * 規約（_setupRotateHandle()参照）。
+ */
+function screenAngleDeg(px, py, cx, cy) {
+  return (Math.atan2(px - cx, -(py - cy)) * 180) / Math.PI;
+}
+
+/** 角度を0〜359度の範囲に正規化する（aria-valuenow表示用）。 */
+function normalizeRotateAngle(deg) {
+  let d = deg % 360;
+  if (d < 0) d += 360;
+  return d;
+}
+
 /** 標準的なスリッピータイル座標（z/x/y）。経緯度を含むタイルを求める。 */
 function tileXYAt(lng, lat, z) {
   const n = 2 ** z;
@@ -425,13 +441,10 @@ export class TerrainMapView {
     // （Minami指示：2本指ズームは残し、2本指でひねる回転だけ止める）。
     this.map.touchZoomRotate.disableRotation();
 
-    // 方角コンパス（Minami指示：地図右上、押すと北向きに戻る＝
-    // NavigationControlの既定動作）。ズームボタンは出さない（+/-は別UIで
-    // 既にある）。
-    this.map.addControl(
-      new maplibregl.NavigationControl({ showCompass: true, showZoom: false, visualizePitch: false }),
-      'top-right'
-    );
+    // 【2026-10-14、23本目、Minami決定：B】方位磁針（MapLibreのNavigationControl）
+    // を「つかんで回すハンドル」に置き換える（右上、3Dのみ）。PCの右ドラッグでの
+    // 回転操作は無関係に残るため（dragRotate、上記参照）、ここでは追加しない。
+    this._setupRotateHandle();
 
     // 【2026-10-13、8本目③】ユーザーが手で地図を操作したら、「降りる→傾ける」
     // 演出を止める（ユーザー操作を優先）。zoomstart・pitchstartは、flyTo()や
@@ -903,6 +916,112 @@ export class TerrainMapView {
     const maxBottom = REVEAL_ABOVE_BAND_PADDING_MAX.bottom;
     const bottom = height > 0 ? Math.min(maxBottom, Math.floor(height / 2)) : maxBottom;
     return { top: 0, right: 0, bottom, left: 0 };
+  }
+
+  /**
+   * 【2026-10-14、23本目、Minami決定：B】方位磁針の代わりの「つかんで回す
+   * ハンドル」（index.htmlの#map-rotate-handle、見た目は.map-rotate-face・
+   * .map-rotate-needle等）。ハンドルの縁（中央の#map-rotate-resetを除く）を
+   * つかんでなぞると、なぞった角度ぶんだけ地図のbearingが連続的に変わる。
+   * 回す中心（ピボット）は、MapLibreの既存のpadding機構（flyToSpot()・
+   * getRevealPadding()参照。20本目で確立：paddingは「見える範囲」を再定義し、
+   * bearing回転はそのpaddingの中心を軸にする）をそのまま使うため、ここで
+   * 中心を計算し直す必要はない（選んだピンがあればそのピン、無ければ画面
+   * 中心を軸に、自然に回る）。
+   * 中央（#map-rotate-reset）を押すと北（bearing=0）になめらかに戻る。
+   * 【不具合修正】destroy()→ensureMap()の再生成（WebGLコンテキスト確保
+   * 失敗時のリトライ等）で_createMap()が複数回走っても、ハンドルのDOM要素
+   * 自体は静的HTMLで使い回しのため、ポインタ・キーボードのリスナーを
+   * 毎回追加すると二重発火する。これらはdataset目印で最初の1回だけ登録し、
+   * 地図インスタンスに紐づく針の同期（'rotate'イベント購読）だけを
+   * 呼び出しのたびに付け直す。
+   */
+  _setupRotateHandle() {
+    const handle = document.getElementById('map-rotate-handle');
+    const resetBtn = document.getElementById('map-rotate-reset');
+    const needle = document.getElementById('map-rotate-needle');
+    if (!handle || !resetBtn || !needle) return;
+
+    const updateNeedle = () => {
+      if (!this.map) return;
+      const bearing = this.map.getBearing();
+      // 針（SVG）の初期向きは真上（北）。bearingが増える＝地図が時計回りに
+      // 回る＝画面上の北は反時計回りに動くため、針はbearingの符号を反転して
+      // 回す（MapLibre既定のNavigationControlのコンパスと同じ向きの規約）。
+      needle.style.transform = `rotate(${-bearing}deg)`;
+      handle.setAttribute('aria-valuenow', String(Math.round(normalizeRotateAngle(bearing))));
+    };
+    updateNeedle();
+    this.map.on('rotate', updateNeedle);
+
+    if (handle.dataset.rotateHandleWired) return;
+    handle.dataset.rotateHandleWired = 'true';
+
+    let grabOffset = 0;
+    const onPointerMove = (e) => {
+      if (!this.map) return;
+      const rect = handle.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const angle = screenAngleDeg(e.clientX, e.clientY, cx, cy);
+      // つかんだ瞬間の針と指の角度差（grabOffset）を保ったまま、針が指に
+      // 追従し続けるようにする（「つかんで回す」実感を出すため、指との
+      // 相対角度ではなく絶対角度で追従させる）。
+      const newNeedleAngle = angle + grabOffset;
+      this.map.setBearing(-newNeedleAngle);
+    };
+    const onPointerUp = (e) => {
+      handle.removeEventListener('pointermove', onPointerMove);
+      handle.removeEventListener('pointerup', onPointerUp);
+      handle.removeEventListener('pointercancel', onPointerUp);
+      try { handle.releasePointerCapture(e.pointerId); } catch { /* 既に解放済みのブラウザがある */ }
+    };
+    handle.addEventListener('pointerdown', (e) => {
+      if (!this.map) return;
+      if (typeof e.button === 'number' && e.button !== 0) return; // 左クリック・タッチのみ
+      e.preventDefault();
+      this._flySpotToken++; // 「降りる→傾ける」演出の途中でも、ユーザー操作を優先して止める
+      const rect = handle.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const grabAngle = screenAngleDeg(e.clientX, e.clientY, cx, cy);
+      const currentNeedleAngle = -this.map.getBearing();
+      grabOffset = currentNeedleAngle - grabAngle;
+      handle.setPointerCapture(e.pointerId);
+      handle.addEventListener('pointermove', onPointerMove);
+      handle.addEventListener('pointerup', onPointerUp);
+      handle.addEventListener('pointercancel', onPointerUp);
+    });
+
+    // 中央を押すと北に戻る。.map-rotate-faceがpointer-events:noneのため
+    // クリックはこのボタンへ直接届くが、イベント自体は親（.map-rotate-handle）
+    // までバブリングするため、放っておくとドラッグ開始処理も同時に走って
+    // しまう。stopPropagation()で止める。
+    resetBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    resetBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!this.map) return;
+      this._flySpotToken++;
+      this.map.easeTo({ bearing: 0, duration: 400 });
+    });
+
+    // キーボード操作：←→で少しずつ回る、Enterで北に戻る。
+    handle.addEventListener('keydown', (e) => {
+      if (!this.map) return;
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        this._flySpotToken++;
+        this.map.setBearing(this.map.getBearing() - 15);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        this._flySpotToken++;
+        this.map.setBearing(this.map.getBearing() + 15);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        this._flySpotToken++;
+        this.map.easeTo({ bearing: 0, duration: 400 });
+      }
+    });
   }
 
   flyToSpot(spot, departureStation) {

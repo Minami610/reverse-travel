@@ -1585,8 +1585,15 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
     record(`[${label}] スマホの2本指ズームは有効のまま（touchZoomRotate）`, rotateState.touchZoomRotateEnabled);
     record(`[${label}] スマホの2本指回転だけ無効化されている`, rotateState.touchRotationDisabled);
     record(`[${label}] スマホの2本指上下の傾きは有効のまま（touchPitch）`, rotateState.touchPitch);
-    const hasCompass = await page.evaluate(() => !!document.querySelector('.maplibregl-ctrl-compass'));
-    record(`[${label}] コンパス（方角ボタン）が表示されている`, hasCompass);
+    // 【2026-10-14、23本目、不具合修正】方位磁針（MapLibreのNavigationControl・
+    // .maplibregl-ctrl-compass）は「つかんで回すハンドル」（#map-rotate-handle）
+    // に置き換えて廃止したため、このテストもハンドルの表示確認に差し替える
+    // （ハンドルの詳しい検証はcheckRotateHandle()参照）。
+    const hasRotateHandle = await page.evaluate(() => {
+      const el = document.getElementById('map-rotate-handle');
+      return !!el && getComputedStyle(el).display !== 'none';
+    });
+    record(`[${label}] 回転ハンドル（方位磁針の代わり）が表示されている`, hasRotateHandle);
 
     // 2. 一覧のカードから詳細を開くと、その場所へ寄る（城生城＝八尾駅から
     // 往復¥400で行ける山あいのスポット、Minami指示の例）。
@@ -2306,7 +2313,10 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
         const spotName = (await page.locator('#spot-info-content .spot-info-name').textContent()) || '';
         const panelBox = await page.locator('#spot-info-panel').boundingBox();
         const toggleBox = await page.locator('#map-dimension-toggle').boundingBox();
-        const compassBox = await page.locator('.maplibregl-ctrl-top-right').boundingBox().catch(() => null);
+        // 【23本目、不具合修正】方位磁針（.maplibregl-ctrl-top-right、
+        // MapLibreのNavigationControl）は回転ハンドルに置き換えて廃止した
+        // ため、代わりにハンドル（#map-rotate-handle）との重なりを見る。
+        const compassBox = await page.locator('#map-rotate-handle').boundingBox().catch(() => null);
         // 【24本目③、不具合修正】2Dと同じく、PCでは10文字までの名前は
         // 省略されないこと。
         if (label === 'pc' && spotName.length <= 10) {
@@ -2327,7 +2337,7 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
         );
         if (compassBox) {
           record(
-            `[3D/${label}] 情報枠が方角ボタンと重ならない`,
+            `[3D/${label}] 情報枠が回転ハンドルと重ならない`,
             !rectsOverlap(panelBox, compassBox),
             JSON.stringify({ panelBox, compassBox })
           );
@@ -2986,7 +2996,9 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       const overlayBox3d = await page.locator('#mobile-budget-overlay').boundingBox();
       const toggleBox3d = await page.locator('#map-dimension-toggle').boundingBox();
       const tabsBox3d = await page.locator('.mobile-tabs').boundingBox();
-      const compassBox3d = await page.locator('.maplibregl-ctrl-top-right').boundingBox().catch(() => null);
+      // 【23本目、不具合修正】方位磁針（.maplibregl-ctrl-top-right）は
+      // 回転ハンドルに置き換えて廃止したため、代わりにハンドルとの重なりを見る。
+      const compassBox3d = await page.locator('#map-rotate-handle').boundingBox().catch(() => null);
       const attribBox3d = await page.locator('#map-area .maplibregl-ctrl-bottom-right').boundingBox().catch(() => null);
       record(`[${label}/3D] 予算操作帯がタブと重ならない`, !rectsOverlap(overlayBox3d, tabsBox3d), JSON.stringify({ overlayBox3d, tabsBox3d }));
       record(`[${label}/3D] 2D/3D切替ボタンがタブと重ならない`, !rectsOverlap(toggleBox3d, tabsBox3d), JSON.stringify({ toggleBox3d, tabsBox3d }));
@@ -3000,7 +3012,7 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
         );
       }
       if (compassBox3d) {
-        record(`[${label}/3D] 方角ボタンが2D/3D切替ボタンと重ならない`, !rectsOverlap(compassBox3d, toggleBox3d), JSON.stringify({ compassBox3d, toggleBox3d }));
+        record(`[${label}/3D] 回転ハンドルが2D/3D切替ボタンと重ならない`, !rectsOverlap(compassBox3d, toggleBox3d), JSON.stringify({ compassBox3d, toggleBox3d }));
       }
 
       const mapLabelCount3d = await page.evaluate(() => document.querySelectorAll('.reach-circle-label').length);
@@ -3035,7 +3047,7 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
         record(`[${label}/3D] 名前の帯が予算操作帯と重ならない`, !rectsOverlap(panelBox3d, overlayBox3d), JSON.stringify({ panelBox3d, overlayBox3d }));
         const viewAllBox3d = await page.locator('#view-all-btn').boundingBox().catch(() => null);
         if (viewAllBox3d) {
-          record(`[${label}/3D] 「全体を見る」ボタンが方角ボタンと重ならない`, !compassBox3d || !rectsOverlap(viewAllBox3d, compassBox3d), JSON.stringify({ viewAllBox3d, compassBox3d }));
+          record(`[${label}/3D] 「全体を見る」ボタンが回転ハンドルと重ならない`, !compassBox3d || !rectsOverlap(viewAllBox3d, compassBox3d), JSON.stringify({ viewAllBox3d, compassBox3d }));
         }
         await tiltCompletePromise3d;
         await page.evaluate(() => new Promise((resolve) => {
@@ -3643,6 +3655,262 @@ async function checkBreadcrumbTrail(browser, baseUrl, savedPaths) {
   }
 }
 
+/**
+ * 【23本目】ハンドルの中心から12時方向を起点に、時計回りにdeltaDeg度ぶん
+ * マウスをなぞる（pointerdown→複数回のpointermove→pointerup）。
+ * ドラッグ中の最後のbearing・中心座標をコールバックへ渡せるよう、
+ * 呼び出し元でpage.evaluate()により前後の値を読む設計にしている
+ * （この関数自体はなぞる操作だけを行う）。
+ */
+async function dragRotateHandle(page, handleBox, deltaDeg, { steps = 10, stepDelayMs = 15 } = {}) {
+  const cx = handleBox.x + handleBox.width / 2;
+  const cy = handleBox.y + handleBox.height / 2;
+  const r = handleBox.width / 2 - 4;
+  await page.mouse.move(cx, cy - r); // 12時の位置
+  await page.mouse.down();
+  const deltaRad = (deltaDeg * Math.PI) / 180;
+  for (let i = 1; i <= steps; i++) {
+    const angle = deltaRad * (i / steps);
+    const x = cx + r * Math.sin(angle);
+    const y = cy - r * Math.cos(angle);
+    await page.mouse.move(x, y);
+    await page.waitForTimeout(stepDelayMs);
+  }
+}
+
+/** ドラッグ中のpointerupまで行う（dragRotateHandle()の続き）。 */
+async function releaseRotateHandle(page) {
+  await page.mouse.up();
+}
+
+/** 3Dの地図が完全に落ち着く（地形読み込み＋タイルのidle）まで待つ共通処理。 */
+async function waitFor3dSettled(page, timeoutMs = 60000) {
+  await page.evaluate((t) => window.__terrainViewForDebug.waitForTerrainLoaded(t), timeoutMs);
+  await page.evaluate(() => new Promise((resolve) => {
+    const map = window.__terrainMapForDebug;
+    map.once('idle', resolve);
+    setTimeout(resolve, 8000);
+  }));
+  await page.waitForTimeout(300);
+}
+
+/**
+ * 【23本目】3Dの「つかんで回すハンドル」（方位磁針の代わり）の検証。
+ * PC・スマホ（400×464）の両方で、実際にマウス操作でハンドルの縁をなぞって
+ * 地図を回し、bearingの変化・地図中心の不変・針の向き・中央クリックでの
+ * 北への復帰・キーボード操作・重なりを確認する。
+ */
+async function checkRotateHandle(browser, baseUrl, savedPaths) {
+  console.log('\n=== 23本目：3Dの回転ハンドル（つかんで回す）の検証 ===');
+
+  for (const [label, viewport] of Object.entries({ pc: VIEWPORTS.pc, own: { width: 400, height: 464 } })) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    const pageErrors = [];
+    const consoleMessages = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+    page.on('console', (msg) => {
+      if (msg.type() === 'error' || msg.type() === 'warning') consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+    });
+
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '高松築港', 1000);
+    if (label !== 'pc') {
+      await page.click('.tab-btn[data-tab="map"]');
+      await page.waitForTimeout(300);
+    }
+
+    // 2Dでは出ない
+    const handleHiddenIn2d = await page.locator('#map-rotate-handle').isVisible().catch(() => false);
+    record(`[${label}] 2Dではハンドルが出ない`, !handleHiddenIn2d);
+
+    await page.click('#map-dimension-toggle');
+    const became3d = await page.waitForFunction(
+      () => document.getElementById('map-area').classList.contains('mode-3d'),
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
+    record(`[${label}] 3D化に成功`, became3d);
+    if (!became3d) { await context.close(); continue; }
+
+    await waitFor3dSettled(page);
+
+    const handleVisible = await page.locator('#map-rotate-handle').isVisible();
+    record(`[${label}] 3Dのときだけハンドルが出る`, handleVisible);
+
+    // --- 重なりチェック：2D/3D切替ボタン・出典ボタン・名前の帯・
+    //     スマホの予算操作帯のいずれとも重ならない ---
+    const handleBox = await page.locator('#map-rotate-handle').boundingBox();
+    const toggleBox = await page.locator('#map-dimension-toggle').boundingBox();
+    const attribBox = await page.locator('#map-area .maplibregl-ctrl-bottom-right').boundingBox().catch(() => null);
+    const overlayBox = await page.locator('#mobile-budget-overlay').boundingBox().catch(() => null);
+    record(`[${label}] ハンドルが2D/3D切替ボタンと重ならない`, !rectsOverlap(handleBox, toggleBox), JSON.stringify({ handleBox, toggleBox }));
+    if (attribBox) {
+      record(`[${label}] ハンドルが出典ボタンと重ならない`, !rectsOverlap(handleBox, attribBox), JSON.stringify({ handleBox, attribBox }));
+    }
+    if (overlayBox) {
+      record(`[${label}] ハンドルがスマホの予算操作帯と重ならない`, !rectsOverlap(handleBox, overlayBox), JSON.stringify({ handleBox, overlayBox }));
+    }
+    const mapAreaBox = await page.locator('#map-area').boundingBox();
+    record(
+      `[${label}] ハンドルが地図の範囲内に収まっている`,
+      handleBox.x >= mapAreaBox.x - 1 && handleBox.x + handleBox.width <= mapAreaBox.x + mapAreaBox.width + 1,
+      JSON.stringify({ handleBox, mapAreaBox })
+    );
+
+    // 必須スクリーンショット：回す前
+    const beforePath = path.join(screenshotDir, `rotate-handle-${label}-before.png`);
+    await page.screenshot({ path: beforePath, clip: mapAreaBox });
+    savedPaths.push(beforePath);
+
+    // --- ドラッグで90°回る・中心が動かない・針の向きが合っている ---
+    const centerBefore = await page.evaluate(() => window.__terrainMapForDebug.getCenter());
+    const bearingBefore = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
+
+    await dragRotateHandle(page, handleBox, 90);
+    const bearingDuringDrag = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
+    const centerDuringDrag = await page.evaluate(() => window.__terrainMapForDebug.getCenter());
+    const needleTransform = await page.evaluate(() => document.getElementById('map-rotate-needle').style.transform);
+
+    const bearingDelta = Math.abs(Math.abs(bearingDuringDrag - bearingBefore) - 90);
+    record(
+      `[${label}] ハンドルを90°なぞると、bearingが約90°変わる`,
+      bearingDelta < 5,
+      `before=${bearingBefore} after=${bearingDuringDrag} (delta=${bearingDelta})`
+    );
+    record(
+      `[${label}] ハンドルを操作している間、地図の中心（緯度経度）が動かない`,
+      Math.abs(centerDuringDrag.lng - centerBefore.lng) < 0.0001 && Math.abs(centerDuringDrag.lat - centerBefore.lat) < 0.0001,
+      JSON.stringify({ centerBefore, centerDuringDrag })
+    );
+    const needleDeg = parseFloat((needleTransform.match(/-?[\d.]+/) || ['NaN'])[0]);
+    record(
+      `[${label}] ハンドルの針の向きが地図のbearingと合っている（針=-bearing）`,
+      !Number.isNaN(needleDeg) && Math.abs(needleDeg - -bearingDuringDrag) < 1,
+      JSON.stringify({ needleTransform, bearingDuringDrag })
+    );
+
+    // 必須スクリーンショット：90°回したあと（releaseの前、ドラッグ中の見た目を撮る）
+    const afterPath = path.join(screenshotDir, `rotate-handle-${label}-after-90deg.png`);
+    await page.screenshot({ path: afterPath, clip: mapAreaBox });
+    savedPaths.push(afterPath);
+
+    await releaseRotateHandle(page);
+    await page.waitForTimeout(200);
+
+    // --- 中央を押すと北に戻る ---
+    const resetBox = await page.locator('#map-rotate-reset').boundingBox();
+    await page.mouse.click(resetBox.x + resetBox.width / 2, resetBox.y + resetBox.height / 2);
+    const resetOk = await page.waitForFunction(
+      () => Math.abs(window.__terrainMapForDebug.getBearing()) < 0.5,
+      { timeout: 5000 }
+    ).then(() => true).catch(() => false);
+    const bearingAfterReset = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
+    record(`[${label}] 中央を押すとbearingが0に戻る`, resetOk, `bearing=${bearingAfterReset}`);
+
+    // --- キーボード操作：←→で少しずつ回る、Enterで北に戻る ---
+    await page.locator('#map-rotate-handle').focus();
+    const bearingBeforeArrow = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
+    await page.keyboard.press('ArrowRight');
+    await page.waitForTimeout(100);
+    const bearingAfterArrow = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
+    record(
+      `[${label}] ハンドルにfocusしてArrowRightを押すと少し回る`,
+      bearingAfterArrow !== bearingBeforeArrow,
+      `before=${bearingBeforeArrow} after=${bearingAfterArrow}`
+    );
+    await page.keyboard.press('Enter');
+    const enterResetOk = await page.waitForFunction(
+      () => Math.abs(window.__terrainMapForDebug.getBearing()) < 0.5,
+      { timeout: 5000 }
+    ).then(() => true).catch(() => false);
+    record(`[${label}] ハンドルにfocusしてEnterを押すとbearingが0に戻る`, enterResetOk);
+
+    // --- 回したあとも、選んだピンが帯より上にある（pivotの検証） ---
+    const pinPos = await page.evaluate((budget) => {
+      const map = window.__terrainMapForDebug;
+      const source = map.getSource('spots');
+      const feats = (source?._data?.features || []).filter((f) => f.properties.fare <= budget);
+      if (feats.length === 0) return null;
+      const p = map.project(feats[0].geometry.coordinates);
+      return { x: p.x, y: p.y };
+    }, 1000);
+    if (pinPos) {
+      const mapBoxForClick = await page.locator('#map-area').boundingBox();
+      await page.mouse.click(mapBoxForClick.x + pinPos.x, mapBoxForClick.y + pinPos.y);
+      await page.waitForTimeout(2000); // 降りる→傾ける演出完了を待つ
+      const panelVisible = await page.locator('#spot-info-panel').isVisible().catch(() => false);
+      if (panelVisible) {
+        const panelBox = await page.locator('#spot-info-panel').boundingBox();
+        const handleBoxNow = await page.locator('#map-rotate-handle').boundingBox();
+        await dragRotateHandle(page, handleBoxNow, 90);
+        await page.waitForTimeout(100);
+        const selectedY = await page.evaluate(() => {
+          const map = window.__terrainMapForDebug;
+          const f = map.getSource('selected-spot')?._data?.features?.[0];
+          return f ? map.project(f.geometry.coordinates).y : null;
+        });
+        await releaseRotateHandle(page);
+        record(
+          `[${label}] 回したあとも、選んだピンが帯（名前の帯）より上にある`,
+          selectedY !== null && mapBoxForClick.y + selectedY < panelBox.y,
+          JSON.stringify({ selectedY, mapBoxForClickY: mapBoxForClick.y, panelBoxY: panelBox.y })
+        );
+        await page.click('#spot-info-close').catch(() => {});
+      } else {
+        record(`[${label}] pivot検証用のピン選択ができる`, false);
+      }
+    }
+
+    if (pageErrors.length > 0) {
+      record(`[${label}] ハンドル操作中にページエラーが発生していない`, false, pageErrors.join('; '));
+    }
+    const unexpected = consoleMessages.filter((m) => !isKnownAcceptableConsoleMessage(m));
+    record(
+      `[${label}] ハンドル操作中にコンソールエラー・警告が出ない（既知のDEMタイル404等は除く）`,
+      unexpected.length === 0,
+      unexpected.join(' | ')
+    );
+
+    await context.close();
+  }
+
+  // --- 375×667・390×844でも、ハンドルがほかの部品と重ならない（重なりのみ確認） ---
+  for (const [label, viewport] of Object.entries({ se: { width: 375, height: 667 }, std: { width: 390, height: 844 } })) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '富山駅前', 800);
+    await page.click('.tab-btn[data-tab="map"]');
+    await page.waitForTimeout(300);
+    await page.click('#map-dimension-toggle');
+    const became3d = await page.waitForFunction(
+      () => document.getElementById('map-area').classList.contains('mode-3d'),
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
+    if (became3d) {
+      await waitFor3dSettled(page);
+      const handleBox = await page.locator('#map-rotate-handle').boundingBox();
+      const toggleBox = await page.locator('#map-dimension-toggle').boundingBox();
+      const attribBox = await page.locator('#map-area .maplibregl-ctrl-bottom-right').boundingBox().catch(() => null);
+      const overlayBox = await page.locator('#mobile-budget-overlay').boundingBox().catch(() => null);
+      record(`[${label}] ハンドルが2D/3D切替ボタンと重ならない`, !rectsOverlap(handleBox, toggleBox), JSON.stringify({ handleBox, toggleBox }));
+      if (attribBox) {
+        record(`[${label}] ハンドルが出典ボタンと重ならない`, !rectsOverlap(handleBox, attribBox), JSON.stringify({ handleBox, attribBox }));
+      }
+      if (overlayBox) {
+        record(`[${label}] ハンドルがスマホの予算操作帯と重ならない`, !rectsOverlap(handleBox, overlayBox), JSON.stringify({ handleBox, overlayBox }));
+      }
+    } else {
+      record(`[${label}] 重なり確認用の3D化に成功`, false);
+    }
+    await context.close();
+  }
+}
+
 async function main() {
   assertBundleFresh('verify-layout');
   assertSiteDataFresh('verify-layout');
@@ -3708,6 +3976,7 @@ async function main() {
     await checkSpotInfoPanel(browser, baseUrl, savedPaths);
     await checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths);
     await checkMobileBudgetOverlay(browser, baseUrl, savedPaths);
+    await checkRotateHandle(browser, baseUrl, savedPaths);
     await checkCrossDimensionSelectionScroll(browser, baseUrl, savedPaths);
     await checkReturnToOverview(browser, baseUrl, savedPaths);
     await checkBreadcrumbTrail(browser, baseUrl, savedPaths);
