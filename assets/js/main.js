@@ -21,6 +21,11 @@ import {
 // 予算の帯の幅（¥）。表示するのは「予算−BAND_WIDTHより高く、予算以下」の場所だけ
 // （2026-10-06、Minamiさんの判断により「予算以下すべて」から変更）。
 const BAND_WIDTH = 200;
+// 【2026-10-16、28本目、不具合修正】予算操作帯のボタン文言の「収まるか」判定で、
+// scrollWidthがclientWidthとちょうど同じ（際どい境界値）場合でもフォントの
+// サブピクセル描画の環境差で省略記号が出ることがあったため設けた安全マージン
+// （updateMobileBudgetOverlay()参照）。
+const TEXT_FIT_SAFETY_MARGIN_PX = 3;
 const MIN_BUDGET = 200;
 const MAX_BUDGET = 2000; // 2026-10-06、Minamiさんの判断により¥1000から変更
 const BUDGET_STEP = 100;
@@ -249,6 +254,19 @@ class ReverseTravel {
       // 見える位置に来るようにする（地図タブ表示中はパネルがdisplay:noneで
       // 位置計算ができないため、タブが有効化された時点で改めて実行する）
       onListTabActivated: () => this.scrollSelectedCardIntoView(),
+    });
+
+    // 【2026-10-16、28本目、不具合修正】タブ切替・画面サイズ変更のたびに
+    // 予算操作帯の文字を再判定する（refitMobileBudgetOverlay()参照）。
+    // タブ切替はdisplay:none→flexへの反映後に幅が確定するよう次フレームで
+    // 呼ぶ。resizeは連続発火するため短い間隔で間引く。
+    document.querySelectorAll('.tab-btn').forEach((btn) => {
+      btn.addEventListener('click', () => requestAnimationFrame(() => this.refitMobileBudgetOverlay()));
+    });
+    let resizeRefitTimer = null;
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeRefitTimer);
+      resizeRefitTimer = setTimeout(() => this.refitMobileBudgetOverlay(), 150);
     });
 
     // 2D/3D切替（4本目①「3D地図の土台」、feature/3d-mapブランチ）。
@@ -674,13 +692,37 @@ class ReverseTravel {
       // （400×464で実測：scrollWidth160・clientWidth159）まで「収まっている」
       // と誤判定していた。text-overflow:ellipsisは1px未満の超過でも発動する
       // ため、許容差を設けず厳密な不等号にする。
+      // 【2026-10-16、28本目、不具合修正】↑の修正だけでは不十分だった。
+      // 件数込みの文言はちょうど収まる幅ギリギリ（scrollWidth===clientWidth）
+      // で設計されており、フォントのサブピクセル描画が環境によって数値を
+      // ±1px押し出すだけで省略記号が出てしまう（実機の確認用スクリーン
+      // ショットで実際に「¥1,000・17件・最大11…」の切れを確認、手元の計測では
+      // 同じ操作で159=159（ちょうど収まる）だった＝環境差でどちらにも転びうる
+      // 際どい境界値だったと判明）。ここに余裕（TEXT_FIT_SAFETY_MARGIN_PX）を
+      // 持たせ、ギリギリの場合は安全側（距離のみ）に倒す。
       btn.classList.remove('mobile-budget-search-btn-pending');
       if (distanceEl) distanceEl.hidden = true;
       btn.textContent = `¥${formatThousands(budget)}・${count}件・${distanceText}`;
-      if (btn.scrollWidth > btn.clientWidth) {
+      if (btn.scrollWidth > btn.clientWidth - TEXT_FIT_SAFETY_MARGIN_PX) {
         btn.textContent = `¥${formatThousands(budget)}・${distanceText}`;
       }
     }
+  }
+
+  /**
+   * 【2026-10-16、28本目、不具合修正】updateMobileBudgetOverlay()の
+   * 件数込み／距離のみの出し分けは、呼ばれた時点でのbtn.clientWidthを見て
+   * 判定するため、呼んだとき実際に見えている幅と違う幅で判定してしまうと
+   * 結果が狂う。検索・金額操作のたびには呼んでいたが、「一覧／地図」タブを
+   * 切り替えたとき・画面の大きさが変わったとき（スマホの回転等）には
+   * 呼んでおらず、Cowork実機で一覧タブの操作帯が「¥1,000・17件・最大1…」と
+   * 切れたまま直らない例が見つかった。今の#budget-inputの値でいつでも
+   * 再判定できるよう、この薄いラッパーをタブ切替・resizeのたびに呼ぶ
+   * （setupEventListeners()のタブボタン・window.resizeのリスナー参照）。
+   */
+  refitMobileBudgetOverlay() {
+    if (!this.elements.mobileBudgetOverlay || this.elements.mobileBudgetOverlay.hidden) return;
+    this.updateMobileBudgetOverlay(parseInt(this.elements.budgetInput.value, 10));
   }
 
   /**

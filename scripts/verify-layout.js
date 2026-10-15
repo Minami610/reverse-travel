@@ -2832,24 +2832,28 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       cardsAfterListSearch !== cardsAfterListDrag && tabStillListAfterSearch,
       JSON.stringify({ cardsAfterListDrag, cardsAfterListSearch, tabStillListAfterSearch })
     );
-    const listTabBandPath = path.join(screenshotDir, `mobile-budget-overlay-list-tab-${label}.png`);
-    await page.screenshot({ path: listTabBandPath });
-    savedPaths.push(listTabBandPath);
-
-    // 【26本目③、不具合修正】帯の文言（件数込み・距離のみどちらでも）が
-    // はみ出して省略記号で切れないこと（scrollWidth<=clientWidth）。
-    // 400×464で「¥1,000・15件・最大1…」のように切れる実例があった
-    // （updateMobileBudgetOverlay()の許容差「+1」が1px超過を見逃していたのが
-    // 原因。修正済み：許容差を無くし、厳密な不等号にした）。
-    const bandTruncation = await page.evaluate(() => {
+    // 【26本目③、28本目、不具合修正】帯の文言（件数込み・距離のみどちらでも）
+    // がはみ出して省略記号で切れないこと（scrollWidth<=clientWidth）。
+    // 400×464で「¥1,000・17件・最大11…」のように切れる実例が
+    // スクリーンショットで見つかった（このassert自体は当時も通っていた＝
+    // 件数込みの文言がちょうど収まる境界値scrollWidth===clientWidthで設計
+    // されており、フォントのサブピクセル描画の環境差で±1px転ぶ際どさが
+    // 原因と判明。updateMobileBudgetOverlay()に安全マージン
+    // （TEXT_FIT_SAFETY_MARGIN_PX）を設けて解消した）。
+    // スクリーンショットより先に測定し、撮った画像が実際に「収まっている」と
+    // 判定した状態と一致するようにする。
+    const bandTruncationList = await page.evaluate(() => {
       const btn = document.getElementById('mobile-budget-search-btn');
       return { text: btn.textContent, scrollWidth: btn.scrollWidth, clientWidth: btn.clientWidth };
     });
     record(
       `[${label}/一覧タブ] 予算操作帯のボタン文言が省略記号で切れない（scrollWidth<=clientWidth）`,
-      bandTruncation.scrollWidth <= bandTruncation.clientWidth,
-      JSON.stringify(bandTruncation)
+      bandTruncationList.scrollWidth <= bandTruncationList.clientWidth,
+      JSON.stringify(bandTruncationList)
     );
+    const listTabBandPath = path.join(screenshotDir, `mobile-budget-overlay-list-tab-${label}.png`);
+    await page.screenshot({ path: listTabBandPath });
+    savedPaths.push(listTabBandPath);
 
     await page.click('.tab-btn[data-tab="map"]');
     await page.waitForTimeout(300);
@@ -2882,6 +2886,20 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
     // 波の演出（検索直後、近い順にピンが広がって出る）が終わるまで待ってから撮る
     // （Cowork指摘。待たずに撮るとピンが1つも写らない画面になる）。
     await waitForWaveRevealSettled(page);
+
+    // 【28本目】地図タブでも帯の文言が省略記号で切れないこと（一覧タブと
+    // 同じ安全マージンを使うため、理論上は同じ状態になるはずだが、
+    // タブをまたいで実機相当で確かめる）。
+    const bandTruncationMap2d = await page.evaluate(() => {
+      const btn = document.getElementById('mobile-budget-search-btn');
+      return { text: btn.textContent, scrollWidth: btn.scrollWidth, clientWidth: btn.clientWidth };
+    });
+    record(
+      `[${label}/2D] 予算操作帯のボタン文言が省略記号で切れない（scrollWidth<=clientWidth）`,
+      bandTruncationMap2d.scrollWidth <= bandTruncationMap2d.clientWidth,
+      JSON.stringify(bandTruncationMap2d)
+    );
+
     const mapTab2dPath = path.join(screenshotDir, `mobile-budget-overlay-2d-${label}.png`);
     await page.screenshot({ path: mapTab2dPath });
     savedPaths.push(mapTab2dPath);
@@ -3087,6 +3105,17 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
 
       const mapLabelCount3d = await page.evaluate(() => document.querySelectorAll('.reach-circle-label').length);
       record(`[${label}/3D] 地図の上に「最大◯km先まで」のラベルが無い`, mapLabelCount3d === 0, `count=${mapLabelCount3d}`);
+
+      // 【28本目】地図タブ（3D）でも帯の文言が省略記号で切れないこと。
+      const bandTruncationMap3d = await page.evaluate(() => {
+        const btn = document.getElementById('mobile-budget-search-btn');
+        return { text: btn.textContent, scrollWidth: btn.scrollWidth, clientWidth: btn.clientWidth };
+      });
+      record(
+        `[${label}/3D] 予算操作帯のボタン文言が省略記号で切れない（scrollWidth<=clientWidth）`,
+        bandTruncationMap3d.scrollWidth <= bandTruncationMap3d.clientWidth,
+        JSON.stringify(bandTruncationMap3d)
+      );
 
       const mapTab3dPath = path.join(screenshotDir, `mobile-budget-overlay-3d-${label}.png`);
       await page.screenshot({ path: mapTab3dPath });
