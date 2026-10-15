@@ -763,11 +763,17 @@ class ReverseTravel {
   updateMapBudgetLive(budget, { userTouch = true } = {}) {
     if (userTouch) {
       this.hideSpotInfoPanel();
-      this.mapView.returnToOverview();
-      this.terrainMapView?.returnToOverview();
     }
     this.mapView.updateReachCircle(budget, { style: 'live' });
     this.terrainMapView?.updateReachCircle(budget, { style: 'live' });
+    if (userTouch) {
+      // 【2026-10-17、32本目B、Minami決定】まず円の半径が変わるのを見せ、
+      // 最後の操作から0.4秒止まったら地図を円全体が収まる大きさへ合わせる。
+      // 今までの「予算を触ったら全体表示（fitToBudget）に戻る」
+      // （returnToOverview()）はこれに置き換える。
+      this.mapView.scheduleFitCircleToView();
+      this.terrainMapView?.scheduleFitCircleToView();
+    }
     if (!this.currentAllSpots || this.currentAllSpots.length === 0) {
       this.elements.budgetBandPreview.hidden = true;
       return;
@@ -1204,6 +1210,11 @@ class ReverseTravel {
           // 【2026-10-15、11本目②】裏取得はユーザーの予算操作ではないため、
           // 情報枠を閉じたり全体に戻したりしない（userTouch:false）。
           this.updateMapBudgetLive(liveBudget, { userTouch: false });
+          // 【2026-10-17、32本目B、検証用】¥2000全域の裏取得が実際に反映された
+          // 回数。verify-layout.jsが「裏取得が終わるまで待つ」ために使う
+          // （_lastSpots.lengthの安定待ちだけだと、安定したように見える瞬間が
+          // 実際の完了より先に来ることがあり、不十分だった）。アプリ本体は読まない。
+          window.__maxBudgetPrefetchAppliedCount = (window.__maxBudgetPrefetchAppliedCount || 0) + 1;
         }, WAVE_REVEAL_SAFE_DELAY_MS);
       } catch (e) {
         console.warn('¥2000範囲の裏取得に失敗しました（一覧・現在の帯の表示には影響しません）:', e);

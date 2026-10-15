@@ -4891,6 +4891,34 @@ function reachHaversineKm(lat1, lon1, lat2, lon2) {
   return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
+/** 始点から指定の方位角・距離(km)だけ進んだ地点を返す（3D側のdestinationPoint()と
+ * 同じ球面三角法。Leaflet流に[lat, lon]で返す）。到達円「全体」を画面に収める
+ * fitCircleToView()の外接範囲（N/E/S/W）の計算に使う。 */
+function reachDestinationPoint(lat, lon, bearingDeg, distanceKm) {
+  const delta = distanceKm / EARTH_RADIUS_KM;
+  const theta = toRadReach(bearingDeg);
+  const phi1 = toRadReach(lat);
+  const lambda1 = toRadReach(lon);
+  const phi2 = Math.asin(Math.sin(phi1) * Math.cos(delta) + Math.cos(phi1) * Math.sin(delta) * Math.cos(theta));
+  const lambda2 = lambda1 + Math.atan2(
+    Math.sin(theta) * Math.sin(delta) * Math.cos(phi1),
+    Math.cos(delta) - Math.sin(phi1) * Math.sin(phi2)
+  );
+  return [toDegReach(phi2), toDegReach(lambda2)];
+}
+
+// 【2026-10-17、32本目B、Minami決定】予算の±・スライダー操作：まず円の半径を
+// この時間（0.25秒）でなめらかに変え、最後の操作からこの時間（0.4秒）止まったら、
+// 円「全体」が収まるよう地図を合わせる（0.7秒）。3D（terrain-map-view.js）の
+// 同名の定数と同じ値・考え方だが、バンドル後は別スクリプトとして遅延読込される
+// 3D側と違い、2D（map-view.js）はmain.js等と同じグローバルスコープに連結される
+// ため、名前の衝突を避けてMAP_接頭辞を付けている（MAP_BAND_WIDTHと同じ理由）。
+const MAP_CIRCLE_RADIUS_ANIM_MS = 250;
+const MAP_CIRCLE_FIT_DEBOUNCE_MS = 400;
+const MAP_CIRCLE_FIT_DURATION_SEC = 0.7;
+const MAP_CIRCLE_FIT_PADDING_RATIO = 0.08; // 3D側のOVERVIEW_PADDING_RATIOと同じ考え方
+const MAP_CIRCLE_FIT_MIN_ZOOM = 9.5; // 3D側のOVERVIEW_MIN_ZOOMと同じ値
+
 /** 到達円の半径表記（例: 0.8km, 12km）。10km未満は小数第1位まで、以上は整数に丸める。
  * 【2026-10-14、25本目】地図上のラベルを廃止し、main.jsのスマホ予算操作帯・PCの
  * 帯件数プレビューで距離を出すため、main.jsからimportして使えるようexportする。 */
@@ -4918,9 +4946,10 @@ class MapView {
     this._departureStation = null;
     this._reachCircle = null;
     this._reachCircleRadiusKm = 0;
-    this._circlePaintScheduled = false;
-    this._pendingCircleRadiusKm = null;
     this._pendingCircleStyle = 'live';
+    this._circleAnimFrame = null; // 【2026-10-17、32本目B】半径を0.25秒ほどでなめらかに変えるrequestAnimationFrameのID
+    this._circleAnimToken = 0; // 進行中の半径アニメーションを無効化する世代カウンタ
+    this._circleFitTimer = null; // 【2026-10-17、32本目B】円が収まるよう地図を合わせる、0.4秒デバウンスのsetTimeout ID
     this._waveToken = 0;
     this._waveTimers = [];
     this._pendingWaveReveal = false; // 【2026-10-13、10本目②】layout-controller.jsのinvalidateMapSize()参照
@@ -4964,6 +4993,7 @@ class MapView {
   render(departureStation, spots, budget = 2000, { reveal = false } = {}) {
     this.ensureMap();
     this._cancelWaveReveal();
+    this._cancelFitCircleToView(); // 新しい検索で、前の予算操作から保留中の地図合わせは無効化する
     this.markersLayer.clearLayers();
     this.markersBySpotId.clear();
     this.fareBySpotId.clear();
@@ -5150,6 +5180,7 @@ class MapView {
    */
   fitToBudget(budget, { animate = true, durationSec = 0.6 } = {}) {
     if (!this.map) return;
+    this._cancelFitCircleToView();
     this.lastBudget = budget;
     const bounds = [];
     if (this.departureLatLng) bounds.push(this.departureLatLng);
@@ -5254,20 +5285,103 @@ class MapView {
    * 半径は「今の予算以内（往復）で行ける場所のうち、一番遠い場所までの直線距離」
    * （¥2000で先に取得済みのallSpotsから実測。推測値にしない、Minami指示）。
    * まだ検索していない（allSpots無し）ときは円を出さない。
-   * 塗り替えはrequestAnimationFrame 1コマに1回へ間引く（3D側のapplyBudget()と
-   * 同じ理由。スライダーのinputは連続発火するため）。
+   * 【2026-10-17、32本目B、Minami決定】半径の変化は瞬時に飛ばず、今の大きさから
+   * 新しい大きさへ0.25秒ほどでなめらかに変える（_animateCircleRadius()、
+   * 3D側のterrain-map-view.jsと同じ考え方）。
    * @param {number} budget
    * @param {{style?: 'live'|'settled'}} [opts] - settled:検索確定後（薄くする）
    */
   updateReachCircle(budget, { style = 'live' } = {}) {
-    this._pendingCircleRadiusKm = this.computeReachRadiusKm(budget);
+    this._animateCircleRadius(this.computeReachRadiusKm(budget), style);
+  }
+
+  /**
+   * 【2026-10-17、32本目B】円の半径を今の値（_reachCircleRadiusKm）から
+   * targetKmへ、MAP_CIRCLE_RADIUS_ANIM_MSかけてなめらかに変える。呼ばれるたびに
+   * 世代カウンタ（_circleAnimToken）を進めるため、スライダー操作中の連続呼び
+   * 出しは「今アニメーション中の値」から新しい目標へ滑らかに繋ぎ直される。
+   */
+  _animateCircleRadius(targetKm, style) {
     this._pendingCircleStyle = style;
-    if (this._circlePaintScheduled) return;
-    this._circlePaintScheduled = true;
-    requestAnimationFrame(() => {
-      this._circlePaintScheduled = false;
-      this._paintReachCircle(this._pendingCircleRadiusKm, this._pendingCircleStyle);
-    });
+    if (this._circleAnimFrame) {
+      cancelAnimationFrame(this._circleAnimFrame);
+      this._circleAnimFrame = null;
+    }
+    const startKm = this._reachCircleRadiusKm;
+    if (reachPrefersReducedMotion() || Math.abs(targetKm - startKm) < 0.01) {
+      this._paintReachCircle(targetKm, style);
+      return;
+    }
+    const token = ++this._circleAnimToken;
+    const startTime = performance.now();
+    const step = (now) => {
+      if (token !== this._circleAnimToken || !this.map) return;
+      const progress = Math.min(1, (now - startTime) / MAP_CIRCLE_RADIUS_ANIM_MS);
+      const km = startKm + (targetKm - startKm) * progress;
+      this._paintReachCircle(km, this._pendingCircleStyle);
+      if (progress < 1) {
+        this._circleAnimFrame = requestAnimationFrame(step);
+      } else {
+        this._circleAnimFrame = null;
+      }
+    };
+    this._circleAnimFrame = requestAnimationFrame(step);
+  }
+
+  /**
+   * 【2026-10-17、32本目B、Minami決定】予算の±・スライダー操作のたびに呼ぶ。
+   * 円の半径変化（updateReachCircle()）はそのたびに起きるが、地図を合わせる
+   * （fitCircleToView()）のは最後の呼び出しから0.4秒止まったときだけ
+   * （連打・ドラッグ中に地図が何度も動いて酔わないようにするMinami指示）。
+   */
+  scheduleFitCircleToView() {
+    this._cancelFitCircleToView();
+    this._circleFitTimer = setTimeout(() => {
+      this._circleFitTimer = null;
+      this.fitCircleToView();
+    }, MAP_CIRCLE_FIT_DEBOUNCE_MS);
+  }
+
+  _cancelFitCircleToView() {
+    if (this._circleFitTimer) {
+      clearTimeout(this._circleFitTimer);
+      this._circleFitTimer = null;
+    }
+  }
+
+  /**
+   * 【2026-10-17、32本目B、Minami決定】今描画中の到達円「全体」が画面に収まる
+   * よう、滑らかにカメラを引く/寄せる。今までの「予算を触ったら全体表示に
+   * 戻る」（fitToBudget()ベースのreturnToOverview()）をこれに置き換える
+   * （円そのものを収める点がfitToBudget()と異なる：スポットの座標ではなく、
+   * 出発駅からの半径で決まる円の外接範囲を使う）。2Dに向き（bearing）・
+   * 傾き（pitch）は無いため変更不要。中心は出発駅に固定する（円は必ず
+   * 出発駅中心のため、対称なpaddingを使えば出発駅中心のままで収まる）。
+   */
+  fitCircleToView() {
+    if (!this.map || !this.departureLatLng) return;
+    const radiusKm = this._reachCircleRadiusKm;
+    if (!radiusKm || radiusKm <= 0) return;
+    if (!this.isContainerVisible()) return;
+    const [lat, lon] = this.departureLatLng;
+    const bounds = L.latLngBounds([
+      reachDestinationPoint(lat, lon, 0, radiusKm),
+      reachDestinationPoint(lat, lon, 90, radiusKm),
+      reachDestinationPoint(lat, lon, 180, radiusKm),
+      reachDestinationPoint(lat, lon, 270, radiusKm),
+    ]);
+    const size = this.map.getSize();
+    const shortSide = Math.max(1, Math.min(size.x, size.y));
+    // 【不具合修正、32本目B】3D側のfitCircleToView()と同じ理由で、低い画面での
+    // 極端な余白を避けるため短い辺の半分未満にクランプする。
+    const padding = Math.min(Math.round(shortSide * MAP_CIRCLE_FIT_PADDING_RATIO), Math.floor(shortSide / 2) - 1);
+    const fitZoom = this.map.getBoundsZoom(bounds, false, L.point(padding, padding));
+    const zoom = Math.min(Math.max(fitZoom, MAP_CIRCLE_FIT_MIN_ZOOM), 16);
+    if (reachPrefersReducedMotion()) {
+      this.map.setView(this.departureLatLng, zoom, { animate: false });
+    } else {
+      this.map.flyTo(this.departureLatLng, zoom, { duration: MAP_CIRCLE_FIT_DURATION_SEC });
+    }
   }
 
   /**
@@ -6846,11 +6960,17 @@ class ReverseTravel {
   updateMapBudgetLive(budget, { userTouch = true } = {}) {
     if (userTouch) {
       this.hideSpotInfoPanel();
-      this.mapView.returnToOverview();
-      this.terrainMapView?.returnToOverview();
     }
     this.mapView.updateReachCircle(budget, { style: 'live' });
     this.terrainMapView?.updateReachCircle(budget, { style: 'live' });
+    if (userTouch) {
+      // 【2026-10-17、32本目B、Minami決定】まず円の半径が変わるのを見せ、
+      // 最後の操作から0.4秒止まったら地図を円全体が収まる大きさへ合わせる。
+      // 今までの「予算を触ったら全体表示（fitToBudget）に戻る」
+      // （returnToOverview()）はこれに置き換える。
+      this.mapView.scheduleFitCircleToView();
+      this.terrainMapView?.scheduleFitCircleToView();
+    }
     if (!this.currentAllSpots || this.currentAllSpots.length === 0) {
       this.elements.budgetBandPreview.hidden = true;
       return;
@@ -7287,6 +7407,11 @@ class ReverseTravel {
           // 【2026-10-15、11本目②】裏取得はユーザーの予算操作ではないため、
           // 情報枠を閉じたり全体に戻したりしない（userTouch:false）。
           this.updateMapBudgetLive(liveBudget, { userTouch: false });
+          // 【2026-10-17、32本目B、検証用】¥2000全域の裏取得が実際に反映された
+          // 回数。verify-layout.jsが「裏取得が終わるまで待つ」ために使う
+          // （_lastSpots.lengthの安定待ちだけだと、安定したように見える瞬間が
+          // 実際の完了より先に来ることがあり、不十分だった）。アプリ本体は読まない。
+          window.__maxBudgetPrefetchAppliedCount = (window.__maxBudgetPrefetchAppliedCount || 0) + 1;
         }, WAVE_REVEAL_SAFE_DELAY_MS);
       } catch (e) {
         console.warn('¥2000範囲の裏取得に失敗しました（一覧・現在の帯の表示には影響しません）:', e);
