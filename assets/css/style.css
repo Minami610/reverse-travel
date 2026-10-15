@@ -532,7 +532,8 @@ header p {
 }
 
 #app-layout[data-view="detail"] .mobile-tabs,
-#app-layout[data-view="detail"] .tab-panel {
+#app-layout[data-view="detail"] .tab-panel,
+#app-layout[data-view="detail"] .mobile-budget-overlay {
   display: none;
 }
 
@@ -775,32 +776,43 @@ header p {
 }
 
 @media (max-width: 759px) {
-  /* 【2026-10-13、22本目、Minami決定：B】予算操作帯（#mobile-budget-overlay、
-     bottom:8px・高さ44px）のすぐ上に出す。48px→58px（8+44+余白6px）。 */
+  /* 【2026-10-16、26本目、不具合修正】予算操作帯（#mobile-budget-overlay）は
+     地図の外（タブパネルの下）へ移したため、地図内で避ける対象ではなくなった。
+     地図の一番下に戻す（PCのbottom:6pxに準じる）。 */
   .spot-info-panel {
     left: 8px;
     right: 8px;
-    bottom: 58px;
+    bottom: 8px;
   }
 }
 
-/* 【2026-10-13、22本目、Minami決定：B】スマホの検索後、地図の一番下に重ねて
-   出す予算操作帯。「−」「スライダー」「＋」「¥800・16件（または「この金額で
-   探す」）」を1行に収める。PCでは常に非表示にする（JS側は検索後にhidden属性を
-   外すだけで、幅の判定はしていないため、ここで確実にPCを除外する）。 */
+/* 【2026-10-13、22本目、Minami決定：B】スマホの検索後に出す予算操作帯。
+   「−」「スライダー」「＋」「¥800・16件（または「この金額で探す」）」を
+   1行に収める。PCでは常に非表示にする（JS側は検索後にhidden属性を外す
+   だけで、幅の判定はしていないため、ここで確実にPCを除外する）。
+   【2026-10-16、26本目、不具合修正】以前は地図（#map-area）に重ねる絶対配置
+   だったため、「地図」タブを選んでいるときしか表示・操作できなかった
+   （#map-areaはlayout-controller.jsがタブごとにDOMの位置を付け替えるため、
+   「一覧」タブ中は非表示のタブパネルの中に入ってしまっていた）。タブパネルの
+   外（.layout-rightの直接の子）に移し、通常のフロー要素として一覧・地図
+   どちらのタブでも常に見える・操作できるようにした。 */
 .mobile-budget-overlay {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: 8px;
-  height: 44px;
-  z-index: 1200;
+  flex: 0 0 auto;
+  /* 【2026-10-16、26本目、不具合修正】高さ44px・上マージン0.5rem（地図への
+     絶対配置だった頃の値）のままだと、400×464のような低い画面で一覧タブの
+     占有率が画面高さの半分を割り込んだ（verify-layoutの既存チェック、
+     実測224.3px<232px）。通常のフロー要素になり一覧の高さを直接削るように
+     なったため、タブパネルを圧迫しない範囲まで詰めた
+     （高さ44→40px、上マージン0.5rem→0.2remで計10px強縮小）。 */
+  height: 40px;
+  margin: 0.2rem 0 0;
   display: flex;
   align-items: center;
   gap: 0.4rem;
   background-color: rgba(255, 255, 255, 0.97);
+  border: 1px solid var(--color-border);
   border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   padding: 0 0.5rem;
 }
 

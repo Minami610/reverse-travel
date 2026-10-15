@@ -2781,6 +2781,60 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '富山駅前', 800);
+
+    // --- 【26本目①、不具合修正】一覧タブでも予算操作帯が使えること ---
+    // 検索直後のデフォルトは「一覧」タブ（まだmapタブへは切り替えていない）。
+    // 以前は#mobile-budget-overlayが#map-area（地図タブ選択時しかDOM上の
+    // 見える位置に無いラッパー）の中にあり、一覧タブでは触れなかった
+    // （Cowork指摘）。タブパネルの外に出した効果をここで確認する。
+    const listTabActive = await page.evaluate(() => document.querySelector('.tab-btn.active')?.dataset.tab === 'list');
+    record(`[${label}/一覧タブ] 検索直後は一覧タブが選ばれている（この検証の前提）`, listTabActive);
+    const overlayVisibleOnList = await page.locator('#mobile-budget-overlay').isVisible().catch(() => false);
+    record(`[${label}/一覧タブ] 予算操作帯が表示される`, overlayVisibleOnList);
+    const cardsBeforeListDrag = await page.locator('.spot-card').count();
+    await page.click('#mobile-budget-increment');
+    await page.click('#mobile-budget-increment');
+    await page.waitForTimeout(200);
+    const cardsAfterListDrag = await page.locator('.spot-card').count();
+    const tabStillListAfterDrag = await page.evaluate(() => document.querySelector('.tab-btn.active')?.dataset.tab === 'list');
+    record(
+      `[${label}/一覧タブ] 予算操作帯の＋を2回押しても一覧タブのまま・一覧は変わらない（帯の文言だけ変わる）`,
+      cardsBeforeListDrag === cardsAfterListDrag && tabStillListAfterDrag,
+      JSON.stringify({ cardsBeforeListDrag, cardsAfterListDrag, tabStillListAfterDrag })
+    );
+    await page.click('#mobile-budget-search-btn');
+    await page.waitForFunction(
+      (prev) => document.querySelectorAll('.spot-card').length !== prev || document.querySelector('.no-results') !== null,
+      cardsAfterListDrag,
+      { timeout: 15000 }
+    );
+    await page.waitForTimeout(200);
+    const cardsAfterListSearch = await page.locator('.spot-card').count();
+    const tabStillListAfterSearch = await page.evaluate(() => document.querySelector('.tab-btn.active')?.dataset.tab === 'list');
+    record(
+      `[${label}/一覧タブ] 「¥◯で探す」を押すと一覧タブのまま一覧が変わる`,
+      cardsAfterListSearch !== cardsAfterListDrag && tabStillListAfterSearch,
+      JSON.stringify({ cardsAfterListDrag, cardsAfterListSearch, tabStillListAfterSearch })
+    );
+    const listTabBandPath = path.join(screenshotDir, `mobile-budget-overlay-list-tab-${label}.png`);
+    await page.screenshot({ path: listTabBandPath });
+    savedPaths.push(listTabBandPath);
+
+    // 【26本目③、不具合修正】帯の文言（件数込み・距離のみどちらでも）が
+    // はみ出して省略記号で切れないこと（scrollWidth<=clientWidth）。
+    // 400×464で「¥1,000・15件・最大1…」のように切れる実例があった
+    // （updateMobileBudgetOverlay()の許容差「+1」が1px超過を見逃していたのが
+    // 原因。修正済み：許容差を無くし、厳密な不等号にした）。
+    const bandTruncation = await page.evaluate(() => {
+      const btn = document.getElementById('mobile-budget-search-btn');
+      return { text: btn.textContent, scrollWidth: btn.scrollWidth, clientWidth: btn.clientWidth };
+    });
+    record(
+      `[${label}/一覧タブ] 予算操作帯のボタン文言が省略記号で切れない（scrollWidth<=clientWidth）`,
+      bandTruncation.scrollWidth <= bandTruncation.clientWidth,
+      JSON.stringify(bandTruncation)
+    );
+
     await page.click('.tab-btn[data-tab="map"]');
     await page.waitForTimeout(300);
 
@@ -3050,6 +3104,18 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
           record(`[${label}/3D] 「全体を見る」ボタンが回転ハンドルと重ならない`, !compassBox3d || !rectsOverlap(viewAllBox3d, compassBox3d), JSON.stringify({ viewAllBox3d, compassBox3d }));
         }
         await tiltCompletePromise3d;
+        // 【26本目②、不具合修正】ピンを押したあと、読み込みが終わっても
+        // pitchが0（真上から見た状態）のまま戻ってこない不具合があった
+        // （flyTo()が「中心・ズームが現在と同じ＝移動距離ゼロ」と判定し、
+        // pitchのアニメーションを正しく行わないまま終わるケースが原因。
+        // terrain-map-view.jsのflyToSpot()・_ensurePitchThenComplete()参照）。
+        // onTiltCompleteが発火した時点でpitchが傾いていることを確認する。
+        const pitchAfterTiltComplete = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
+        record(
+          `[${label}/3D] ピンを押して読み込みが終わった後、pitchが55度以上に傾いている`,
+          pitchAfterTiltComplete >= 55,
+          `pitch=${pitchAfterTiltComplete}`
+        );
         await page.evaluate(() => new Promise((resolve) => {
           const map = window.__terrainMapForDebug;
           map.once('idle', resolve);
@@ -3059,6 +3125,43 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
         const pinSelectedPath3d = path.join(screenshotDir, `mobile-budget-overlay-pin-selected-3d-${label}.png`);
         await page.screenshot({ path: pinSelectedPath3d });
         savedPaths.push(pinSelectedPath3d);
+        await page.click('#spot-info-close').catch(() => {});
+        await page.waitForTimeout(100);
+
+        // 【26本目②、不具合修正の再発防止】真上から降り切った直後（まだ
+        // 傾け始める前）に同じピンをもう一度押しても、最終的にpitchが
+        // 55度以上まで傾くこと。実機相当の計測で、同じ中心・ズームへの
+        // flyTo()の再呼び出しがpitchのアニメーションを正しく完了させない
+        // ことがある不具合を確認済み（flyToSpot()の修正参照）。
+        // 【不具合修正】このピンは直前のブロックで既に選択・寄り済み
+        // （_focusedOnSpot・_flyFocusedSpotIdが一致した状態）のため、
+        // そのまま押すと「既にこの場所にいる」ショートカット経路（単発の
+        // easeTo、onOverheadSettledを呼ばない）を通ってしまい、
+        // onOverheadSettledを待つこのテスト自体がハングしていた
+        // （実際に実行して確認：verify-layout全体が停止した）。
+        // 「全体を見る」で一度フォーカスを外してから押し直すことで、
+        // ここでの最初のクリックが必ず「降りる→傾ける」の2段階を
+        // 通るようにする。
+        await page.click('#view-all-btn').catch(() => {});
+        await page.waitForTimeout(2000);
+        const overheadPromise = page.evaluate(() => new Promise((resolve) => {
+          window.__terrainViewForDebug.onOverheadSettled = () => resolve();
+          setTimeout(resolve, 10000);
+        }));
+        await page.mouse.click(mapBox3d.x + pinScreenPos.x, mapBox3d.y + pinScreenPos.y);
+        await overheadPromise;
+        const tiltCompleteRetryPromise = page.evaluate(() => new Promise((resolve) => {
+          window.__terrainViewForDebug.onTiltComplete = () => resolve();
+          setTimeout(resolve, 10000);
+        }));
+        await page.mouse.click(mapBox3d.x + pinScreenPos.x, mapBox3d.y + pinScreenPos.y); // 同じピンをすぐもう一度
+        await tiltCompleteRetryPromise;
+        const pitchAfterSamePinRetry = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
+        record(
+          `[${label}/3D] 降下直後に同じピンを連打しても、最終的にpitchが55度以上に傾く`,
+          pitchAfterSamePinRetry >= 55,
+          `pitch=${pitchAfterSamePinRetry}`
+        );
         await page.click('#spot-info-close').catch(() => {});
         await page.waitForTimeout(100);
       }

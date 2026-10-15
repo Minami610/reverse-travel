@@ -1212,7 +1212,8 @@ header p {
 }
 
 #app-layout[data-view="detail"] .mobile-tabs,
-#app-layout[data-view="detail"] .tab-panel {
+#app-layout[data-view="detail"] .tab-panel,
+#app-layout[data-view="detail"] .mobile-budget-overlay {
   display: none;
 }
 
@@ -1455,32 +1456,43 @@ header p {
 }
 
 @media (max-width: 759px) {
-  /* 【2026-10-13、22本目、Minami決定：B】予算操作帯（#mobile-budget-overlay、
-     bottom:8px・高さ44px）のすぐ上に出す。48px→58px（8+44+余白6px）。 */
+  /* 【2026-10-16、26本目、不具合修正】予算操作帯（#mobile-budget-overlay）は
+     地図の外（タブパネルの下）へ移したため、地図内で避ける対象ではなくなった。
+     地図の一番下に戻す（PCのbottom:6pxに準じる）。 */
   .spot-info-panel {
     left: 8px;
     right: 8px;
-    bottom: 58px;
+    bottom: 8px;
   }
 }
 
-/* 【2026-10-13、22本目、Minami決定：B】スマホの検索後、地図の一番下に重ねて
-   出す予算操作帯。「−」「スライダー」「＋」「¥800・16件（または「この金額で
-   探す」）」を1行に収める。PCでは常に非表示にする（JS側は検索後にhidden属性を
-   外すだけで、幅の判定はしていないため、ここで確実にPCを除外する）。 */
+/* 【2026-10-13、22本目、Minami決定：B】スマホの検索後に出す予算操作帯。
+   「−」「スライダー」「＋」「¥800・16件（または「この金額で探す」）」を
+   1行に収める。PCでは常に非表示にする（JS側は検索後にhidden属性を外す
+   だけで、幅の判定はしていないため、ここで確実にPCを除外する）。
+   【2026-10-16、26本目、不具合修正】以前は地図（#map-area）に重ねる絶対配置
+   だったため、「地図」タブを選んでいるときしか表示・操作できなかった
+   （#map-areaはlayout-controller.jsがタブごとにDOMの位置を付け替えるため、
+   「一覧」タブ中は非表示のタブパネルの中に入ってしまっていた）。タブパネルの
+   外（.layout-rightの直接の子）に移し、通常のフロー要素として一覧・地図
+   どちらのタブでも常に見える・操作できるようにした。 */
 .mobile-budget-overlay {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: 8px;
-  height: 44px;
-  z-index: 1200;
+  flex: 0 0 auto;
+  /* 【2026-10-16、26本目、不具合修正】高さ44px・上マージン0.5rem（地図への
+     絶対配置だった頃の値）のままだと、400×464のような低い画面で一覧タブの
+     占有率が画面高さの半分を割り込んだ（verify-layoutの既存チェック、
+     実測224.3px<232px）。通常のフロー要素になり一覧の高さを直接削るように
+     なったため、タブパネルを圧迫しない範囲まで詰めた
+     （高さ44→40px、上マージン0.5rem→0.2remで計10px強縮小）。 */
+  height: 40px;
+  margin: 0.2rem 0 0;
   display: flex;
   align-items: center;
   gap: 0.4rem;
   background-color: rgba(255, 255, 255, 0.97);
+  border: 1px solid var(--color-border);
   border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   padding: 0 0.5rem;
 }
 
@@ -3088,6 +3100,36 @@ header p {
           <div id="map-slot-mobile" class="map-slot"></div>
         </div>
 
+        <!-- 【2026-10-16、26本目、不具合修正】以前は#map-area内（地図に重ねる形）
+             に置いていたが、#map-areaは「地図」タブ選択時しかDOM上で見える
+             位置に無く（layout-controller.jsがタブごとに#map-areaを
+             #map-slot-desktop/#map-slot-mobileへ付け替える設計）、「一覧」
+             タブでは予算を一切操作できなかった（Cowork指摘：スマホ400×464・
+             PC幅で確認、一覧タブ中は帯が非表示のまま触れない）。一覧・地図
+             どちらのタブでも使える共有の帯として、タブパネルの外（この位置）
+             に出す。PCでは引き続き非表示（CSS側）。 -->
+        <div id="mobile-budget-overlay" class="mobile-budget-overlay" hidden>
+          <button type="button" id="mobile-budget-decrement" aria-label="予算を100円減らす">−</button>
+          <input
+            type="range"
+            id="mobile-budget-slider"
+            min="200"
+            max="2000"
+            step="100"
+            value="500"
+            aria-label="予算（往復）をスライダーで変更"
+          >
+          <button type="button" id="mobile-budget-increment" aria-label="予算を100円増やす">＋</button>
+          <!-- 【2026-10-14、25本目、Minami決定：B】地図の上の「最大◯km先まで」
+               ラベルを廃止した代わりに、この帯に距離を出す。まだこの金額で
+               検索していない（ボタンが「¥◯で探す」のとき）だけ表示し、
+               動かすたびに変わる（main.jsのupdateMobileBudgetOverlay()参照）。
+               検索済みのときはボタン自体の文言に「・最大◯km」を含めるため
+               このspanは隠す。 -->
+          <span id="mobile-budget-distance" hidden></span>
+          <button type="button" id="mobile-budget-search-btn"></button>
+        </div>
+
         <!-- スポット詳細表示エリア（一覧／地図タブと排他表示。data-view="detail"のときのみ表示） -->
         <div id="detail-container">
           <!-- 「見てきた場所」の足あと（6本目E、Minami決定）。
@@ -3146,33 +3188,6 @@ header p {
       <!-- 【2026-10-15、11本目②】寄っているときだけ出す「全体を見る」ボタン
            （Minami決定：C）。右上の方角ボタン（3Dのみ）の下に重ならないよう配置。 -->
       <button type="button" id="view-all-btn" class="view-all-btn" hidden>全体を見る</button>
-      <!-- 【2026-10-13、22本目、Minami決定：B】スマホの検索後、地図の一番下に
-           予算操作を重ねて出す（検索フォームの予算欄は、スマホでは「条件を
-           変える」を開いても出さない設計に変えたため）。PCでは出さない
-           （CSS側で出し分け）。「¥800・16件」の表示は、スライダーを動かして
-           まだ検索し直していない間は「¥900で探す」のような押せるボタンに
-           変わる（main.jsのupdateMobileBudgetOverlay()参照）。 -->
-      <div id="mobile-budget-overlay" class="mobile-budget-overlay" hidden>
-        <button type="button" id="mobile-budget-decrement" aria-label="予算を100円減らす">−</button>
-        <input
-          type="range"
-          id="mobile-budget-slider"
-          min="200"
-          max="2000"
-          step="100"
-          value="500"
-          aria-label="予算（往復）をスライダーで変更"
-        >
-        <button type="button" id="mobile-budget-increment" aria-label="予算を100円増やす">＋</button>
-        <!-- 【2026-10-14、25本目、Minami決定：B】地図の上の「最大◯km先まで」
-             ラベルを廃止した代わりに、この帯に距離を出す。まだこの金額で
-             検索していない（ボタンが「¥◯で探す」のとき）だけ表示し、
-             動かすたびに変わる（main.jsのupdateMobileBudgetOverlay()参照）。
-             検索済みのときはボタン自体の文言に「・最大◯km」を含めるため
-             このspanは隠す。 -->
-        <span id="mobile-budget-distance" hidden></span>
-        <button type="button" id="mobile-budget-search-btn"></button>
-      </div>
     </div>
   </div>
 
@@ -6492,10 +6507,16 @@ class ReverseTravel {
       // 【25本目】375px幅でも1行に収まるよう、まず件数込みの文言を試し、
       // はみ出す（scrollWidth>clientWidth）場合だけ件数を落として距離を残す
       // （Minami指示：「収まらないときは件数より距離を優先する」）。
+      // 【2026-10-16、26本目、不具合修正】「+1」の許容差は測定誤差を吸収する
+      // つもりで入れていたが、scrollWidth/clientWidthは整数に丸められた値の
+      // ため、実際に1px超過していて見た目には省略記号で切れているケース
+      // （400×464で実測：scrollWidth160・clientWidth159）まで「収まっている」
+      // と誤判定していた。text-overflow:ellipsisは1px未満の超過でも発動する
+      // ため、許容差を設けず厳密な不等号にする。
       btn.classList.remove('mobile-budget-search-btn-pending');
       if (distanceEl) distanceEl.hidden = true;
       btn.textContent = `¥${formatThousands(budget)}・${count}件・${distanceText}`;
-      if (btn.scrollWidth > btn.clientWidth + 1) {
+      if (btn.scrollWidth > btn.clientWidth) {
         btn.textContent = `¥${formatThousands(budget)}・${distanceText}`;
       }
     }

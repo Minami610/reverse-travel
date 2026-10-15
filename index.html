@@ -111,6 +111,36 @@
           <div id="map-slot-mobile" class="map-slot"></div>
         </div>
 
+        <!-- 【2026-10-16、26本目、不具合修正】以前は#map-area内（地図に重ねる形）
+             に置いていたが、#map-areaは「地図」タブ選択時しかDOM上で見える
+             位置に無く（layout-controller.jsがタブごとに#map-areaを
+             #map-slot-desktop/#map-slot-mobileへ付け替える設計）、「一覧」
+             タブでは予算を一切操作できなかった（Cowork指摘：スマホ400×464・
+             PC幅で確認、一覧タブ中は帯が非表示のまま触れない）。一覧・地図
+             どちらのタブでも使える共有の帯として、タブパネルの外（この位置）
+             に出す。PCでは引き続き非表示（CSS側）。 -->
+        <div id="mobile-budget-overlay" class="mobile-budget-overlay" hidden>
+          <button type="button" id="mobile-budget-decrement" aria-label="予算を100円減らす">−</button>
+          <input
+            type="range"
+            id="mobile-budget-slider"
+            min="200"
+            max="2000"
+            step="100"
+            value="500"
+            aria-label="予算（往復）をスライダーで変更"
+          >
+          <button type="button" id="mobile-budget-increment" aria-label="予算を100円増やす">＋</button>
+          <!-- 【2026-10-14、25本目、Minami決定：B】地図の上の「最大◯km先まで」
+               ラベルを廃止した代わりに、この帯に距離を出す。まだこの金額で
+               検索していない（ボタンが「¥◯で探す」のとき）だけ表示し、
+               動かすたびに変わる（main.jsのupdateMobileBudgetOverlay()参照）。
+               検索済みのときはボタン自体の文言に「・最大◯km」を含めるため
+               このspanは隠す。 -->
+          <span id="mobile-budget-distance" hidden></span>
+          <button type="button" id="mobile-budget-search-btn"></button>
+        </div>
+
         <!-- スポット詳細表示エリア（一覧／地図タブと排他表示。data-view="detail"のときのみ表示） -->
         <div id="detail-container">
           <!-- 「見てきた場所」の足あと（6本目E、Minami決定）。
@@ -169,33 +199,6 @@
       <!-- 【2026-10-15、11本目②】寄っているときだけ出す「全体を見る」ボタン
            （Minami決定：C）。右上の方角ボタン（3Dのみ）の下に重ならないよう配置。 -->
       <button type="button" id="view-all-btn" class="view-all-btn" hidden>全体を見る</button>
-      <!-- 【2026-10-13、22本目、Minami決定：B】スマホの検索後、地図の一番下に
-           予算操作を重ねて出す（検索フォームの予算欄は、スマホでは「条件を
-           変える」を開いても出さない設計に変えたため）。PCでは出さない
-           （CSS側で出し分け）。「¥800・16件」の表示は、スライダーを動かして
-           まだ検索し直していない間は「¥900で探す」のような押せるボタンに
-           変わる（main.jsのupdateMobileBudgetOverlay()参照）。 -->
-      <div id="mobile-budget-overlay" class="mobile-budget-overlay" hidden>
-        <button type="button" id="mobile-budget-decrement" aria-label="予算を100円減らす">−</button>
-        <input
-          type="range"
-          id="mobile-budget-slider"
-          min="200"
-          max="2000"
-          step="100"
-          value="500"
-          aria-label="予算（往復）をスライダーで変更"
-        >
-        <button type="button" id="mobile-budget-increment" aria-label="予算を100円増やす">＋</button>
-        <!-- 【2026-10-14、25本目、Minami決定：B】地図の上の「最大◯km先まで」
-             ラベルを廃止した代わりに、この帯に距離を出す。まだこの金額で
-             検索していない（ボタンが「¥◯で探す」のとき）だけ表示し、
-             動かすたびに変わる（main.jsのupdateMobileBudgetOverlay()参照）。
-             検索済みのときはボタン自体の文言に「・最大◯km」を含めるため
-             このspanは隠す。 -->
-        <span id="mobile-budget-distance" hidden></span>
-        <button type="button" id="mobile-budget-search-btn"></button>
-      </div>
     </div>
   </div>
 

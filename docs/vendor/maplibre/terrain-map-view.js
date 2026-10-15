@@ -102,6 +102,12 @@ const CLEAR_PADDING = { top: 0, right: 0, bottom: 0, left: 0 };
 // 【2026-10-13、8本目③】真上(pitch0)から降りた後、傾けて立体にするまでの時間。
 const TILT_DURATION_MS = 2000; // Minami指示：2秒前後
 const REDUCED_MOTION_FLY_DURATION_MS = 300; // prefers-reduced-motion時：降りる・傾けるを1回の短い移動にまとめる
+// 【2026-10-15、26本目、不具合修正】flyTo()/easeTo()が別のアニメーションに
+// 割り込む際、MapLibre内部の競合によりpitchが途中の値で止まったままeaseTo()
+// が完了してしまうことがある（実機相当のPlaywright計測で複数回確認：中心・
+// ズームが同じeaseTo()同士の割り込みでも発生した）。この許容差を超えていたら
+// 「傾け終わった」とみなさず、もう一度だけ傾け直す。
+const PITCH_CORRECTION_TOLERANCE_DEG = 2;
 
 const BAND_WIDTH = 200; // 予算の帯の幅（既存の2D検索・一覧と同じ定義）
 const SPOTS_SOURCE_ID = 'spots';
@@ -248,6 +254,7 @@ export class TerrainMapView {
     this._lastBudget = null;
     this._flySpotToken = 0; // 【2026-10-13、8本目】flyToSpot()の「降りる→傾ける」演出を、ユーザー操作や次のflyToSpot呼び出しで無効化するための世代カウンタ
     this._focusedOnSpot = false; // 【2026-10-15、11本目②】flyToSpot()で寄っている間true。fitToBudget()で全体に戻るとfalse
+    this._flyFocusedSpotId = null; // 【2026-10-15、26本目】_focusedOnSpotがtrueのとき、今寄っているspot.id
     this._reachCircleRadiusKm = 0; // 【2026-10-13、10本目②】現在描画中の円の半径（なめらかな変化の起点）
     this._pendingCircleRadiusKm = null;
     this._pendingCircleStyle = 'live';
@@ -858,6 +865,7 @@ export class TerrainMapView {
       padding: CLEAR_PADDING,
     });
     this._focusedOnSpot = false;
+    this._flyFocusedSpotId = null;
     if (this.onFocusChange) this.onFocusChange(false);
   }
 
@@ -1024,14 +1032,73 @@ export class TerrainMapView {
     });
   }
 
+  /**
+   * 【2026-10-15、26本目、不具合修正】flyToSpot()の「傾け」段階が終わった
+   * （と判定された）時点で呼ぶ。実際のpitchが目標（SPOT_FOCUS_PITCH）から
+   * 大きくずれていたら、MapLibreのアニメーション割り込みが競合し傾けが
+   * 完了し切れなかったと判断し、もう一度だけ傾け直してから完了を報告する
+   * （無限リトライはしない。この2回目はここまでの一連の呼び出しが終わった
+   * 後の単独呼び出しのため、割り込み競合は起きずに最後まで走ることを
+   * 確認済み）。
+   * @param {object} spot
+   * @param {number} token
+   */
+  _ensurePitchThenComplete(spot, token) {
+    if (token !== this._flySpotToken || !this.map) return;
+    if (Math.abs(this.map.getPitch() - SPOT_FOCUS_PITCH) <= PITCH_CORRECTION_TOLERANCE_DEG) {
+      if (this.onTiltComplete) this.onTiltComplete(spot);
+      return;
+    }
+    this.map.easeTo({
+      pitch: SPOT_FOCUS_PITCH,
+      zoom: SPOT_FOCUS_ZOOM,
+      center: [spot.longitude, spot.latitude],
+      duration: TILT_DURATION_MS,
+      padding: this.getRevealPadding(),
+    });
+    this.map.once('moveend', () => {
+      if (token !== this._flySpotToken || !this.map) return;
+      if (this.onTiltComplete) this.onTiltComplete(spot);
+    });
+  }
+
   flyToSpot(spot, departureStation) {
     if (!this.map || !isFiniteNumber(spot?.latitude) || !isFiniteNumber(spot?.longitude)) return;
+    // 【2026-10-15、26本目、不具合修正】既にこの場所へ寄っている最中・寄り終えた
+    // 状態で同じピンをもう一度押すと(読み込み待ちで画面が止まって見える間の
+    // 連打等)、傾ける前の「降りる」flyTo()が「中心・ズームが現在と同じ＝移動
+    // 距離ゼロ」と判定され、pitchのアニメーションを正しく行わないままmoveend
+    // を発火させ、傾きが中途半端な値で止まる不具合があった（実機相当の
+    // Playwright計測で確認：二度目のクリックで最終pitchが27.5のまま固まった）。
+    // easeTo()同士（flyTo()を介さない）であれば同じ中心・ズームでも割り込み後に
+    // pitchが正しく最後までアニメーションすることを別途確認済みのため、
+    // 既にこの場所に寄っている場合は「降りる→傾ける」の2段階をやり直さず、
+    // 傾けのeaseTo()だけを直接呼ぶ。
+    const sameSpotAlreadyFocused = this._focusedOnSpot && this._flyFocusedSpotId === spot.id;
     const token = ++this._flySpotToken;
+    this._flyFocusedSpotId = spot.id;
     // 【2026-10-15、11本目②】寄り始めた時点で「全体を見る」ボタンを出す
     // （Minami決定：C。途中でも全体へ戻れるようにする）。
     this._focusedOnSpot = true;
     if (this.onFocusChange) this.onFocusChange(true);
     const revealPadding = this.getRevealPadding();
+
+    if (sameSpotAlreadyFocused && !prefersReducedMotion()) {
+      this.map.easeTo({
+        pitch: SPOT_FOCUS_PITCH,
+        zoom: SPOT_FOCUS_ZOOM,
+        center: [spot.longitude, spot.latitude],
+        duration: TILT_DURATION_MS,
+        padding: revealPadding,
+      });
+      this.map.once('moveend', () => {
+        if (token !== this._flySpotToken || !this.map) return;
+        this.waitForSceneSettled().then(() => {
+          this._ensurePitchThenComplete(spot, token);
+        });
+      });
+      return;
+    }
 
     if (prefersReducedMotion()) {
       this.map.flyTo({
@@ -1084,8 +1151,7 @@ export class TerrainMapView {
           // 傾けた後の視点に必要なタイルを改めて待つため、ここでも
           // waitForSceneSettled()を呼ぶ（降りた後と同じ理由）。
           this.waitForSceneSettled().then(() => {
-            if (token !== this._flySpotToken || !this.map) return;
-            if (this.onTiltComplete) this.onTiltComplete(spot);
+            this._ensurePitchThenComplete(spot, token);
           });
         });
       });

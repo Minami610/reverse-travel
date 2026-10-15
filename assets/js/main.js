@@ -668,10 +668,16 @@ class ReverseTravel {
       // 【25本目】375px幅でも1行に収まるよう、まず件数込みの文言を試し、
       // はみ出す（scrollWidth>clientWidth）場合だけ件数を落として距離を残す
       // （Minami指示：「収まらないときは件数より距離を優先する」）。
+      // 【2026-10-16、26本目、不具合修正】「+1」の許容差は測定誤差を吸収する
+      // つもりで入れていたが、scrollWidth/clientWidthは整数に丸められた値の
+      // ため、実際に1px超過していて見た目には省略記号で切れているケース
+      // （400×464で実測：scrollWidth160・clientWidth159）まで「収まっている」
+      // と誤判定していた。text-overflow:ellipsisは1px未満の超過でも発動する
+      // ため、許容差を設けず厳密な不等号にする。
       btn.classList.remove('mobile-budget-search-btn-pending');
       if (distanceEl) distanceEl.hidden = true;
       btn.textContent = `¥${formatThousands(budget)}・${count}件・${distanceText}`;
-      if (btn.scrollWidth > btn.clientWidth + 1) {
+      if (btn.scrollWidth > btn.clientWidth) {
         btn.textContent = `¥${formatThousands(budget)}・${distanceText}`;
       }
     }
