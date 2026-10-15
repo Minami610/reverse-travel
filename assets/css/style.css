@@ -975,10 +975,12 @@ header p {
    回転ハンドル（3Dのみ）の下に重ならない位置に置く。
    【2026-10-14、23本目修正】方位磁針（MapLibreのNavigationControl、
    高さ約29px）を「つかんで回すハンドル」（56px）に置き換えたため、
-   top値を54px→78px（8px開始＋56px＋8pxの隙間）に広げた。 */
+   top値を54px→78px（8px開始＋56px＋8pxの隙間）に広げた。
+   【2026-10-16、27本目修正】ハンドルを56px→64pxに拡大したため、
+   78px→86px（8px開始＋64px＋14pxの隙間、元と同じ隙間を維持）に広げた。 */
 .view-all-btn {
   position: absolute;
-  top: 78px;
+  top: 86px;
   right: 8px;
   z-index: 1000;
   padding: 0.35rem 0.7rem;
@@ -992,23 +994,21 @@ header p {
   cursor: pointer;
 }
 
-/* 【2026-10-14、23本目、Minami決定：B】3Dの向きを「つかんで回すハンドル」
-   （MapLibreの既定コンパスの代わり）。見ただけで触り方が分かるよう
-   （アフォーダンス重視、Minami指示）、縁にギザギザ（つまみの刻み）と
-   ↺↻の矢印、中央に北を指す針（赤い先端）を入れる。2Dでは出さない。 */
+/* 【2026-10-16、27本目、Minami決定：A】3Dの向き・傾きを変える「太い輪＋
+   真ん中のつまみ」ハンドル（【23】の「縁をなぞって回す」だけの版を作り直し。
+   Cowork調べ：Cesiumの操作部品の議論・MapLibre標準コンパスのvisualizePitch
+   を参考にした）。外側の太い輪（.map-rotate-ring）をなぞると向き（回転）、
+   真ん中のつまみ（#map-rotate-knob）を上下に引くと傾きが変わる。2Dでは
+   出さない。全体の直径は64px（スマホで指が乗る大きさ、Minami指示）。 */
 .map-rotate-handle {
   display: none;
   position: absolute;
   top: 8px;
   right: 8px;
-  width: 56px;
-  height: 56px;
+  width: 64px;
+  height: 64px;
   z-index: 1000;
   border-radius: 50%;
-  /* 縁のギザギザ＝アプリの緑と白を交互に並べたconic-gradient（Minami指示：
-     「アプリの緑の色に合わせる」）。中央は.map-rotate-faceの白い円が
-     覆うため、実際に見えるのは外周の輪（リング状）だけになる。 */
-  background: repeating-conic-gradient(var(--color-main) 0deg 4deg, white 4deg 12deg);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
   cursor: grab;
   /* 【重要】touch-action:noneにしないと、スマホでこのハンドルをなぞった
@@ -1030,24 +1030,21 @@ header p {
   outline-offset: 2px;
 }
 
-.map-rotate-face {
+/* 外側の太い輪（幅12px）。指をかける凹凸（つまみのギザギザ）をはっきり
+   見えるconic-gradient（アプリの緑と白を交互に並べる、【23】と同じ考え方）。
+   中央は.map-rotate-knobの白い円が覆うため、実際に見えるのは輪だけになる。 */
+.map-rotate-ring {
   position: absolute;
-  top: 6px;
-  left: 6px;
-  width: 44px;
-  height: 44px;
+  inset: 0;
   border-radius: 50%;
-  background-color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none; /* クリック判定は親の.map-rotate-handle（なぞる）と#map-rotate-reset（中央）だけが持つ */
+  background: repeating-conic-gradient(var(--color-main) 0deg 4deg, white 4deg 12deg);
 }
 
 .map-rotate-arrow {
   position: absolute;
-  top: 3px;
-  font-size: 0.7rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.85rem;
   line-height: 1;
   color: var(--color-main-deep);
   font-weight: 700;
@@ -1055,19 +1052,54 @@ header p {
 }
 
 .map-rotate-arrow-ccw {
-  left: 6px;
+  left: 1px;
 }
 
 .map-rotate-arrow-cw {
-  right: 6px;
+  right: 1px;
+}
+
+/* 真ん中のつまみ。輪（12px幅）の内側に浮き上がって見える丸（Minami指示：
+   「少し盛り上がって見える」）。上下にドラッグすると傾き、ドラッグせず
+   軽く押すと北・傾き60度に戻る（terrain-map-view.js参照）。 */
+.map-rotate-knob {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background-color: white;
+  box-shadow: 0 2px 3px rgba(0, 0, 0, 0.3), inset 0 1px 2px rgba(255, 255, 255, 0.9);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.map-pitch-arrow {
+  font-size: 0.5rem;
+  line-height: 1;
+  color: var(--color-main-deep);
+  font-weight: 700;
+  user-select: none;
+}
+
+/* 針に奥行き（perspective）を与えるための入れ物。傾き（pitch）が付くと
+   針が少し寝て見える（MapLibre既定コンパスのvisualizePitchと同じ考え方）。 */
+.map-rotate-needle-wrap {
+  perspective: 60px;
 }
 
 .map-rotate-needle {
-  width: 26px;
-  height: 26px;
-  /* JS（terrain-map-view.js）がbearingに合わせてtransform: rotate()を
-     直接書き換える。transition無し（なぞっている間は1:1で追従させるため、
-     ここでアニメーションを入れると指の動きとズレて見える）。 */
+  width: 20px;
+  height: 20px;
+  /* JS（terrain-map-view.js）がbearing・pitchに合わせてtransformを
+     直接書き換える（rotate()で向き、rotateX()で傾き）。transition無し
+     （なぞっている間は1:1で追従させるため、ここでアニメーションを
+     入れると指の動きとズレて見える）。 */
 }
 
 .map-rotate-needle-n {
@@ -1078,21 +1110,34 @@ header p {
   fill: var(--color-border);
 }
 
-.map-rotate-reset {
+/* 【2026-10-16、27本目】初めて3Dに切り替えたときだけ出す案内の吹き出し。
+   ハンドルの左に、輪に沿う小さな三角のしっぽを付けて出す。 */
+.map-rotate-hint {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  border: none;
-  background: transparent;
+  top: 18px;
+  right: 80px;
+  max-width: 180px;
+  z-index: 1000;
+  background-color: rgba(30, 30, 30, 0.92);
+  color: white;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
   cursor: pointer;
-  /* 親の.map-rotate-faceがpointer-events:noneのため、このボタン自身には
-     明示的にautoを指定し直す（指定し忘れると中央ボタンごと無反応になる）。
-     見た目は透明（針の上に重ねるだけ）。中央を押すと北に戻るクリック判定専用。 */
-  pointer-events: auto;
+}
+
+.map-rotate-hint::after {
+  content: '';
+  position: absolute;
+  top: 16px;
+  right: -6px;
+  width: 0;
+  height: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-left: 6px solid rgba(30, 30, 30, 0.92);
 }
 
 .map-pin-wrapper {

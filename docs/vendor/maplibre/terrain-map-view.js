@@ -109,6 +109,30 @@ const REDUCED_MOTION_FLY_DURATION_MS = 300; // prefers-reduced-motion時：降�
 // 「傾け終わった」とみなさず、もう一度だけ傾け直す。
 const PITCH_CORRECTION_TOLERANCE_DEG = 2;
 
+// 【2026-10-16、27本目、Minami決定：A】ハンドル中央のつまみを上下に引いたときの
+// 傾き（pitch）の可動域。SPOT_FOCUS_PITCH(60)・DEFAULT_PITCH(57)は「いつもの
+// 斜めの表示」の既定値であり、ここで変えない。つまみ操作はそれとは別に
+// 0〜75度まで連続的に動かせる（Minami指示）。
+const HANDLE_PITCH_MIN = 0;
+const HANDLE_PITCH_MAX = 75;
+// つまみの上下ドラッグ量(px)→pitch変化量(度)の係数。約125px引くと可動域
+// 全体（75度）を動かせる見積もり（Minami指示「上に40pxで傾きが大きくなる」の
+// 手触りを確かめた上での値）。
+const HANDLE_PITCH_DEG_PER_PX = 0.6;
+// キーボード↑↓の1コマ分の傾き変化量。
+const HANDLE_PITCH_KEY_STEP_DEG = 5;
+// キーボード←→の1コマ分の回転角度（【23】から変更なし）。
+const HANDLE_BEARING_KEY_STEP_DEG = 15;
+// つまみを「ドラッグ」と判定する最小移動量(px)。これ未満ならドラッグ扱い
+// にせず、pointerupで「軽く押した」＝北・傾き60度への復帰とみなす。
+const KNOB_DRAG_THRESHOLD_PX = 6;
+// つまみ操作・輪の回転どちらでも、北・傾き60度へ戻すなめらかな所要時間。
+const HANDLE_RESET_DURATION_MS = 400;
+// 【2026-10-16、27本目】初めて3Dに切り替えたときの案内吹き出しを表示したか
+// どうかのlocalStorageキー。一度出したら次回以降は出さない（Minami指示）。
+const ROTATE_HINT_STORAGE_KEY = 'reverse-travel-rotate-hint-seen';
+const ROTATE_HINT_AUTO_HIDE_MS = 3000; // Minami指示：3秒ほど
+
 const BAND_WIDTH = 200; // 予算の帯の幅（既存の2D検索・一覧と同じ定義）
 const SPOTS_SOURCE_ID = 'spots';
 const SPOTS_LAYER_ID = 'spots-circle';
@@ -195,6 +219,33 @@ function normalizeRotateAngle(deg) {
   let d = deg % 360;
   if (d < 0) d += 360;
   return d;
+}
+
+/** 値を[min, max]の範囲に収める。 */
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * 【2026-10-16、27本目】回転ハンドルの案内吹き出しを既に見せたかどうか。
+ * main.jsのloadMapModePreference()と同じく、プライベートブラウジング等で
+ * localStorageが例外を投げても無視する（出さない側に倒す＝try/catchの
+ * 外側でfalseを返す）。
+ */
+function hasSeenRotateHint() {
+  try {
+    return localStorage.getItem(ROTATE_HINT_STORAGE_KEY) === 'true';
+  } catch {
+    return true; // 読めない環境では「見せない」側に倒す（毎回出ると煩わしいため）
+  }
+}
+
+function markRotateHintSeen() {
+  try {
+    localStorage.setItem(ROTATE_HINT_STORAGE_KEY, 'true');
+  } catch {
+    // 無視する（書き込めなくても吹き出し自体は表示・非表示できる）
+  }
 }
 
 /** 標準的なスリッピータイル座標（z/x/y）。経緯度を含むタイルを求める。 */
@@ -551,6 +602,22 @@ export class TerrainMapView {
     // 【不具合修正、12本目③】'gsi-dem'ソースが確実に存在するこの時点で呼ぶ
     // （上のcollapseAttribution設定箇所のコメント参照）。
     this.waitForTerrainLoaded().then(stopCollapsing);
+    // 【2026-10-16、27本目、不具合修正】当初はwaitForTerrainLoaded()完了直後に
+    // 吹き出しを出していたが、waitForTerrainLoaded()は標高タイル（DEM）の
+    // 読み込みだけを見ており、淡色地図・航空写真の背景タイルはそれとは別に
+    // まだ読み込み中のことがある（実機相当のPlaywright計測で確認：DEM読み込み
+    // 完了は実際の表示が落ち着くよりかなり早く、3秒の自動非表示タイマーが
+    // 「ユーザーがまだ途中の画面しか見ていない」うちに切れてしまっていた）。
+    // waitForSceneSettled()と同じ「地形読み込み＋MapLibreの'idle'（描画・
+    // タイル読み込みが完全に落ち着いた）」まで待ってから出すことで、ユーザーが
+    // 実際に落ち着いた3D画面を見ている間に3秒間出るようにする。
+    this.waitForTerrainLoaded()
+      .then(() => new Promise((resolve) => {
+        if (!this.map) { resolve(); return; }
+        this.map.once('idle', resolve);
+        setTimeout(resolve, 8000); // 保険（'idle'が来ない環境でも吹き出し自体は出す）
+      }))
+      .then(() => this._maybeShowRotateHint());
 
     if (this._lastDepartureStation || this._lastSpots) {
       this.render(this._lastDepartureStation, this._lastSpots || [], this._lastBudget);
@@ -927,46 +994,60 @@ export class TerrainMapView {
   }
 
   /**
-   * 【2026-10-14、23本目、Minami決定：B】方位磁針の代わりの「つかんで回す
-   * ハンドル」（index.htmlの#map-rotate-handle、見た目は.map-rotate-face・
-   * .map-rotate-needle等）。ハンドルの縁（中央の#map-rotate-resetを除く）を
-   * つかんでなぞると、なぞった角度ぶんだけ地図のbearingが連続的に変わる。
-   * 回す中心（ピボット）は、MapLibreの既存のpadding機構（flyToSpot()・
-   * getRevealPadding()参照。20本目で確立：paddingは「見える範囲」を再定義し、
-   * bearing回転はそのpaddingの中心を軸にする）をそのまま使うため、ここで
-   * 中心を計算し直す必要はない（選んだピンがあればそのピン、無ければ画面
-   * 中心を軸に、自然に回る）。
-   * 中央（#map-rotate-reset）を押すと北（bearing=0）になめらかに戻る。
+   * 【2026-10-16、27本目、Minami決定：A】向き・傾きを変える「太い輪＋真ん中の
+   * つまみ」ハンドル（index.htmlの#map-rotate-handle。外側の太い輪
+   * （.map-rotate-ring）をなぞると向き（bearing）、真ん中のつまみ
+   * （#map-rotate-knob）を上下にドラッグすると傾き（pitch、0〜75度）が
+   * 変わる。つまみをドラッグせず軽く押すと、北・傾き60度（いつもの斜めの
+   * 表示）になめらかに戻る。【23】の「縁をなぞって回すだけ」のハンドルを
+   * 作り直したもの（Cowork調べ：Cesiumの操作部品の議論・MapLibre標準
+   * コンパスのvisualizePitchを参考に、Minamiが決定）。
+   * 回す・傾ける中心（ピボット）は、MapLibreの既存のpadding機構
+   * （flyToSpot()・getRevealPadding()参照。20本目で確立：paddingは「見える
+   * 範囲」を再定義し、カメラ操作はそのpaddingの中心を軸にする）をそのまま
+   * 使うため、ここで中心を計算し直す必要はない（選んだピンがあればそのピン、
+   * 無ければ画面中心を軸に、自然に回る・傾く）。
    * 【不具合修正】destroy()→ensureMap()の再生成（WebGLコンテキスト確保
    * 失敗時のリトライ等）で_createMap()が複数回走っても、ハンドルのDOM要素
    * 自体は静的HTMLで使い回しのため、ポインタ・キーボードのリスナーを
    * 毎回追加すると二重発火する。これらはdataset目印で最初の1回だけ登録し、
-   * 地図インスタンスに紐づく針の同期（'rotate'イベント購読）だけを
+   * 地図インスタンスに紐づく針の同期（'rotate'・'pitch'イベント購読）だけを
    * 呼び出しのたびに付け直す。
    */
   _setupRotateHandle() {
     const handle = document.getElementById('map-rotate-handle');
-    const resetBtn = document.getElementById('map-rotate-reset');
+    const knob = document.getElementById('map-rotate-knob');
     const needle = document.getElementById('map-rotate-needle');
-    if (!handle || !resetBtn || !needle) return;
+    if (!handle || !knob || !needle) return;
 
     const updateNeedle = () => {
       if (!this.map) return;
       const bearing = this.map.getBearing();
+      const pitch = this.map.getPitch();
       // 針（SVG）の初期向きは真上（北）。bearingが増える＝地図が時計回りに
       // 回る＝画面上の北は反時計回りに動くため、針はbearingの符号を反転して
       // 回す（MapLibre既定のNavigationControlのコンパスと同じ向きの規約）。
-      needle.style.transform = `rotate(${-bearing}deg)`;
+      // rotateX()で傾きぶん針を寝かせて見せる（MapLibre既定コンパスの
+      // visualizePitchと同じ考え方。.map-rotate-needle-wrapのperspectiveが
+      // 奥行きを与える）。
+      needle.style.transform = `rotateX(${pitch}deg) rotate(${-bearing}deg)`;
       handle.setAttribute('aria-valuenow', String(Math.round(normalizeRotateAngle(bearing))));
     };
     updateNeedle();
     this.map.on('rotate', updateNeedle);
+    this.map.on('pitch', updateNeedle);
 
     if (handle.dataset.rotateHandleWired) return;
     handle.dataset.rotateHandleWired = 'true';
 
+    const hideRotateHint = () => {
+      const hint = document.getElementById('map-rotate-hint');
+      if (hint && !hint.hidden) hint.hidden = true;
+    };
+
+    // --- 外側の輪：なぞって回す（【23】と同じ仕組み） ---
     let grabOffset = 0;
-    const onPointerMove = (e) => {
+    const onRingPointerMove = (e) => {
       if (!this.map) return;
       const rect = handle.getBoundingClientRect();
       const cx = rect.left + rect.width / 2;
@@ -978,16 +1059,17 @@ export class TerrainMapView {
       const newNeedleAngle = angle + grabOffset;
       this.map.setBearing(-newNeedleAngle);
     };
-    const onPointerUp = (e) => {
-      handle.removeEventListener('pointermove', onPointerMove);
-      handle.removeEventListener('pointerup', onPointerUp);
-      handle.removeEventListener('pointercancel', onPointerUp);
+    const onRingPointerUp = (e) => {
+      handle.removeEventListener('pointermove', onRingPointerMove);
+      handle.removeEventListener('pointerup', onRingPointerUp);
+      handle.removeEventListener('pointercancel', onRingPointerUp);
       try { handle.releasePointerCapture(e.pointerId); } catch { /* 既に解放済みのブラウザがある */ }
     };
     handle.addEventListener('pointerdown', (e) => {
       if (!this.map) return;
       if (typeof e.button === 'number' && e.button !== 0) return; // 左クリック・タッチのみ
       e.preventDefault();
+      hideRotateHint();
       this._flySpotToken++; // 「降りる→傾ける」演出の途中でも、ユーザー操作を優先して止める
       const rect = handle.getBoundingClientRect();
       const cx = rect.left + rect.width / 2;
@@ -996,40 +1078,100 @@ export class TerrainMapView {
       const currentNeedleAngle = -this.map.getBearing();
       grabOffset = currentNeedleAngle - grabAngle;
       handle.setPointerCapture(e.pointerId);
-      handle.addEventListener('pointermove', onPointerMove);
-      handle.addEventListener('pointerup', onPointerUp);
-      handle.addEventListener('pointercancel', onPointerUp);
+      handle.addEventListener('pointermove', onRingPointerMove);
+      handle.addEventListener('pointerup', onRingPointerUp);
+      handle.addEventListener('pointercancel', onRingPointerUp);
     });
 
-    // 中央を押すと北に戻る。.map-rotate-faceがpointer-events:noneのため
-    // クリックはこのボタンへ直接届くが、イベント自体は親（.map-rotate-handle）
-    // までバブリングするため、放っておくとドラッグ開始処理も同時に走って
-    // しまう。stopPropagation()で止める。
-    resetBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
-    resetBtn.addEventListener('click', (e) => {
+    // --- 真ん中のつまみ：上下にドラッグで傾き、軽く押すと北・傾き60度に復帰 ---
+    // 【重要】.map-rotate-ringはpointer-events既定（auto）のままのため、
+    // つまみの上に重なるこの要素自体のpointerdownでstopPropagation()しないと、
+    // 親（#map-rotate-handle）の輪の回転処理も同時に走ってしまう
+    // （#map-rotate-resetのstopPropagation()と同じ事情、【23】から踏襲）。
+    let knobStartY = 0;
+    let knobStartPitch = 0;
+    let knobDragged = false; // KNOB_DRAG_THRESHOLD_PX以上動いたら「ドラッグ」、動かなければ「押した」
+    const onKnobPointerMove = (e) => {
+      if (!this.map) return;
+      const dy = knobStartY - e.clientY; // 上へ動かす＝正の値
+      if (!knobDragged && Math.abs(dy) >= KNOB_DRAG_THRESHOLD_PX) knobDragged = true;
+      if (!knobDragged) return;
+      const newPitch = clamp(knobStartPitch + dy * HANDLE_PITCH_DEG_PER_PX, HANDLE_PITCH_MIN, HANDLE_PITCH_MAX);
+      this.map.setPitch(newPitch);
+    };
+    const onKnobPointerUp = (e) => {
+      knob.removeEventListener('pointermove', onKnobPointerMove);
+      knob.removeEventListener('pointerup', onKnobPointerUp);
+      knob.removeEventListener('pointercancel', onKnobPointerUp);
+      try { knob.releasePointerCapture(e.pointerId); } catch { /* 既に解放済みのブラウザがある */ }
+      if (!knobDragged && this.map) {
+        // ドラッグせずに軽く押しただけ：北・傾き60度へなめらかに戻る。
+        this.map.easeTo({ bearing: 0, pitch: SPOT_FOCUS_PITCH, duration: HANDLE_RESET_DURATION_MS });
+      }
+    };
+    knob.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       if (!this.map) return;
+      if (typeof e.button === 'number' && e.button !== 0) return;
+      e.preventDefault();
+      hideRotateHint();
       this._flySpotToken++;
-      this.map.easeTo({ bearing: 0, duration: 400 });
+      knobStartY = e.clientY;
+      knobStartPitch = this.map.getPitch();
+      knobDragged = false;
+      knob.setPointerCapture(e.pointerId);
+      knob.addEventListener('pointermove', onKnobPointerMove);
+      knob.addEventListener('pointerup', onKnobPointerUp);
+      knob.addEventListener('pointercancel', onKnobPointerUp);
     });
 
-    // キーボード操作：←→で少しずつ回る、Enterで北に戻る。
+    // キーボード操作：←→で向きが少しずつ回る、↑↓で傾きが少しずつ変わる、
+    // Enterで北・傾き60度に戻る。
     handle.addEventListener('keydown', (e) => {
       if (!this.map) return;
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
+        hideRotateHint();
         this._flySpotToken++;
-        this.map.setBearing(this.map.getBearing() - 15);
+        this.map.setBearing(this.map.getBearing() - HANDLE_BEARING_KEY_STEP_DEG);
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
+        hideRotateHint();
         this._flySpotToken++;
-        this.map.setBearing(this.map.getBearing() + 15);
+        this.map.setBearing(this.map.getBearing() + HANDLE_BEARING_KEY_STEP_DEG);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        hideRotateHint();
+        this._flySpotToken++;
+        this.map.setPitch(clamp(this.map.getPitch() + HANDLE_PITCH_KEY_STEP_DEG, HANDLE_PITCH_MIN, HANDLE_PITCH_MAX));
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        hideRotateHint();
+        this._flySpotToken++;
+        this.map.setPitch(clamp(this.map.getPitch() - HANDLE_PITCH_KEY_STEP_DEG, HANDLE_PITCH_MIN, HANDLE_PITCH_MAX));
       } else if (e.key === 'Enter') {
         e.preventDefault();
+        hideRotateHint();
         this._flySpotToken++;
-        this.map.easeTo({ bearing: 0, duration: 400 });
+        this.map.easeTo({ bearing: 0, pitch: SPOT_FOCUS_PITCH, duration: HANDLE_RESET_DURATION_MS });
       }
     });
+  }
+
+  /**
+   * 【2026-10-16、27本目】初めて3Dに切り替えたときだけ、ハンドルの使い方を
+   * 示す小さな吹き出しを3秒ほど出す（Minami指示）。吹き出しを押すか
+   * ハンドルに触ると消える（_setupRotateHandle()のhideRotateHint()参照）。
+   * 一度出したら（出し終えるのを待たず、出した時点で）localStorageに記録し、
+   * 次回以降は出さない。
+   */
+  _maybeShowRotateHint() {
+    const hint = document.getElementById('map-rotate-hint');
+    if (!hint || hasSeenRotateHint()) return;
+    markRotateHintSeen();
+    hint.hidden = false;
+    hint.addEventListener('click', () => { hint.hidden = true; }, { once: true });
+    setTimeout(() => { hint.hidden = true; }, ROTATE_HINT_AUTO_HIDE_MS);
   }
 
   /**

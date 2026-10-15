@@ -31,6 +31,9 @@ const screenshotDir = path.join(rootDir, 'data/screenshots/verify-layout');
 // terrain-map-view.jsのSPOT_FOCUS_DURATION_MS（2600ms）のflyToが
 // 確実に完了するのを待つ時間（2026-10-11、5本目）。
 const SPOT_FOCUS_WAIT_MS = 3200;
+// 【27本目】検証スクリプト側の期待値（terrain-map-view.js内のHANDLE_PITCH_MAXと
+// 同じ値。importできない実行形態のためここでも定義する）。
+const HANDLE_PITCH_MAX_FOR_TEST = 75;
 
 const VIEWPORTS = {
   pc: { width: 1920, height: 1080 },
@@ -143,6 +146,19 @@ function verticalGap(upper, lower) {
   const horizontalOverlap = upper.x < lower.x + lower.width && upper.x + upper.width > lower.x;
   if (!horizontalOverlap) return null;
   return lower.y - (upper.y + upper.height);
+}
+
+/**
+ * 【27本目】縦・横どちらに並んでいても使える版（verticalGap()は縦に並んだ
+ * 矩形専用のため、左右に並ぶ場合には使えない。ハンドルの左に出す案内の
+ * 吹き出し等、並ぶ向きを問わない重なりチェックに使う）。2つの矩形の
+ * 最短距離（px）を返す。重なっている（または接している）場合は0。
+ */
+function rectGap(a, b) {
+  if (!a || !b) return null;
+  const dx = Math.max(a.x - (b.x + b.width), b.x - (a.x + a.width), 0);
+  const dy = Math.max(a.y - (b.y + b.height), b.y - (a.y + a.height), 0);
+  return Math.sqrt(dx * dx + dy * dy);
 }
 
 /** 矩形が0サイズでなく、ビューポート内に収まっているか */
@@ -3781,9 +3797,26 @@ async function dragRotateHandle(page, handleBox, deltaDeg, { steps = 10, stepDel
   }
 }
 
-/** ドラッグ中のpointerupまで行う（dragRotateHandle()の続き）。 */
+/** ドラッグ中のpointerupまで行う（dragRotateHandle()・dragPitchKnob()の続き）。 */
 async function releaseRotateHandle(page) {
   await page.mouse.up();
+}
+
+/**
+ * 【27本目】ハンドル中央のつまみ（#map-rotate-knob）を上下にドラッグする。
+ * deltaPxUpが正の値なら上へ（傾きが大きくなる方向）、負の値なら下へ
+ * （真上に近づく方向）動かす。releaseRotateHandle()で離す。
+ */
+async function dragPitchKnob(page, knobBox, deltaPxUp, { steps = 10, stepDelayMs = 15 } = {}) {
+  const cx = knobBox.x + knobBox.width / 2;
+  const cy = knobBox.y + knobBox.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  for (let i = 1; i <= steps; i++) {
+    const y = cy - deltaPxUp * (i / steps);
+    await page.mouse.move(cx, y);
+    await page.waitForTimeout(stepDelayMs);
+  }
 }
 
 /** 3Dの地図が完全に落ち着く（地形読み込み＋タイルのidle）まで待つ共通処理。 */
@@ -3798,13 +3831,14 @@ async function waitFor3dSettled(page, timeoutMs = 60000) {
 }
 
 /**
- * 【23本目】3Dの「つかんで回すハンドル」（方位磁針の代わり）の検証。
- * PC・スマホ（400×464）の両方で、実際にマウス操作でハンドルの縁をなぞって
- * 地図を回し、bearingの変化・地図中心の不変・針の向き・中央クリックでの
- * 北への復帰・キーボード操作・重なりを確認する。
+ * 【27本目】3Dの「太い輪＋真ん中のつまみ」ハンドル（【23】の「縁をなぞって
+ * 回すだけ」の版を作り直したもの）の検証。PC・スマホ（400×464）の両方で、
+ * 実際にマウス操作で輪をなぞって回し・つまみを上下にドラッグして傾け、
+ * bearing・pitchの変化、地図中心の不変、針の向き・傾き、つまみを軽く
+ * 押したときの復帰、キーボード操作、初回案内の吹き出し、重なりを確認する。
  */
 async function checkRotateHandle(browser, baseUrl, savedPaths) {
-  console.log('\n=== 23本目：3Dの回転ハンドル（つかんで回す）の検証 ===');
+  console.log('\n=== 27本目：3Dの回転ハンドル（輪＝向き、つまみ＝傾き）の検証 ===');
 
   for (const [label, viewport] of Object.entries({ pc: VIEWPORTS.pc, own: { width: 400, height: 464 } })) {
     const context = await browser.newContext({ viewport });
@@ -3842,95 +3876,257 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
     const handleVisible = await page.locator('#map-rotate-handle').isVisible();
     record(`[${label}] 3Dのときだけハンドルが出る`, handleVisible);
 
-    // --- 重なりチェック：2D/3D切替ボタン・出典ボタン・名前の帯・
-    //     スマホの予算操作帯のいずれとも重ならない ---
+    // --- 初回の案内の吹き出し（新しいブラウザコンテキスト＝localStorage
+    //     空の状態で初めて3Dに切り替えたため、出るはず） ---
+    const mapAreaBox = await page.locator('#map-area').boundingBox();
     const handleBox = await page.locator('#map-rotate-handle').boundingBox();
+    const hintVisibleFirstTime = await page.locator('#map-rotate-hint').isVisible().catch(() => false);
+    record(`[${label}] 初めて3Dに切り替えると、案内の吹き出しが出る`, hintVisibleFirstTime);
+    if (hintVisibleFirstTime) {
+      const hintBox = await page.locator('#map-rotate-hint').boundingBox();
+      const toggleBoxForHint = await page.locator('#map-dimension-toggle').boundingBox();
+      const tabsBoxForHint = await page.locator('.mobile-tabs').boundingBox().catch(() => null);
+      const overlayBoxForHint = await page.locator('#mobile-budget-overlay').boundingBox().catch(() => null);
+      // 吹き出しのしっぽはハンドルの輪に接する意匠のため、ここでは単純な
+      // 重なり（本体同士が食い込んでいないか）だけを見る。8px以上のすき間を
+      // 求めるのは「ほかの部品」（2D/3D切替ボタン・タブ・予算操作帯）との
+      // 間であり、ハンドル自身との間ではない。
+      record(
+        `[${label}] 吹き出し本体がハンドルの輪に食い込んでいない`,
+        !rectsOverlap(hintBox, handleBox),
+        JSON.stringify({ hintBox, handleBox })
+      );
+      record(
+        `[${label}] 吹き出しが2D/3D切替ボタンと重ならず、すき間8px以上`,
+        rectGap(hintBox, toggleBoxForHint) >= 8,
+        JSON.stringify({ hintBox, toggleBoxForHint, gap: rectGap(hintBox, toggleBoxForHint) })
+      );
+      if (tabsBoxForHint) {
+        record(
+          `[${label}] 吹き出しがタブと重ならず、すき間8px以上`,
+          rectGap(hintBox, tabsBoxForHint) >= 8,
+          JSON.stringify({ hintBox, tabsBoxForHint, gap: rectGap(hintBox, tabsBoxForHint) })
+        );
+      }
+      if (overlayBoxForHint) {
+        record(
+          `[${label}] 吹き出しが予算操作帯と重ならず、すき間8px以上`,
+          rectGap(hintBox, overlayBoxForHint) >= 8,
+          JSON.stringify({ hintBox, overlayBoxForHint, gap: rectGap(hintBox, overlayBoxForHint) })
+        );
+      }
+
+      const hintPath = path.join(screenshotDir, `rotate-handle-${label}-first-hint.png`);
+      await page.screenshot({ path: hintPath, clip: mapAreaBox });
+      savedPaths.push(hintPath);
+
+      // 吹き出しを押すと消える
+      await page.locator('#map-rotate-hint').click();
+      const hintHiddenAfterClick = await page.locator('#map-rotate-hint').isVisible().catch(() => false);
+      record(`[${label}] 吹き出しを押すと消える`, !hintHiddenAfterClick);
+    }
+
+    // 【27本目】ページを再読み込みして同じ出発駅・3Dへ入り直しても、
+    // 2回目は吹き出しが出ないこと（localStorageに記録が残っているはず。
+    // 同じブラウザコンテキスト＝localStorageは引き継がれる、page.reload()で検証）。
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '高松築港', 1000);
+    if (label !== 'pc') {
+      await page.click('.tab-btn[data-tab="map"]');
+      await page.waitForTimeout(300);
+    }
+    await page.click('#map-dimension-toggle');
+    await page.waitForFunction(
+      () => document.getElementById('map-area').classList.contains('mode-3d'),
+      { timeout: 30000 }
+    );
+    await waitFor3dSettled(page);
+    const hintVisibleSecondTime = await page.locator('#map-rotate-hint').isVisible().catch(() => false);
+    record(`[${label}] 2回目に3Dへ入り直しても、吹き出しは出ない`, !hintVisibleSecondTime);
+
+    // --- 重なりチェック：2D/3D切替ボタン・出典ボタン・スマホの予算操作帯の
+    //     いずれとも重ならない ---
+    const handleBox2 = await page.locator('#map-rotate-handle').boundingBox();
     const toggleBox = await page.locator('#map-dimension-toggle').boundingBox();
     const attribBox = await page.locator('#map-area .maplibregl-ctrl-bottom-right').boundingBox().catch(() => null);
     const overlayBox = await page.locator('#mobile-budget-overlay').boundingBox().catch(() => null);
-    record(`[${label}] ハンドルが2D/3D切替ボタンと重ならない`, !rectsOverlap(handleBox, toggleBox), JSON.stringify({ handleBox, toggleBox }));
+    record(`[${label}] ハンドルが2D/3D切替ボタンと重ならない`, !rectsOverlap(handleBox2, toggleBox), JSON.stringify({ handleBox2, toggleBox }));
     if (attribBox) {
-      record(`[${label}] ハンドルが出典ボタンと重ならない`, !rectsOverlap(handleBox, attribBox), JSON.stringify({ handleBox, attribBox }));
+      record(`[${label}] ハンドルが出典ボタンと重ならない`, !rectsOverlap(handleBox2, attribBox), JSON.stringify({ handleBox2, attribBox }));
     }
     if (overlayBox) {
-      record(`[${label}] ハンドルがスマホの予算操作帯と重ならない`, !rectsOverlap(handleBox, overlayBox), JSON.stringify({ handleBox, overlayBox }));
+      record(`[${label}] ハンドルがスマホの予算操作帯と重ならない`, !rectsOverlap(handleBox2, overlayBox), JSON.stringify({ handleBox2, overlayBox }));
     }
-    const mapAreaBox = await page.locator('#map-area').boundingBox();
+    const mapAreaBox2 = await page.locator('#map-area').boundingBox();
     record(
       `[${label}] ハンドルが地図の範囲内に収まっている`,
-      handleBox.x >= mapAreaBox.x - 1 && handleBox.x + handleBox.width <= mapAreaBox.x + mapAreaBox.width + 1,
-      JSON.stringify({ handleBox, mapAreaBox })
+      handleBox2.x >= mapAreaBox2.x - 1 && handleBox2.x + handleBox2.width <= mapAreaBox2.x + mapAreaBox2.width + 1,
+      JSON.stringify({ handleBox2, mapAreaBox2 })
     );
 
-    // 必須スクリーンショット：回す前
-    const beforePath = path.join(screenshotDir, `rotate-handle-${label}-before.png`);
-    await page.screenshot({ path: beforePath, clip: mapAreaBox });
-    savedPaths.push(beforePath);
+    // 必須スクリーンショット：ハンドルの拡大（回す前）。ハンドルは右上の
+    // 端に近いため、周囲10pxぶん広げた範囲がビューポートをはみ出さないよう
+    // クランプする（はみ出したままclipに渡すとスクリーンショットが失敗する）。
+    const closeupPath = path.join(screenshotDir, `rotate-handle-${label}-closeup.png`);
+    const closeupClipX = Math.max(0, handleBox2.x - 10);
+    const closeupClipY = Math.max(0, handleBox2.y - 10);
+    await page.screenshot({
+      path: closeupPath,
+      clip: {
+        x: closeupClipX,
+        y: closeupClipY,
+        width: Math.min(viewport.width, handleBox2.x + handleBox2.width + 10) - closeupClipX,
+        height: Math.min(viewport.height, handleBox2.y + handleBox2.height + 10) - closeupClipY,
+      },
+    });
+    savedPaths.push(closeupPath);
 
-    // --- ドラッグで90°回る・中心が動かない・針の向きが合っている ---
+    // --- 輪をドラッグで90°回る・中心が動かない・針の向きが合っている ---
     const centerBefore = await page.evaluate(() => window.__terrainMapForDebug.getCenter());
     const bearingBefore = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
+    const pitchBeforeRingDrag = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
 
-    await dragRotateHandle(page, handleBox, 90);
+    await dragRotateHandle(page, handleBox2, 90);
     const bearingDuringDrag = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
+    const pitchDuringRingDrag = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
     const centerDuringDrag = await page.evaluate(() => window.__terrainMapForDebug.getCenter());
     const needleTransform = await page.evaluate(() => document.getElementById('map-rotate-needle').style.transform);
 
     const bearingDelta = Math.abs(Math.abs(bearingDuringDrag - bearingBefore) - 90);
     record(
-      `[${label}] ハンドルを90°なぞると、bearingが約90°変わる`,
+      `[${label}] 輪を90°なぞると、bearingが約90°変わる`,
       bearingDelta < 5,
       `before=${bearingBefore} after=${bearingDuringDrag} (delta=${bearingDelta})`
     );
     record(
-      `[${label}] ハンドルを操作している間、地図の中心（緯度経度）が動かない`,
+      `[${label}] 輪を操作している間、地図の中心（緯度経度）が動かない`,
       Math.abs(centerDuringDrag.lng - centerBefore.lng) < 0.0001 && Math.abs(centerDuringDrag.lat - centerBefore.lat) < 0.0001,
       JSON.stringify({ centerBefore, centerDuringDrag })
     );
-    const needleDeg = parseFloat((needleTransform.match(/-?[\d.]+/) || ['NaN'])[0]);
     record(
-      `[${label}] ハンドルの針の向きが地図のbearingと合っている（針=-bearing）`,
-      !Number.isNaN(needleDeg) && Math.abs(needleDeg - -bearingDuringDrag) < 1,
+      `[${label}] 輪を操作している間、傾き（pitch）は変わらない`,
+      Math.abs(pitchDuringRingDrag - pitchBeforeRingDrag) < 0.5,
+      `before=${pitchBeforeRingDrag} during=${pitchDuringRingDrag}`
+    );
+    const needleMatch = needleTransform.match(/rotateX\(([-\d.]+)deg\) rotate\(([-\d.]+)deg\)/);
+    const needleBearingDeg = needleMatch ? parseFloat(needleMatch[2]) : NaN;
+    const needlePitchDeg = needleMatch ? parseFloat(needleMatch[1]) : NaN;
+    record(
+      `[${label}] 針の向きが地図のbearingと合っている（針=-bearing）`,
+      !Number.isNaN(needleBearingDeg) && Math.abs(needleBearingDeg - -bearingDuringDrag) < 1,
       JSON.stringify({ needleTransform, bearingDuringDrag })
     );
+    record(
+      `[${label}] 針の傾きが地図のpitchと合っている（rotateX=pitch）`,
+      !Number.isNaN(needlePitchDeg) && Math.abs(needlePitchDeg - pitchDuringRingDrag) < 1,
+      JSON.stringify({ needleTransform, pitchDuringRingDrag })
+    );
 
-    // 必須スクリーンショット：90°回したあと（releaseの前、ドラッグ中の見た目を撮る）
-    const afterPath = path.join(screenshotDir, `rotate-handle-${label}-after-90deg.png`);
-    await page.screenshot({ path: afterPath, clip: mapAreaBox });
-    savedPaths.push(afterPath);
+    // 必須スクリーンショット：回したあと（releaseの前、ドラッグ中の見た目を撮る）
+    const afterRotatePath = path.join(screenshotDir, `rotate-handle-${label}-after-90deg.png`);
+    await page.screenshot({ path: afterRotatePath, clip: mapAreaBox2 });
+    savedPaths.push(afterRotatePath);
 
     await releaseRotateHandle(page);
     await page.waitForTimeout(200);
 
-    // --- 中央を押すと北に戻る ---
-    const resetBox = await page.locator('#map-rotate-reset').boundingBox();
-    await page.mouse.click(resetBox.x + resetBox.width / 2, resetBox.y + resetBox.height / 2);
+    // --- 真ん中のつまみを上下にドラッグすると傾きが変わる・0〜75度を超えない ---
+    const knobBoxBefore = await page.locator('#map-rotate-knob').boundingBox();
+    const centerBeforePitchDrag = await page.evaluate(() => window.__terrainMapForDebug.getCenter());
+    const pitchBeforeKnobDrag = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
+
+    await dragPitchKnob(page, knobBoxBefore, 40); // 上に40px
+    const pitchAfterUp = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
+    const centerDuringPitchDrag = await page.evaluate(() => window.__terrainMapForDebug.getCenter());
+    record(
+      `[${label}] つまみを上に40px引くと、傾き（pitch）が大きくなる`,
+      pitchAfterUp > pitchBeforeKnobDrag,
+      `before=${pitchBeforeKnobDrag} after=${pitchAfterUp}`
+    );
+    record(
+      `[${label}] つまみを操作している間、地図の中心（緯度経度）が動かない`,
+      Math.abs(centerDuringPitchDrag.lng - centerBeforePitchDrag.lng) < 0.0001
+        && Math.abs(centerDuringPitchDrag.lat - centerBeforePitchDrag.lat) < 0.0001,
+      JSON.stringify({ centerBeforePitchDrag, centerDuringPitchDrag })
+    );
+    // 必須スクリーンショット：傾きを変えたあと（斜め、上限近く）
+    await dragPitchKnob(page, knobBoxBefore, 300); // 上限(75度)を超えて引ききる
+    const pitchAtMax = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
+    record(
+      `[${label}] つまみを大きく引いても、傾きは75度を超えない`,
+      pitchAtMax <= HANDLE_PITCH_MAX_FOR_TEST + 0.5,
+      `pitch=${pitchAtMax}`
+    );
+    const obliquePath = path.join(screenshotDir, `rotate-handle-${label}-pitch-oblique.png`);
+    await page.screenshot({ path: obliquePath, clip: mapAreaBox2 });
+    savedPaths.push(obliquePath);
+    await releaseRotateHandle(page);
+    await page.waitForTimeout(200);
+
+    const knobBoxForDown = await page.locator('#map-rotate-knob').boundingBox();
+    await dragPitchKnob(page, knobBoxForDown, -300); // 下限(0度)を超えて押し下げる
+    const pitchAtMin = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
+    record(
+      `[${label}] つまみを下に大きく押しても、傾きは0度を下回らない`,
+      pitchAtMin >= -0.5,
+      `pitch=${pitchAtMin}`
+    );
+    record(`[${label}] つまみを下に引くと、傾き（pitch）が小さくなる`, pitchAtMin < pitchAtMax, `atMax=${pitchAtMax} atMin=${pitchAtMin}`);
+    // 必須スクリーンショット：傾きを変えたあと（真上に近い）
+    const overheadPath = path.join(screenshotDir, `rotate-handle-${label}-pitch-overhead.png`);
+    await page.screenshot({ path: overheadPath, clip: mapAreaBox2 });
+    savedPaths.push(overheadPath);
+    await releaseRotateHandle(page);
+    await page.waitForTimeout(200);
+
+    // --- 輪を回したあと・つまみで傾けたあとも、つまみを軽く押す（ドラッグ
+    //     せずpointerup）と北・傾き60度に戻る ---
+    await dragRotateHandle(page, await page.locator('#map-rotate-handle').boundingBox(), 45);
+    await releaseRotateHandle(page);
+    await page.waitForTimeout(100);
+    const knobBoxForReset = await page.locator('#map-rotate-knob').boundingBox();
+    await page.mouse.click(knobBoxForReset.x + knobBoxForReset.width / 2, knobBoxForReset.y + knobBoxForReset.height / 2);
     const resetOk = await page.waitForFunction(
-      () => Math.abs(window.__terrainMapForDebug.getBearing()) < 0.5,
+      () => Math.abs(window.__terrainMapForDebug.getBearing()) < 0.5 && Math.abs(window.__terrainMapForDebug.getPitch() - 60) < 0.5,
       { timeout: 5000 }
     ).then(() => true).catch(() => false);
     const bearingAfterReset = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
-    record(`[${label}] 中央を押すとbearingが0に戻る`, resetOk, `bearing=${bearingAfterReset}`);
+    const pitchAfterReset = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
+    record(
+      `[${label}] つまみを軽く押す（ドラッグせず）と、bearingが0・pitchが60に戻る`,
+      resetOk,
+      `bearing=${bearingAfterReset} pitch=${pitchAfterReset}`
+    );
 
-    // --- キーボード操作：←→で少しずつ回る、Enterで北に戻る ---
+    // --- キーボード操作：←→で向きが、↑↓で傾きが少しずつ変わる、Enterで復帰 ---
     await page.locator('#map-rotate-handle').focus();
     const bearingBeforeArrow = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
     await page.keyboard.press('ArrowRight');
     await page.waitForTimeout(100);
     const bearingAfterArrow = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
     record(
-      `[${label}] ハンドルにfocusしてArrowRightを押すと少し回る`,
+      `[${label}] ハンドルにfocusしてArrowRightを押すと向きが少し回る`,
       bearingAfterArrow !== bearingBeforeArrow,
       `before=${bearingBeforeArrow} after=${bearingAfterArrow}`
     );
+    const pitchBeforeArrow = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
+    await page.keyboard.press('ArrowUp');
+    await page.waitForTimeout(100);
+    const pitchAfterArrow = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
+    record(
+      `[${label}] ハンドルにfocusしてArrowUpを押すと傾きが少し変わる`,
+      pitchAfterArrow !== pitchBeforeArrow,
+      `before=${pitchBeforeArrow} after=${pitchAfterArrow}`
+    );
     await page.keyboard.press('Enter');
     const enterResetOk = await page.waitForFunction(
-      () => Math.abs(window.__terrainMapForDebug.getBearing()) < 0.5,
+      () => Math.abs(window.__terrainMapForDebug.getBearing()) < 0.5 && Math.abs(window.__terrainMapForDebug.getPitch() - 60) < 0.5,
       { timeout: 5000 }
     ).then(() => true).catch(() => false);
-    record(`[${label}] ハンドルにfocusしてEnterを押すとbearingが0に戻る`, enterResetOk);
+    record(`[${label}] ハンドルにfocusしてEnterを押すと、bearingが0・pitchが60に戻る`, enterResetOk);
 
-    // --- 回したあとも、選んだピンが帯より上にある（pivotの検証） ---
+    // --- 回したり傾けたりしたあとも、選んだピンが帯より上にある（pivotの検証） ---
     const pinPos = await page.evaluate((budget) => {
       const map = window.__terrainMapForDebug;
       const source = map.getSource('spots');
@@ -3949,16 +4145,32 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
         const handleBoxNow = await page.locator('#map-rotate-handle').boundingBox();
         await dragRotateHandle(page, handleBoxNow, 90);
         await page.waitForTimeout(100);
-        const selectedY = await page.evaluate(() => {
+        const selectedYAfterRotate = await page.evaluate(() => {
+          const map = window.__terrainMapForDebug;
+          const f = map.getSource('selected-spot')?._data?.features?.[0];
+          return f ? map.project(f.geometry.coordinates).y : null;
+        });
+        await releaseRotateHandle(page);
+        await page.waitForTimeout(100);
+        record(
+          `[${label}] 回したあとも、選んだピンが帯（名前の帯）より上にある`,
+          selectedYAfterRotate !== null && mapBoxForClick.y + selectedYAfterRotate < panelBox.y,
+          JSON.stringify({ selectedYAfterRotate, mapBoxForClickY: mapBoxForClick.y, panelBoxY: panelBox.y })
+        );
+
+        const knobBoxNow = await page.locator('#map-rotate-knob').boundingBox();
+        await dragPitchKnob(page, knobBoxNow, 40);
+        await page.waitForTimeout(100);
+        const selectedYAfterPitch = await page.evaluate(() => {
           const map = window.__terrainMapForDebug;
           const f = map.getSource('selected-spot')?._data?.features?.[0];
           return f ? map.project(f.geometry.coordinates).y : null;
         });
         await releaseRotateHandle(page);
         record(
-          `[${label}] 回したあとも、選んだピンが帯（名前の帯）より上にある`,
-          selectedY !== null && mapBoxForClick.y + selectedY < panelBox.y,
-          JSON.stringify({ selectedY, mapBoxForClickY: mapBoxForClick.y, panelBoxY: panelBox.y })
+          `[${label}] 傾けたあとも、選んだピンが帯（名前の帯）より上にある`,
+          selectedYAfterPitch !== null && mapBoxForClick.y + selectedYAfterPitch < panelBox.y,
+          JSON.stringify({ selectedYAfterPitch, mapBoxForClickY: mapBoxForClick.y, panelBoxY: panelBox.y })
         );
         await page.click('#spot-info-close').catch(() => {});
       } else {
@@ -3979,7 +4191,8 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
     await context.close();
   }
 
-  // --- 375×667・390×844でも、ハンドルがほかの部品と重ならない（重なりのみ確認） ---
+  // --- 375×667・390×844でも、ハンドル・吹き出しがほかの部品と重ならない
+  //     （すき間8px以上）---
   for (const [label, viewport] of Object.entries({ se: { width: 375, height: 667 }, std: { width: 390, height: 844 } })) {
     const context = await browser.newContext({ viewport });
     const page = await context.newPage();
@@ -4000,12 +4213,38 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
       const toggleBox = await page.locator('#map-dimension-toggle').boundingBox();
       const attribBox = await page.locator('#map-area .maplibregl-ctrl-bottom-right').boundingBox().catch(() => null);
       const overlayBox = await page.locator('#mobile-budget-overlay').boundingBox().catch(() => null);
+      const tabsBox = await page.locator('.mobile-tabs').boundingBox().catch(() => null);
       record(`[${label}] ハンドルが2D/3D切替ボタンと重ならない`, !rectsOverlap(handleBox, toggleBox), JSON.stringify({ handleBox, toggleBox }));
       if (attribBox) {
         record(`[${label}] ハンドルが出典ボタンと重ならない`, !rectsOverlap(handleBox, attribBox), JSON.stringify({ handleBox, attribBox }));
       }
       if (overlayBox) {
         record(`[${label}] ハンドルがスマホの予算操作帯と重ならない`, !rectsOverlap(handleBox, overlayBox), JSON.stringify({ handleBox, overlayBox }));
+      }
+
+      const hintVisible = await page.locator('#map-rotate-hint').isVisible().catch(() => false);
+      record(`[${label}] 初めて3Dに切り替えると、案内の吹き出しが出る`, hintVisible);
+      if (hintVisible) {
+        const hintBox = await page.locator('#map-rotate-hint').boundingBox();
+        record(
+          `[${label}] 吹き出しが2D/3D切替ボタンと重ならず、すき間8px以上`,
+          rectGap(hintBox, toggleBox) >= 8,
+          JSON.stringify({ hintBox, toggleBox, gap: rectGap(hintBox, toggleBox) })
+        );
+        if (tabsBox) {
+          record(
+            `[${label}] 吹き出しがタブと重ならず、すき間8px以上`,
+            rectGap(hintBox, tabsBox) >= 8,
+            JSON.stringify({ hintBox, tabsBox, gap: rectGap(hintBox, tabsBox) })
+          );
+        }
+        if (overlayBox) {
+          record(
+            `[${label}] 吹き出しが予算操作帯と重ならず、すき間8px以上`,
+            rectGap(hintBox, overlayBox) >= 8,
+            JSON.stringify({ hintBox, overlayBox, gap: rectGap(hintBox, overlayBox) })
+          );
+        }
       }
     } else {
       record(`[${label}] 重なり確認用の3D化に成功`, false);
