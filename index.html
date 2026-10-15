@@ -32,6 +32,16 @@
         </div>
         <!-- 検索フォーム -->
         <form id="search-form">
+          <!-- 【2026-10-17、32本目A、不具合修正】フォームを開いている間、
+               閉じる手段が無かった（#search-summary-toggleの文言は「▲閉じる」
+               に変わっていたが、ボタン自体が#search-summary（フォームが
+               開いている間は非表示）の中にあり、押せなかった）。フォームの
+               中（開いている間だけ見える場所）に専用の閉じるボタンを置く。
+               押すと検索はせず、開く前の条件（最後に検索した出発駅・予算）に
+               戻してから畳む（main.jsのsetFormCollapsed()・
+               #form-close-btnのクリックハンドラ参照）。まだ一度も検索して
+               いない間は出さない（CSS側、.has-resultsで判定）。 -->
+          <button type="button" id="form-close-btn" class="form-close-btn" hidden>▲閉じる</button>
           <div class="form-row">
             <div class="form-group form-group-departure">
               <label for="departure-input">出発駅を選択</label>
@@ -162,51 +172,59 @@
       <!-- 3D切替中だけ表示。2Dの地図は消さずに裏で残したまま、準備ができたら
            #map-area.mode-3dが付いて3Dに切り替わる（4本目②、Minami指示）。 -->
       <p id="terrain-loading-indicator" hidden>3D地図を準備しています…</p>
-      <!-- 【2026-10-16、27本目、Minami決定：A】【23】の「縁をなぞって回す」
-           ハンドルを、「太い輪＝向き（回転）」「真ん中のつまみ＝傾き（上下に
-           引く）」の2つの操作に分ける形へ作り直した（Cowork調べ：Cesiumの
-           操作部品の議論・MapLibre標準コンパスのvisualizePitchを参考に、
-           Minamiが決定）。
-           外側の輪（.map-rotate-ring）：つまみの刻み（ギザギザ）と、輪に沿う
-           大きめの↺↻矢印。輪をつかんでなぞると、なぞった角度ぶん回転する
-           （【23】と同じ仕組み）。
-           真ん中のつまみ（#map-rotate-knob）：上下に引くと傾き（pitch、
-           0〜75度）が変わる。▲▼で「上下に引ける」ことを示す。北を指す針
-           （赤い先端）は輪の向きに回り、傾きに応じて少し寝て見える
-           （MapLibre既定コンパスのvisualizePitchと同じ考え方）。
-           つまみを、引かずに軽く押す（ドラッグ量がほぼ無いままpointerup）と、
-           北・傾き60度（いつもの斜めの表示）になめらかに戻る。
-           （assets/js/terrain-map-view.jsの_setupRotateHandle()参照）。 -->
-      <div
-        id="map-rotate-handle"
-        class="map-rotate-handle"
-        tabindex="0"
-        role="slider"
-        aria-valuemin="0"
-        aria-valuemax="359"
-        aria-valuenow="0"
-        aria-label="地図の向きと傾きを変える（輪を回すと向き、真ん中を上下に引くと傾き、押すと元に戻る）"
-      >
-        <div class="map-rotate-ring" aria-hidden="true">
-          <span class="map-rotate-arrow map-rotate-arrow-ccw" aria-hidden="true">↺</span>
-          <span class="map-rotate-arrow map-rotate-arrow-cw" aria-hidden="true">↻</span>
-        </div>
-        <div id="map-rotate-knob" class="map-rotate-knob" tabindex="-1">
-          <span class="map-pitch-arrow map-pitch-arrow-up" aria-hidden="true">▲</span>
-          <div class="map-rotate-needle-wrap">
-            <svg id="map-rotate-needle" class="map-rotate-needle" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M12,2 L15.5,13 L12,10.5 L8.5,13 Z" class="map-rotate-needle-n"></path>
-              <path d="M12,22 L15.5,13 L12,15.5 L8.5,13 Z" class="map-rotate-needle-s"></path>
-            </svg>
+      <!-- 【2026-10-17、32本目A、Minami決定】【27】の「太い輪＋真ん中のつまみ」
+           を、Coworkのモック画像（回転ハンドル_改良2案.png「改良1」）に合わせて
+           銀色の金属つまみへ作り直した。「北に戻す」はハンドルから外し、
+           別の小さな方位磁針（#map-compass-btn）に分離（Minami決定：伝えられる
+           操作は「回す」「上下に動かす」の2つまでにするため）。
+           方位磁針（上）とハンドル（下）を#map-controls-clusterで縦に並べ、
+           左右中心をそろえる。
+           ハンドル本体（#map-rotate-dial）：ふちは細かいギザギザ（濃い灰色）、
+           本体は銀色の斜めグラデーション。ふちの上の目印（.map-rotate-tick）が
+           bearingに合わせて回る（本体ごと回転）。
+           回す矢印（同じ向き×2）は回転しない固定のヒント。
+           真ん中のくぼみ（#map-rotate-knob）：たての溝（.map-pitch-track）の中を
+           つまみ（#map-pitch-thumb）がpitch（0〜75度）に応じて上下する。
+           （assets/js/terrain-map-view.jsの_setupRotateHandle()・
+           _setupCompassButton()参照）。 -->
+      <div id="map-controls-cluster" class="map-controls-cluster">
+        <button type="button" id="map-compass-btn" class="map-compass-btn" aria-label="北を上にする">
+          <svg id="map-compass-needle" class="map-compass-needle" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12,2 L15.5,13 L12,10.5 L8.5,13 Z" class="map-compass-needle-n"></path>
+            <path d="M12,22 L15.5,13 L12,15.5 L8.5,13 Z" class="map-compass-needle-s"></path>
+          </svg>
+        </button>
+        <div
+          id="map-rotate-handle"
+          class="map-rotate-handle"
+          tabindex="0"
+          role="slider"
+          aria-valuemin="0"
+          aria-valuemax="359"
+          aria-valuenow="0"
+          aria-label="地図の向きと傾きを変える（輪を回すと向き、真ん中を上下に動かすと傾き）"
+        >
+          <div id="map-rotate-dial" class="map-rotate-dial" aria-hidden="true">
+            <span class="map-rotate-tick" aria-hidden="true"></span>
           </div>
-          <span class="map-pitch-arrow map-pitch-arrow-down" aria-hidden="true">▼</span>
+          <span class="map-rotate-arrow map-rotate-arrow-1" aria-hidden="true"></span>
+          <span class="map-rotate-arrow map-rotate-arrow-2" aria-hidden="true"></span>
+          <div id="map-rotate-knob" class="map-rotate-knob" tabindex="-1">
+            <span class="map-pitch-chevron map-pitch-chevron-up" aria-hidden="true"></span>
+            <div class="map-pitch-track" aria-hidden="true">
+              <div id="map-pitch-thumb" class="map-pitch-thumb"></div>
+            </div>
+            <span class="map-pitch-chevron map-pitch-chevron-down" aria-hidden="true"></span>
+          </div>
         </div>
       </div>
       <!-- 【2026-10-16、27本目】初めて3Dに切り替えたときだけ出す案内の吹き出し。
            押すかハンドルに触ると消える。一度出したら次回以降は出さない
-           （localStorageに記録、_maybeShowRotateHint()参照）。 -->
+           （localStorageに記録、_maybeShowRotateHint()参照）。
+           【2026-10-17、32本目A】文言を「外側を回す→向き／真ん中を上下→傾き」
+           に変更（押すと戻る操作がハンドルから無くなったため）。 -->
       <div id="map-rotate-hint" class="map-rotate-hint" hidden role="status">
-        輪を回す→向き／真ん中を上下→傾き
+        外側を回す→向き／真ん中を上下→傾き
       </div>
       <!-- 【2026-10-15、11本目①】地図の吹き出し（ポップアップ）の代わりに、
            地図の下中央に固定で出す情報枠（Minami決定：A）。2D・3D共通、

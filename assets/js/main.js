@@ -155,6 +155,7 @@ class ReverseTravel {
       searchSummary: document.getElementById('search-summary'),
       searchSummaryText: document.getElementById('search-summary-text'),
       searchSummaryToggle: document.getElementById('search-summary-toggle'),
+      formCloseBtn: document.getElementById('form-close-btn'),
       searchForm: document.getElementById('search-form'),
       mapDimensionToggle: document.getElementById('map-dimension-toggle'),
       terrainLoadingIndicator: document.getElementById('terrain-loading-indicator'),
@@ -223,10 +224,30 @@ class ReverseTravel {
     this.elements.howtoBtnMobile?.addEventListener('click', () => this.elements.howtoModal?._open?.());
     this.elements.aboutBtnMobile?.addEventListener('click', () => this.elements.aboutModal?._open?.());
 
-    // 【2026-10-13、12本目②A】検索後、スマホでは要約バーを押すとフォームの
-    // 開閉を切り替える（もう一度検索すると自動でたたむのはdisplayResults側）。
+    // 【2026-10-13、12本目②A】検索後、スマホでは要約バーを押すとフォームが開く。
+    // 【2026-10-17、32本目A、不具合修正】以前はこのボタン1つで開閉両方を
+    // 担っていたが、ボタン自体が#search-summaryの中にあり、フォームを開くと
+    // #search-summaryごとCSSでdisplay:noneになるため「閉じる」側（文言が
+    // 「▲閉じる」に変わっていた）は実際には押せなかった（Cowork指摘）。
+    // 閉じる操作は専用の#form-close-btn（フォームの中、開いている間だけ
+    // 見える）に分離し、このボタンは「開く」専用にする。
     this.elements.searchSummaryToggle?.addEventListener('click', () => {
-      this.setFormCollapsed(!this.elements.layoutLeft.classList.contains('form-collapsed'));
+      this.setFormCollapsed(false);
+    });
+
+    // 【2026-10-17、32本目A、不具合修正】フォームを開いている間に閉じる手段。
+    // 検索はせず、最後に検索した条件に戻してから畳む（入力しかけた出発駅・
+    // 予算は捨てる、Minami指示）。
+    this.elements.formCloseBtn?.addEventListener('click', () => {
+      if (this.lastSearchedDepartureText !== null) {
+        this.elements.departureInput.value = this.lastSearchedDepartureText;
+      }
+      this.elements.departureSuggestions.innerHTML = '';
+      if (this.lastSearchedBudget !== null) {
+        this.elements.budgetInput.value = this.lastSearchedBudget;
+        this.updateBudgetUI();
+      }
+      this.setFormCollapsed(true);
     });
 
     this.elements.mylistSortSelect?.addEventListener('change', () => this.renderMylist());
@@ -1295,6 +1316,12 @@ class ReverseTravel {
     // 【2026-10-13、22本目、Minami決定：B】スマホの予算操作帯も、要約バーと
     // 同じく初回検索で初めてhidden属性を外す（以降は常に出し続ける）。
     if (this.elements.mobileBudgetOverlay) this.elements.mobileBudgetOverlay.hidden = false;
+    // 【2026-10-17、32本目A、不具合修正】フォームを閉じるボタンも同じく、
+    // 初回検索で初めてhidden属性を外す（以降はCSS側の.form-collapsed有無・
+    // .has-resultsだけで表示を制御する）。[hidden]はdisplay:none!importantの
+    // ため、属性を外さないままだとCSSの表示切替がどれだけ合っていても
+    // 永遠に表示されない（実機相当のテストで発覚）。
+    if (this.elements.formCloseBtn) this.elements.formCloseBtn.hidden = false;
 
     // 【2026-10-13、10本目②】「この条件で検索」を押した結果の表示なので、
     // 出発駅から近い順に点が波のように広がって出る演出を行う（Minami指示）。
@@ -2235,10 +2262,10 @@ class ReverseTravel {
   setFormCollapsed(collapsed) {
     if (!this.elements.layoutLeft) return;
     this.elements.layoutLeft.classList.toggle('form-collapsed', collapsed);
+    // 【2026-10-17、32本目A】#search-summary-toggleは「開く」専用（常に
+    // 「▼条件を変える」）になったため、文言の付け替えはしない。「閉じる」は
+    // #form-close-btn（常に「▲閉じる」、CSS側でcollapsed時のみ非表示）が担う。
     this.elements.searchSummaryToggle?.setAttribute('aria-expanded', String(!collapsed));
-    if (this.elements.searchSummaryToggle) {
-      this.elements.searchSummaryToggle.textContent = collapsed ? '▼条件を変える' : '▲閉じる';
-    }
   }
 
   /**

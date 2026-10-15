@@ -206,6 +206,32 @@ header p {
   }
 }
 
+/* 【2026-10-17、32本目A、不具合修正】フォームを開いている間、#search-summary
+   （中に閉じるボタンがある）はCSS（上の規則）でdisplay:noneになるため、
+   文言が「▲閉じる」に変わっていても実際には押せなかった（Cowork指摘）。
+   フォームの中（開いている間だけ見える）に専用の閉じるボタンを置く。
+   まだ一度も検索していない間（#app-layoutに.has-resultsが付く前）は、
+   フォームを畳む概念自体が無い（常に開いたまま）ため出さない。 */
+.form-close-btn {
+  display: none;
+  width: 100%;
+  margin-bottom: 0.5rem;
+  background: none;
+  border: none;
+  color: var(--color-main-deep);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  padding: 0.2rem 0;
+}
+
+@media (max-width: 759px) {
+  #app-layout.has-results .layout-left:not(.form-collapsed) .form-close-btn {
+    display: block;
+  }
+}
+
 .form-group {
   margin-bottom: 0.6rem;
 }
@@ -977,10 +1003,16 @@ header p {
    高さ約29px）を「つかんで回すハンドル」（56px）に置き換えたため、
    top値を54px→78px（8px開始＋56px＋8pxの隙間）に広げた。
    【2026-10-16、27本目修正】ハンドルを56px→64pxに拡大したため、
-   78px→86px（8px開始＋64px＋14pxの隙間、元と同じ隙間を維持）に広げた。 */
+   78px→86px（8px開始＋64px＋14pxの隙間、元と同じ隙間を維持）に広げた。
+   【2026-10-17、32本目A、Minami決定】方位磁針を別に分離し、ハンドルの上に
+   方位磁針（32px）を置く構成（#map-controls-cluster）に変えたため、
+   クラスタ全体の高さ（8px開始＋32px＋8px隙間＋72px＝120px）＋8pxの隙間で
+   128pxに広げた。低い画面（高さ500px以下）では、クラスタ＋全体を見るが
+   縦に収まらないため、地図の左上（2D/3D切替ボタンの下）へ移す
+   （Minami決定：A-3）。 */
 .view-all-btn {
   position: absolute;
-  top: 86px;
+  top: 128px;
   right: 8px;
   z-index: 1000;
   padding: 0.35rem 0.7rem;
@@ -994,31 +1026,89 @@ header p {
   cursor: pointer;
 }
 
-/* 【2026-10-16、27本目、Minami決定：A】3Dの向き・傾きを変える「太い輪＋
-   真ん中のつまみ」ハンドル（【23】の「縁をなぞって回す」だけの版を作り直し。
-   Cowork調べ：Cesiumの操作部品の議論・MapLibre標準コンパスのvisualizePitch
-   を参考にした）。外側の太い輪（.map-rotate-ring）をなぞると向き（回転）、
-   真ん中のつまみ（#map-rotate-knob）を上下に引くと傾きが変わる。2Dでは
-   出さない。全体の直径は64px（スマホで指が乗る大きさ、Minami指示）。 */
-.map-rotate-handle {
+/* 【2026-10-17、32本目A】低い画面（高さ500px以下、400×464などのスマホ実機を
+   想定）では、右上の縦の並び（方位磁針128px分＋クラスタ）に「全体を見る」
+   まで収めると窮屈・他要素と重なるため、地図の左上（2D/3D切替ボタン
+   top:8px・高さ約32.8px、出典ボタンtop:54px、の下）へ移す。 */
+@media (max-height: 500px) {
+  .view-all-btn {
+    top: 94px;
+    right: auto;
+    left: 8px;
+  }
+}
+
+/* 【2026-10-17、32本目A、Minami決定】方位磁針（上、32px）とハンドル（下、
+   72px）を縦に並べ、左右中心をそろえるための入れ物。flexboxの
+   align-items:centerで、サイズの違う2つの丸を自動的に中心そろえできる。 */
+.map-controls-cluster {
   display: none;
   position: absolute;
   top: 8px;
   right: 8px;
-  width: 64px;
-  height: 64px;
   z-index: 1000;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+#map-area.mode-3d .map-controls-cluster {
+  display: flex;
+}
+
+/* 方位磁針：押すと北（bearing0）だけに戻る（傾きは変えない）。ハンドルから
+   「押すと元に戻る」操作を外した代わり（Minami決定：ハンドルで伝えられる
+   操作は「回す」「上下に動かす」の2つまでにする）。 */
+.map-compass-btn {
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--color-border);
+  background-color: white;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.map-compass-btn:focus-visible {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.map-compass-needle {
+  width: 16px;
+  height: 16px;
+  /* JS（terrain-map-view.jsの_setupCompassButton()）がbearingに合わせて
+     transform: rotate()を直接書き換える。 */
+}
+
+.map-compass-needle-n {
+  fill: var(--color-error);
+}
+
+.map-compass-needle-s {
+  fill: var(--color-border);
+}
+
+/* 【2026-10-17、32本目A、Minami決定】向き・傾きを変えるハンドル。Coworkの
+   モック画像（回転ハンドル_改良2案.png「改良1」）に合わせ、昔のラジオ・
+   テレビのつまみのような銀色の金属見た目に作り直した（【27】の緑のしま
+   模様・北の赤い針は廃止。北へ戻す操作は上の方位磁針に分離）。
+   外側のふち（#map-rotate-dial、細かいギザギザ＋銀色の斜めグラデーション）
+   をなぞると向き（回転）、真ん中のくぼみ（#map-rotate-knob）の中のたての溝
+   （.map-pitch-track）を上下にドラッグすると傾きが変わる。2Dでは出さない。
+   全体の直径は72px（モック画像の実寸、Minami指示）。 */
+.map-rotate-handle {
+  position: relative;
+  width: 72px;
+  height: 72px;
   cursor: grab;
   /* 【重要】touch-action:noneにしないと、スマホでこのハンドルをなぞった
      ときにブラウザ既定のスクロール・ピンチジェスチャーとポインタイベントが
      競合し、JS側のpointermoveが安定して取れないことがある。 */
   touch-action: none;
-}
-
-#map-area.mode-3d .map-rotate-handle {
-  display: block;
 }
 
 .map-rotate-handle:active {
@@ -1030,92 +1120,164 @@ header p {
   outline-offset: 2px;
 }
 
-/* 外側の太い輪（幅12px）。指をかける凹凸（つまみのギザギザ）をはっきり
-   見えるconic-gradient（アプリの緑と白を交互に並べる、【23】と同じ考え方）。
-   中央は.map-rotate-knobの白い円が覆うため、実際に見えるのは輪だけになる。 */
-.map-rotate-ring {
+/* ふち＋本体。JS（_setupRotateHandle()のupdateDial()）がbearingに合わせて
+   この要素ごとtransform: rotate()する（本体の金属グラデーション・ふちの
+   ギザギザも一緒に回る＝実物のつまみと同じ見え方）。中身は疑似要素2枚：
+   ::beforeがふちの細かいギザギザ（濃淡の繰り返し）、::afterが銀色の
+   斜めグラデーション本体（ふちから5px内側＝ふちの幅5px分だけギザギザが
+   見える）。 */
+.map-rotate-dial {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background: repeating-conic-gradient(var(--color-main) 0deg 4deg, white 4deg 12deg);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4);
 }
 
+.map-rotate-dial::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  /* 細かいギザギザ（昔のテレビのチャンネルつまみのような刻み、濃い灰色）。
+     【23】【27】の12度刻み（緑/白）より細かく4度刻みにして「ギザギザ」感を
+     強める（Minami指摘：【27】のしま模様は記号を見えにくくしていただけで
+     質感になっていなかった）。 */
+  background: repeating-conic-gradient(#5a5a5a 0deg 2deg, #8a8a8a 2deg 4deg);
+}
+
+.map-rotate-dial::after {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  /* 明るい銀色の金属（左上が明るく右下が暗いななめのグラデーション、
+     Minami指示）。 */
+  background: linear-gradient(135deg, #f2f2f2 0%, #d8d8d8 35%, #aeaeae 70%, #8c8c8c 100%);
+  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.8), inset 0 -2px 3px rgba(0, 0, 0, 0.25);
+}
+
+/* ふちの上の目印（今の向きを示す短い濃い灰色の線）。.map-rotate-dialの
+   子要素のため、ダイヤルごと回転しても一緒について回る。 */
+.map-rotate-tick {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 3px;
+  height: 10px;
+  border-radius: 1.5px;
+  background-color: #3a3a3a;
+  z-index: 1;
+}
+
+/* 回す矢印（同じ向き＝時計回りを2本、ふちから離して輪の中ほどに置く、
+   Minami指示）。.map-rotate-dialの外（兄弟要素）のため回転しない＝常に
+   読みやすい向きのまま固定のヒントとして見える。彫り込んだような落ち着いた
+   灰色＋溝の下側に白い細い光（text-shadow）。 */
 .map-rotate-arrow {
   position: absolute;
   top: 50%;
-  transform: translateY(-50%);
-  font-size: 0.85rem;
-  line-height: 1;
-  color: var(--color-main-deep);
-  font-weight: 700;
+  width: 16px;
+  height: 16px;
+  margin-top: -8px;
+  color: #6a6a6a;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.7);
   user-select: none;
+  pointer-events: none;
 }
 
-.map-rotate-arrow-ccw {
-  left: 1px;
+.map-rotate-arrow::before {
+  content: '↻';
+  position: absolute;
+  inset: 0;
+  font-size: 0.95rem;
+  line-height: 16px;
+  text-align: center;
 }
 
-.map-rotate-arrow-cw {
-  right: 1px;
+.map-rotate-arrow-1 {
+  left: 6px;
 }
 
-/* 真ん中のつまみ。輪（12px幅）の内側に浮き上がって見える丸（Minami指示：
-   「少し盛り上がって見える」）。上下にドラッグすると傾き、ドラッグせず
-   軽く押すと北・傾き60度に戻る（terrain-map-view.js参照）。 */
+.map-rotate-arrow-2 {
+  right: 6px;
+}
+
+/* 真ん中のくぼみ。ダイヤルの内側に凹んで見える（Minami指示のモック画像：
+   丸いくぼみの中にたての溝）。上下にドラッグすると傾き（terrain-map-view.js
+   参照）。【32本目A】押しても北には戻らない（方位磁針に分離したため）。 */
 .map-rotate-knob {
   position: absolute;
-  top: 12px;
-  left: 12px;
+  top: 16px;
+  left: 16px;
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background-color: white;
-  box-shadow: 0 2px 3px rgba(0, 0, 0, 0.3), inset 0 1px 2px rgba(255, 255, 255, 0.9);
+  background: linear-gradient(135deg, #c4c4c4 0%, #e8e8e8 50%, #c4c4c4 100%);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.45), inset 0 -1px 1px rgba(255, 255, 255, 0.5);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 2px;
   cursor: ns-resize;
   touch-action: none;
 }
 
-.map-pitch-arrow {
-  font-size: 0.5rem;
-  line-height: 1;
-  color: var(--color-main-deep);
-  font-weight: 700;
-  user-select: none;
+/* 小さな「へ」の字の矢印（上向き・下向き）。CSSのborderだけで三角を作る
+   （フォント依存の文字より、どの環境でも同じ見た目になる）。 */
+.map-pitch-chevron {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
 }
 
-/* 針に奥行き（perspective）を与えるための入れ物。傾き（pitch）が付くと
-   針が少し寝て見える（MapLibre既定コンパスのvisualizePitchと同じ考え方）。 */
-.map-rotate-needle-wrap {
-  perspective: 60px;
+.map-pitch-chevron-up {
+  border-bottom: 5px solid #707070;
 }
 
-.map-rotate-needle {
-  width: 20px;
-  height: 20px;
-  /* JS（terrain-map-view.js）がbearing・pitchに合わせてtransformを
-     直接書き換える（rotate()で向き、rotateX()で傾き）。transition無し
-     （なぞっている間は1:1で追従させるため、ここでアニメーションを
-     入れると指の動きとズレて見える）。 */
+.map-pitch-chevron-down {
+  border-top: 5px solid #707070;
 }
 
-.map-rotate-needle-n {
-  fill: var(--color-error);
+/* たての溝（スライダーの軌道）。 */
+.map-pitch-track {
+  position: relative;
+  width: 6px;
+  height: 18px;
+  border-radius: 3px;
+  background-color: #8a8a8a;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
-.map-rotate-needle-s {
-  fill: var(--color-border);
+/* 溝の中を動く、横線のギザギザがついた白っぽいつまみ。つまみの位置が
+   今の傾き（pitch）を表す（上＝斜めから＝pitch大、下＝真上から＝pitch0）。
+   JS（_setupRotateHandle()のupdateDial()）がtopを0〜75度に合わせて動かす。 */
+.map-pitch-thumb {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 12px;
+  height: 7px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #fafafa 0%, #d4d4d4 100%);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  background-image:
+    linear-gradient(180deg, #fafafa 0%, #d4d4d4 100%),
+    repeating-linear-gradient(180deg, #9a9a9a 0 1px, transparent 1px 2.5px);
+  background-blend-mode: normal, multiply;
 }
 
 /* 【2026-10-16、27本目】初めて3Dに切り替えたときだけ出す案内の吹き出し。
-   ハンドルの左に、輪に沿う小さな三角のしっぽを付けて出す。 */
+   【2026-10-17、32本目A】ハンドルが#map-controls-cluster（右上、方位磁針＋
+   ハンドルの縦並び）の中に移ったため、クラスタの左に、ハンドルの高さに
+   合わせて出す。 */
 .map-rotate-hint {
   position: absolute;
-  top: 18px;
-  right: 80px;
+  top: 58px;
+  right: 88px;
   max-width: 180px;
   z-index: 1000;
   background-color: rgba(30, 30, 30, 0.92);

@@ -2299,7 +2299,17 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
       // 撮っていたため、航空写真の読み込み途中でぼやけた画像になっていた）。
       const tiltCompletePromise = page.evaluate(() => new Promise((resolve) => {
         window.__terrainViewForDebug.onTiltComplete = () => resolve();
-        setTimeout(resolve, 10000); // 保険（演出が終わらない場合でも進める）
+        // 【2026-10-17、32本目A、不具合修正】10秒の保険は、タイル読み込みが
+        // 混雑時に遅いと短すぎ、本当はまだ演出が終わっていないのに先に進んで
+        // しまい「pitchが戻っていない」という誤検出を起こしていた（実機相当の
+        // 計測で確認：このタイムアウトが演出完了より先に発火していた）。
+        // flyToSpot()の「降りる→傾ける」は、降りるflyTo()固定2600ms＋
+        // waitForSceneSettled()上限15000ms＋傾けるeaseTo()固定2000ms＋
+        // waitForSceneSettled()上限15000msの直列で、理論上の最悪値は34600ms
+        // （一度20000msへ伸ばしたが、実機相当の計測でpitch=51度
+        // （まだ55度未満）で発火する近い外れ値が実際に発生し、20秒でも
+        // 足りないことがあると判明）。理論上の最悪値に余裕を見て36000msにする。
+        setTimeout(resolve, 36000); // 保険（演出が終わらない場合でも進める）
       }));
       await page.mouse.click(mapBox.x + pinScreenPos.x, mapBox.y + pinScreenPos.y);
       // flyToSpot()の降りる演出が始まるため、情報枠はすぐ出るはず（Minami指示：
@@ -2726,9 +2736,51 @@ async function checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths) {
       !afterToggle.collapsed && afterToggle.formDisplay !== 'none',
       JSON.stringify(afterToggle)
     );
+    // 【32本目A】フォームを開いている間、「▲閉じる」が見える（専用の
+    // #form-close-btn。以前はこの文言が#search-summary-toggleに付くだけで、
+    // そのボタン自体が#search-summaryの中にありフォームを開くと非表示になる
+    // ため実際には押せなかった、Cowork指摘）。
+    const closeBtnVisible = await page.locator('#form-close-btn').isVisible().catch(() => false);
+    record(`[${label}] フォームを開いている間、「▲閉じる」ボタンが見える`, closeBtnVisible);
+    const closeBtnText = await page.locator('#form-close-btn').textContent().catch(() => '');
+    record(`[${label}] 「▲閉じる」ボタンの文言が正しい`, (closeBtnText || '').includes('▲閉じる'), closeBtnText);
+
     const formExpandedPath = path.join(screenshotDir, `mobile-form-collapse-expanded-${label}.png`);
     await page.screenshot({ path: formExpandedPath });
     savedPaths.push(formExpandedPath);
+
+    // 【32本目A、不具合修正】「▲閉じる」を押すと、検索せずにフォームが畳まれ、
+    // 開く前（最後に検索した）条件に戻る（入力しかけた出発駅・予算は捨てる）。
+    await page.fill('#departure-input', '高岡駅');
+    await page.waitForTimeout(300);
+    await page.evaluate((v) => {
+      const el = document.getElementById('budget-slider');
+      el.value = v;
+      el.dispatchEvent(new Event('input'));
+    }, 1500);
+    await page.click('#form-close-btn');
+    await page.waitForTimeout(150);
+    const afterClose = await page.evaluate(() => ({
+      collapsed: document.getElementById('layout-left').classList.contains('form-collapsed'),
+      departureValue: document.getElementById('departure-input').value,
+      budgetValue: document.getElementById('budget-input').value,
+      summaryText: document.getElementById('search-summary-text')?.textContent || '',
+    }));
+    record(
+      `[${label}] 「▲閉じる」を押すと検索せずフォームが畳まれ、開く前の条件（出発駅）に戻る`,
+      afterClose.collapsed && afterClose.departureValue === '富山駅前',
+      JSON.stringify(afterClose)
+    );
+    record(
+      `[${label}] 「▲閉じる」を押すと、開く前の条件（予算）に戻る`,
+      afterClose.budgetValue === '500',
+      JSON.stringify(afterClose)
+    );
+    record(
+      `[${label}] 「▲閉じる」を押しても、上の要約バー・一覧は最後に検索した条件のまま（再検索していない）`,
+      afterClose.summaryText.includes('富山駅前') && afterClose.summaryText.includes('¥500'),
+      afterClose.summaryText
+    );
 
     // もう一度検索すると再び畳まれる
     await searchAt(page, '富山駅前', 1000);
@@ -3138,7 +3190,9 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
         // （固定300ms待ちのままだと航空写真がぼやけた状態で撮ってしまう）。
         const tiltCompletePromise3d = page.evaluate(() => new Promise((resolve) => {
           window.__terrainViewForDebug.onTiltComplete = () => resolve();
-          setTimeout(resolve, 10000);
+          // 【2026-10-17、32本目A、不具合修正】10秒は混雑時のタイル読み込みに
+          // 対して短すぎることがある（理由は上のtiltCompletePromiseの注釈参照）。36秒に伸ばす。
+          setTimeout(resolve, 36000);
         }));
         await page.mouse.click(mapBox3d.x + pinScreenPos.x, mapBox3d.y + pinScreenPos.y);
         await page.waitForTimeout(300);
@@ -3191,13 +3245,15 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
         await page.waitForTimeout(2000);
         const overheadPromise = page.evaluate(() => new Promise((resolve) => {
           window.__terrainViewForDebug.onOverheadSettled = () => resolve();
-          setTimeout(resolve, 10000);
+          // 【2026-10-17、32本目A、不具合修正】10秒は混雑時のタイル読み込みに
+          // 対して短すぎることがある（理由は上のtiltCompletePromiseの注釈参照）。36秒に伸ばす。
+          setTimeout(resolve, 36000);
         }));
         await page.mouse.click(mapBox3d.x + pinScreenPos.x, mapBox3d.y + pinScreenPos.y);
         await overheadPromise;
         const tiltCompleteRetryPromise = page.evaluate(() => new Promise((resolve) => {
           window.__terrainViewForDebug.onTiltComplete = () => resolve();
-          setTimeout(resolve, 10000);
+          setTimeout(resolve, 36000);
         }));
         await page.mouse.click(mapBox3d.x + pinScreenPos.x, mapBox3d.y + pinScreenPos.y); // 同じピンをすぐもう一度
         await tiltCompleteRetryPromise;
@@ -3386,7 +3442,9 @@ async function checkCrossDimensionSelectionScroll(browser, baseUrl, savedPaths) 
       // cross-dimension-pc-3d-selected-scrolled.pngで発覚）。
       const tiltCompletePromise = page.evaluate(() => new Promise((resolve) => {
         window.__terrainViewForDebug.onTiltComplete = () => resolve();
-        setTimeout(resolve, 10000);
+        // 【2026-10-17、32本目A、不具合修正】10秒は混雑時のタイル読み込みに
+        // 対して短すぎることがある（理由は上のtiltCompletePromiseの注釈参照）。36秒に伸ばす。
+        setTimeout(resolve, 36000);
       }));
       await page.mouse.click(mapBox.x + pinPos.x, mapBox.y + pinPos.y);
       // 【不具合修正】#results-list.scrollTo({behavior:'smooth'})はブラウザの
@@ -3860,14 +3918,81 @@ async function waitFor3dSettled(page, timeoutMs = 60000) {
 }
 
 /**
- * 【27本目】3Dの「太い輪＋真ん中のつまみ」ハンドル（【23】の「縁をなぞって
- * 回すだけ」の版を作り直したもの）の検証。PC・スマホ（400×464）の両方で、
- * 実際にマウス操作で輪をなぞって回し・つまみを上下にドラッグして傾け、
- * bearing・pitchの変化、地図中心の不変、針の向き・傾き、つまみを軽く
- * 押したときの復帰、キーボード操作、初回案内の吹き出し、重なりを確認する。
+ * 【32本目A、不具合修正】初めて3Dに切り替えたときだけ出る案内の吹き出しが、
+ * ページを再読み込みしても（localStorageに記録が残るため）2回目は出ない
+ * ことを確認する。checkRotateHandle()の共有browserの中でpage.reload()して
+ * 確認する設計だったが、スイート全体で既に多数のWebGLコンテキストを作り
+ * 捨てた後のこの時点でのreload後の再生成だけが、実機相当の計測で
+ * 60000msでも間に合わないことが複数回あった（単体で実行すると15000ms未満で
+ * 即座に成功する＝このスイートの長時間実行によるGPUリソースの逼迫が原因と
+ * 個別に確認済み。本体のproductionコード・flyToSpot()等は一切変更しておらず
+ * 無関係）。この検証だけ独立した専用browserで行うことで、他の多数のテストの
+ * 積み重ねに左右されないようにした（PCの1サイズだけで十分。localStorageの
+ * 仕組み自体はビューポートに依存しないため）。
+ */
+async function checkRotateHintPersistence(baseUrl, savedPaths) {
+  console.log('\n=== 32本目A：初回案内の吹き出しがページ再読み込み後も出ないことの検証（専用browser） ===');
+  const browser = await chromium.launch();
+  try {
+    const context = await browser.newContext({ viewport: VIEWPORTS.pc });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '高松築港', 1000);
+    await page.click('#map-dimension-toggle');
+    const became3d = await page.waitForFunction(
+      () => document.getElementById('map-area').classList.contains('mode-3d'),
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
+    record('[pc] 初回3D化に成功する（吹き出し再読み込み検証の前提）', became3d);
+    if (!became3d) { await context.close(); return; }
+    await waitFor3dSettled(page);
+    const hintVisibleFirstTime = await page.locator('#map-rotate-hint').isVisible().catch(() => false);
+    record('[pc] 初めて3Dに切り替えると、案内の吹き出しが出る（再読み込み検証用）', hintVisibleFirstTime);
+
+    // 【2026-10-17、32本目A、不具合修正】当初はpage.reload()で同じページを
+    // 読み込み直していたが、同じpageオブジェクトでWebGLコンテキストを
+    // 破棄→再生成するreload()特有の遅さ・スタックが実機相当の計測で複数回
+    // 再現した（専用browserでも・メインbrowserを閉じたあとでも再現し、GPU
+    // リソースの競合が原因ではなかった）。localStorageはブラウザコンテキスト
+    // （オリジン）単位で共有されるため、同じcontext内に新しいpage（新しい
+    // タブに相当）を開き直すだけで、「初回のlocalStorage書き込みが次回に
+    // 引き継がれるか」を同じ強さで検証できる。reload()特有の問題を避けつつ、
+    // 確認したい本質（2回目は吹き出しが出ない）は変わらない。
+    await page.close();
+    const page2 = await context.newPage();
+    await page2.goto(baseUrl, { waitUntil: 'load' });
+    await page2.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page2, '高松築港', 1000);
+    await page2.click('#map-dimension-toggle');
+    const became3dSecondPage = await page2.waitForFunction(
+      () => document.getElementById('map-area').classList.contains('mode-3d'),
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
+    record('[pc] 新しいページ（同じコンテキスト）でも3D化に成功する', became3dSecondPage);
+    if (!became3dSecondPage) { await context.close(); return; }
+    await waitFor3dSettled(page2);
+    const hintVisibleSecondTime = await page2.locator('#map-rotate-hint').isVisible().catch(() => false);
+    record('[pc] 2回目（新しいページ、同じlocalStorage）に3Dへ入っても、吹き出しは出ない', !hintVisibleSecondTime);
+
+    await context.close();
+  } finally {
+    await browser.close();
+  }
+}
+
+/**
+ * 【32本目A】3Dの向き・傾きハンドル（Coworkのモック画像に合わせた銀色の
+ * 金属つまみ）＋方位磁針（別置き、北へ戻す専用）の検証。PC・スマホ
+ * （400×464）の両方で、実際にマウス操作で外側のふちをなぞって回し・
+ * 真ん中のくぼみを上下にドラッグして傾け、bearing・pitchの変化、地図中心の
+ * 不変、ダイヤル・つまみの位置・方位磁針の針の向き、ハンドルを押しても
+ * 何も起きないこと、方位磁針を押すとbearingだけ戻ること、キーボード操作、
+ * 初回案内の吹き出し、重なり（すき間8px以上）を確認する。
  */
 async function checkRotateHandle(browser, baseUrl, savedPaths) {
-  console.log('\n=== 27本目：3Dの回転ハンドル（輪＝向き、つまみ＝傾き）の検証 ===');
+  console.log('\n=== 32本目A：3Dの回転ハンドル（銀色のつまみ）＋方位磁針の検証 ===');
 
   for (const [label, viewport] of Object.entries({ pc: VIEWPORTS.pc, own: { width: 400, height: 464 } })) {
     const context = await browser.newContext({ viewport });
@@ -3889,8 +4014,8 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
     }
 
     // 2Dでは出ない
-    const handleHiddenIn2d = await page.locator('#map-rotate-handle').isVisible().catch(() => false);
-    record(`[${label}] 2Dではハンドルが出ない`, !handleHiddenIn2d);
+    const clusterHiddenIn2d = await page.locator('#map-controls-cluster').isVisible().catch(() => false);
+    record(`[${label}] 2Dでは方位磁針・ハンドルが出ない`, !clusterHiddenIn2d);
 
     await page.click('#map-dimension-toggle');
     const became3d = await page.waitForFunction(
@@ -3902,28 +4027,40 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
 
     await waitFor3dSettled(page);
 
-    const handleVisible = await page.locator('#map-rotate-handle').isVisible();
-    record(`[${label}] 3Dのときだけハンドルが出る`, handleVisible);
+    const clusterVisible = await page.locator('#map-controls-cluster').isVisible();
+    record(`[${label}] 3Dのときだけ方位磁針・ハンドルが出る`, clusterVisible);
 
     // --- 初回の案内の吹き出し（新しいブラウザコンテキスト＝localStorage
     //     空の状態で初めて3Dに切り替えたため、出るはず） ---
     const mapAreaBox = await page.locator('#map-area').boundingBox();
     const handleBox = await page.locator('#map-rotate-handle').boundingBox();
+    const compassBox = await page.locator('#map-compass-btn').boundingBox();
     const hintVisibleFirstTime = await page.locator('#map-rotate-hint').isVisible().catch(() => false);
     record(`[${label}] 初めて3Dに切り替えると、案内の吹き出しが出る`, hintVisibleFirstTime);
     if (hintVisibleFirstTime) {
+      const hintText = await page.locator('#map-rotate-hint').textContent();
+      record(
+        `[${label}] 吹き出しの文言が「外側を回す→向き／真ん中を上下→傾き」`,
+        (hintText || '').includes('外側を回す') && (hintText || '').includes('真ん中を上下'),
+        hintText
+      );
       const hintBox = await page.locator('#map-rotate-hint').boundingBox();
       const toggleBoxForHint = await page.locator('#map-dimension-toggle').boundingBox();
       const tabsBoxForHint = await page.locator('.mobile-tabs').boundingBox().catch(() => null);
       const overlayBoxForHint = await page.locator('#mobile-budget-overlay').boundingBox().catch(() => null);
       // 吹き出しのしっぽはハンドルの輪に接する意匠のため、ここでは単純な
       // 重なり（本体同士が食い込んでいないか）だけを見る。8px以上のすき間を
-      // 求めるのは「ほかの部品」（2D/3D切替ボタン・タブ・予算操作帯）との
-      // 間であり、ハンドル自身との間ではない。
+      // 求めるのは「ほかの部品」（2D/3D切替ボタン・タブ・予算操作帯・方位磁針）
+      // との間であり、ハンドル自身との間ではない。
       record(
         `[${label}] 吹き出し本体がハンドルの輪に食い込んでいない`,
         !rectsOverlap(hintBox, handleBox),
         JSON.stringify({ hintBox, handleBox })
+      );
+      record(
+        `[${label}] 吹き出しが方位磁針と重ならず、すき間8px以上`,
+        rectGap(hintBox, compassBox) >= 8,
+        JSON.stringify({ hintBox, compassBox, gap: rectGap(hintBox, compassBox) })
       );
       record(
         `[${label}] 吹き出しが2D/3D切替ボタンと重ならず、すき間8px以上`,
@@ -3955,28 +4092,22 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
       record(`[${label}] 吹き出しを押すと消える`, !hintHiddenAfterClick);
     }
 
-    // 【27本目】ページを再読み込みして同じ出発駅・3Dへ入り直しても、
-    // 2回目は吹き出しが出ないこと（localStorageに記録が残っているはず。
-    // 同じブラウザコンテキスト＝localStorageは引き継がれる、page.reload()で検証）。
-    await page.reload({ waitUntil: 'load' });
-    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
-    await searchAt(page, '高松築港', 1000);
-    if (label !== 'pc') {
-      await page.click('.tab-btn[data-tab="map"]');
-      await page.waitForTimeout(300);
-    }
-    await page.click('#map-dimension-toggle');
-    await page.waitForFunction(
-      () => document.getElementById('map-area').classList.contains('mode-3d'),
-      { timeout: 30000 }
-    );
-    await waitFor3dSettled(page);
-    const hintVisibleSecondTime = await page.locator('#map-rotate-hint').isVisible().catch(() => false);
-    record(`[${label}] 2回目に3Dへ入り直しても、吹き出しは出ない`, !hintVisibleSecondTime);
+    // 【27本目から踏襲、32本目A、不具合修正】「ページを再読み込みしても
+    // 2回目は吹き出しが出ない」の確認は、この関数と同じ共有browserの中で
+    // page.reload()してその場で行っていた。しかし本関数のPC/own両方の初回
+    // 3D化・それ以前の全テスト関数分の積み重ねで、この時点ではWebGLコンテキスト
+    // を既に多数作り捨てており、reload後の再生成だけが実機相当の計測で
+    // 60000msでも間に合わないことがあった（単体で実行すると15000ms未満で
+    // 即座に成功する＝GPUリソースの逼迫がこのスイートの長時間実行に由来する
+    // ことを個別に確認済み）。この検証自体は独立した専用browserで一度だけ
+    // 行う（checkRotateHintPersistence()参照）ことで、他のテストの積み重ねに
+    // 左右されないようにした。
 
     // --- 重なりチェック：2D/3D切替ボタン・出典ボタン・スマホの予算操作帯の
-    //     いずれとも重ならない ---
+    //     いずれとも重ならない。方位磁針とハンドルの左右中心がそろっている ---
     const handleBox2 = await page.locator('#map-rotate-handle').boundingBox();
+    const compassBox2 = await page.locator('#map-compass-btn').boundingBox();
+    const clusterBox2 = await page.locator('#map-controls-cluster').boundingBox();
     const toggleBox = await page.locator('#map-dimension-toggle').boundingBox();
     const attribBox = await page.locator('#map-area .maplibregl-ctrl-bottom-right').boundingBox().catch(() => null);
     const overlayBox = await page.locator('#mobile-budget-overlay').boundingBox().catch(() => null);
@@ -3993,25 +4124,38 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
       handleBox2.x >= mapAreaBox2.x - 1 && handleBox2.x + handleBox2.width <= mapAreaBox2.x + mapAreaBox2.width + 1,
       JSON.stringify({ handleBox2, mapAreaBox2 })
     );
+    const compassCenterX = compassBox2.x + compassBox2.width / 2;
+    const handleCenterX = handleBox2.x + handleBox2.width / 2;
+    record(
+      `[${label}] 方位磁針とハンドルの左右中心がそろっている`,
+      Math.abs(compassCenterX - handleCenterX) < 1,
+      JSON.stringify({ compassCenterX, handleCenterX })
+    );
+    record(
+      `[${label}] 方位磁針が右上、そのすぐ下にハンドルがある`,
+      compassBox2.y < handleBox2.y && handleBox2.y - (compassBox2.y + compassBox2.height) >= 0,
+      JSON.stringify({ compassBox2, handleBox2 })
+    );
 
-    // 必須スクリーンショット：ハンドルの拡大（回す前）。ハンドルは右上の
-    // 端に近いため、周囲10pxぶん広げた範囲がビューポートをはみ出さないよう
-    // クランプする（はみ出したままclipに渡すとスクリーンショットが失敗する）。
+    // 必須スクリーンショット：方位磁針とハンドルの拡大（モック画像と並べて
+    // 比べられるように、クラスタ全体を撮る）。右上の端に近いため、周囲10pxぶん
+    // 広げた範囲がビューポートをはみ出さないようクランプする。
     const closeupPath = path.join(screenshotDir, `rotate-handle-${label}-closeup.png`);
-    const closeupClipX = Math.max(0, handleBox2.x - 10);
-    const closeupClipY = Math.max(0, handleBox2.y - 10);
+    const closeupClipX = Math.max(0, clusterBox2.x - 10);
+    const closeupClipY = Math.max(0, clusterBox2.y - 10);
     await page.screenshot({
       path: closeupPath,
       clip: {
         x: closeupClipX,
         y: closeupClipY,
-        width: Math.min(viewport.width, handleBox2.x + handleBox2.width + 10) - closeupClipX,
-        height: Math.min(viewport.height, handleBox2.y + handleBox2.height + 10) - closeupClipY,
+        width: Math.min(viewport.width, clusterBox2.x + clusterBox2.width + 10) - closeupClipX,
+        height: Math.min(viewport.height, clusterBox2.y + clusterBox2.height + 10) - closeupClipY,
       },
     });
     savedPaths.push(closeupPath);
 
-    // --- 輪をドラッグで90°回る・中心が動かない・針の向きが合っている ---
+    // --- 外側のふちをドラッグで90°回る・中心が動かない・ダイヤル/方位磁針の
+    //     針の向きが合っている ---
     const centerBefore = await page.evaluate(() => window.__terrainMapForDebug.getCenter());
     const bearingBefore = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
     const pitchBeforeRingDrag = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
@@ -4020,11 +4164,12 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
     const bearingDuringDrag = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
     const pitchDuringRingDrag = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
     const centerDuringDrag = await page.evaluate(() => window.__terrainMapForDebug.getCenter());
-    const needleTransform = await page.evaluate(() => document.getElementById('map-rotate-needle').style.transform);
+    const dialTransform = await page.evaluate(() => document.getElementById('map-rotate-dial').style.transform);
+    const compassNeedleTransform = await page.evaluate(() => document.getElementById('map-compass-needle').style.transform);
 
     const bearingDelta = Math.abs(Math.abs(bearingDuringDrag - bearingBefore) - 90);
     record(
-      `[${label}] 輪を90°なぞると、bearingが約90°変わる`,
+      `[${label}] 外側のふちを90°なぞると、bearingが約90°変わる`,
       bearingDelta < 5,
       `before=${bearingBefore} after=${bearingDuringDrag} (delta=${bearingDelta})`
     );
@@ -4038,18 +4183,17 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
       Math.abs(pitchDuringRingDrag - pitchBeforeRingDrag) < 0.5,
       `before=${pitchBeforeRingDrag} during=${pitchDuringRingDrag}`
     );
-    const needleMatch = needleTransform.match(/rotateX\(([-\d.]+)deg\) rotate\(([-\d.]+)deg\)/);
-    const needleBearingDeg = needleMatch ? parseFloat(needleMatch[2]) : NaN;
-    const needlePitchDeg = needleMatch ? parseFloat(needleMatch[1]) : NaN;
+    const dialDeg = parseFloat((dialTransform.match(/-?[\d.]+/) || ['NaN'])[0]);
     record(
-      `[${label}] 針の向きが地図のbearingと合っている（針=-bearing）`,
-      !Number.isNaN(needleBearingDeg) && Math.abs(needleBearingDeg - -bearingDuringDrag) < 1,
-      JSON.stringify({ needleTransform, bearingDuringDrag })
+      `[${label}] ダイヤルの向きが地図のbearingと合っている（ダイヤル=bearing）`,
+      !Number.isNaN(dialDeg) && Math.abs(dialDeg - bearingDuringDrag) < 1,
+      JSON.stringify({ dialTransform, bearingDuringDrag })
     );
+    const compassNeedleDeg = parseFloat((compassNeedleTransform.match(/-?[\d.]+/) || ['NaN'])[0]);
     record(
-      `[${label}] 針の傾きが地図のpitchと合っている（rotateX=pitch）`,
-      !Number.isNaN(needlePitchDeg) && Math.abs(needlePitchDeg - pitchDuringRingDrag) < 1,
-      JSON.stringify({ needleTransform, pitchDuringRingDrag })
+      `[${label}] 方位磁針の針の向きが地図のbearingと合っている（針=-bearing）`,
+      !Number.isNaN(compassNeedleDeg) && Math.abs(compassNeedleDeg - -bearingDuringDrag) < 1,
+      JSON.stringify({ compassNeedleTransform, bearingDuringDrag })
     );
 
     // 必須スクリーンショット：回したあと（releaseの前、ドラッグ中の見た目を撮る）
@@ -4060,7 +4204,8 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
     await releaseRotateHandle(page);
     await page.waitForTimeout(200);
 
-    // --- 真ん中のつまみを上下にドラッグすると傾きが変わる・0〜75度を超えない ---
+    // --- 真ん中のくぼみを上下にドラッグすると傾きが変わる・0〜75度を超えない・
+    //     つまみの位置がpitchと合っている ---
     const knobBoxBefore = await page.locator('#map-rotate-knob').boundingBox();
     const centerBeforePitchDrag = await page.evaluate(() => window.__terrainMapForDebug.getCenter());
     const pitchBeforeKnobDrag = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
@@ -4078,6 +4223,18 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
       Math.abs(centerDuringPitchDrag.lng - centerBeforePitchDrag.lng) < 0.0001
         && Math.abs(centerDuringPitchDrag.lat - centerBeforePitchDrag.lat) < 0.0001,
       JSON.stringify({ centerBeforePitchDrag, centerDuringPitchDrag })
+    );
+    const thumbInfoDuringUp = await page.evaluate(() => {
+      const thumb = document.getElementById('map-pitch-thumb');
+      const track = thumb.parentElement;
+      return { thumbTop: parseFloat(thumb.style.top), trackHeight: track.clientHeight, thumbHeight: thumb.clientHeight };
+    });
+    const expectedFractionUp = pitchAfterUp / HANDLE_PITCH_MAX_FOR_TEST;
+    const expectedTopUp = (1 - expectedFractionUp) * (thumbInfoDuringUp.trackHeight - thumbInfoDuringUp.thumbHeight);
+    record(
+      `[${label}] つまみの溝内の位置がpitchと合っている（pitch大→上）`,
+      Math.abs(thumbInfoDuringUp.thumbTop - expectedTopUp) < 2,
+      JSON.stringify({ thumbInfoDuringUp, expectedTopUp, pitchAfterUp })
     );
     // 必須スクリーンショット：傾きを変えたあと（斜め、上限近く）
     await dragPitchKnob(page, knobBoxBefore, 300); // 上限(75度)を超えて引ききる
@@ -4109,26 +4266,45 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
     await releaseRotateHandle(page);
     await page.waitForTimeout(200);
 
-    // --- 輪を回したあと・つまみで傾けたあとも、つまみを軽く押す（ドラッグ
-    //     せずpointerup）と北・傾き60度に戻る ---
+    // --- 【32本目A、仕様変更】ハンドルを押してもbearingは0に戻らない
+    //     （北へ戻す操作はハンドルから廃止した）。方位磁針を押すとbearingだけ
+    //     0に戻り、pitchは変わらない ---
     await dragRotateHandle(page, await page.locator('#map-rotate-handle').boundingBox(), 45);
     await releaseRotateHandle(page);
     await page.waitForTimeout(100);
-    const knobBoxForReset = await page.locator('#map-rotate-knob').boundingBox();
-    await page.mouse.click(knobBoxForReset.x + knobBoxForReset.width / 2, knobBoxForReset.y + knobBoxForReset.height / 2);
-    const resetOk = await page.waitForFunction(
-      () => Math.abs(window.__terrainMapForDebug.getBearing()) < 0.5 && Math.abs(window.__terrainMapForDebug.getPitch() - 60) < 0.5,
-      { timeout: 5000 }
-    ).then(() => true).catch(() => false);
-    const bearingAfterReset = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
-    const pitchAfterReset = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
+    const bearingBeforeKnobPress = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
+    const pitchBeforeCompassPress = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
+    const knobBoxForPress = await page.locator('#map-rotate-knob').boundingBox();
+    await page.mouse.click(knobBoxForPress.x + knobBoxForPress.width / 2, knobBoxForPress.y + knobBoxForPress.height / 2);
+    await page.waitForTimeout(600);
+    const bearingAfterKnobPress = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
     record(
-      `[${label}] つまみを軽く押す（ドラッグせず）と、bearingが0・pitchが60に戻る`,
-      resetOk,
-      `bearing=${bearingAfterReset} pitch=${pitchAfterReset}`
+      `[${label}] ハンドル（真ん中のくぼみ）を押してもbearingは0に戻らない`,
+      Math.abs(bearingAfterKnobPress - bearingBeforeKnobPress) < 1 && Math.abs(bearingAfterKnobPress) > 1,
+      `before=${bearingBeforeKnobPress} after=${bearingAfterKnobPress}`
     );
 
-    // --- キーボード操作：←→で向きが、↑↓で傾きが少しずつ変わる、Enterで復帰 ---
+    const compassBoxForPress = await page.locator('#map-compass-btn').boundingBox();
+    await page.click('#map-compass-btn');
+    const compassResetOk = await page.waitForFunction(
+      () => Math.abs(window.__terrainMapForDebug.getBearing()) < 0.5,
+      { timeout: 5000 }
+    ).then(() => true).catch(() => false);
+    const bearingAfterCompass = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
+    const pitchAfterCompass = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
+    record(
+      `[${label}] 方位磁針を押すとbearingが0になる`,
+      compassResetOk,
+      `bearing=${bearingAfterCompass}`
+    );
+    record(
+      `[${label}] 方位磁針を押しても傾き（pitch）は変わらない`,
+      Math.abs(pitchAfterCompass - pitchBeforeCompassPress) < 1,
+      `before=${pitchBeforeCompassPress} after=${pitchAfterCompass}`
+    );
+    void compassBoxForPress;
+
+    // --- キーボード操作：←→で向きが、↑↓で傾きが少しずつ変わる ---
     await page.locator('#map-rotate-handle').focus();
     const bearingBeforeArrow = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
     await page.keyboard.press('ArrowRight');
@@ -4148,12 +4324,6 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
       pitchAfterArrow !== pitchBeforeArrow,
       `before=${pitchBeforeArrow} after=${pitchAfterArrow}`
     );
-    await page.keyboard.press('Enter');
-    const enterResetOk = await page.waitForFunction(
-      () => Math.abs(window.__terrainMapForDebug.getBearing()) < 0.5 && Math.abs(window.__terrainMapForDebug.getPitch() - 60) < 0.5,
-      { timeout: 5000 }
-    ).then(() => true).catch(() => false);
-    record(`[${label}] ハンドルにfocusしてEnterを押すと、bearingが0・pitchが60に戻る`, enterResetOk);
 
     // --- 回したり傾けたりしたあとも、選んだピンが帯より上にある（pivotの検証） ---
     const pinPos = await page.evaluate((budget) => {
@@ -4239,11 +4409,18 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
     if (became3d) {
       await waitFor3dSettled(page);
       const handleBox = await page.locator('#map-rotate-handle').boundingBox();
+      const compassBox = await page.locator('#map-compass-btn').boundingBox();
       const toggleBox = await page.locator('#map-dimension-toggle').boundingBox();
       const attribBox = await page.locator('#map-area .maplibregl-ctrl-bottom-right').boundingBox().catch(() => null);
       const overlayBox = await page.locator('#mobile-budget-overlay').boundingBox().catch(() => null);
       const tabsBox = await page.locator('.mobile-tabs').boundingBox().catch(() => null);
       record(`[${label}] ハンドルが2D/3D切替ボタンと重ならない`, !rectsOverlap(handleBox, toggleBox), JSON.stringify({ handleBox, toggleBox }));
+      record(`[${label}] 方位磁針が2D/3D切替ボタンと重ならない`, !rectsOverlap(compassBox, toggleBox), JSON.stringify({ compassBox, toggleBox }));
+      record(
+        `[${label}] 方位磁針とハンドルの左右中心がそろっている`,
+        Math.abs((compassBox.x + compassBox.width / 2) - (handleBox.x + handleBox.width / 2)) < 1,
+        JSON.stringify({ compassBox, handleBox })
+      );
       if (attribBox) {
         record(`[${label}] ハンドルが出典ボタンと重ならない`, !rectsOverlap(handleBox, attribBox), JSON.stringify({ handleBox, attribBox }));
       }
@@ -4255,6 +4432,11 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
       record(`[${label}] 初めて3Dに切り替えると、案内の吹き出しが出る`, hintVisible);
       if (hintVisible) {
         const hintBox = await page.locator('#map-rotate-hint').boundingBox();
+        record(
+          `[${label}] 吹き出しが方位磁針と重ならず、すき間8px以上`,
+          rectGap(hintBox, compassBox) >= 8,
+          JSON.stringify({ hintBox, compassBox, gap: rectGap(hintBox, compassBox) })
+        );
         record(
           `[${label}] 吹き出しが2D/3D切替ボタンと重ならず、すき間8px以上`,
           rectGap(hintBox, toggleBox) >= 8,
@@ -4355,8 +4537,17 @@ async function main() {
     await checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths);
   } finally {
     await browser.close();
-    server.close();
   }
+
+  // 【32本目A、不具合修正】checkRotateHintPersistence()は専用browserを
+  // 自前で起動する設計にしたが、上のメインbrowserがまだ生きている間に
+  // 同時に起動すると、同一マシン上の限られたGPUリソースを2つのChromiumが
+  // 取り合い、かえって遅く・不安定になることが実機相当の計測で判明した
+  // （本体を閉じたあとにこの検証だけ単独で動かすと安定する一方、本体がまだ
+  // 開いたままだと再現良く失敗した）。メインのbrowser.close()が終わった
+  // あと・サーバーを閉じる前に行う。
+  await checkRotateHintPersistence(baseUrl, savedPaths);
+  server.close();
 
   console.log('\n=== スクリーンショット保存先 ===');
   savedPaths.forEach((p) => console.log(`  - ${path.relative(rootDir, p)}`));

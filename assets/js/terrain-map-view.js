@@ -123,10 +123,8 @@ const HANDLE_PITCH_DEG_PER_PX = 0.6;
 const HANDLE_PITCH_KEY_STEP_DEG = 5;
 // キーボード←→の1コマ分の回転角度（【23】から変更なし）。
 const HANDLE_BEARING_KEY_STEP_DEG = 15;
-// つまみを「ドラッグ」と判定する最小移動量(px)。これ未満ならドラッグ扱い
-// にせず、pointerupで「軽く押した」＝北・傾き60度への復帰とみなす。
-const KNOB_DRAG_THRESHOLD_PX = 6;
-// つまみ操作・輪の回転どちらでも、北・傾き60度へ戻すなめらかな所要時間。
+// 【2026-10-17、32本目A】方位磁針を押したときに北（bearing0）へ戻る、
+// なめらかな所要時間（【27】の「つまみを押すと戻る」と同じ値を踏襲）。
 const HANDLE_RESET_DURATION_MS = 400;
 // 【2026-10-16、27本目】初めて3Dに切り替えたときの案内吹き出しを表示したか
 // どうかのlocalStorageキー。一度出したら次回以降は出さない（Minami指示）。
@@ -502,7 +500,10 @@ export class TerrainMapView {
     // 【2026-10-14、23本目、Minami決定：B】方位磁針（MapLibreのNavigationControl）
     // を「つかんで回すハンドル」に置き換える（右上、3Dのみ）。PCの右ドラッグでの
     // 回転操作は無関係に残るため（dragRotate、上記参照）、ここでは追加しない。
+    // 【2026-10-17、32本目A】「北へ戻す」操作をハンドルから分離した方位磁針も
+    // ここで一緒にセットアップする。
     this._setupRotateHandle();
+    this._setupCompassButton();
 
     // 【2026-10-13、8本目③】ユーザーが手で地図を操作したら、「降りる→傾ける」
     // 演出を止める（ユーザー操作を優先）。zoomstart・pitchstartは、flyTo()や
@@ -994,14 +995,13 @@ export class TerrainMapView {
   }
 
   /**
-   * 【2026-10-16、27本目、Minami決定：A】向き・傾きを変える「太い輪＋真ん中の
-   * つまみ」ハンドル（index.htmlの#map-rotate-handle。外側の太い輪
-   * （.map-rotate-ring）をなぞると向き（bearing）、真ん中のつまみ
-   * （#map-rotate-knob）を上下にドラッグすると傾き（pitch、0〜75度）が
-   * 変わる。つまみをドラッグせず軽く押すと、北・傾き60度（いつもの斜めの
-   * 表示）になめらかに戻る。【23】の「縁をなぞって回すだけ」のハンドルを
-   * 作り直したもの（Cowork調べ：Cesiumの操作部品の議論・MapLibre標準
-   * コンパスのvisualizePitchを参考に、Minamiが決定）。
+   * 【2026-10-17、32本目A、Minami決定】向き・傾きを変えるハンドル
+   * （index.htmlの#map-rotate-handle）。外側のふち（#map-rotate-dial）を
+   * なぞると向き（bearing）、真ん中のくぼみ（#map-rotate-knob）の中のたての
+   * 溝を上下にドラッグすると傾き（pitch、0〜75度）が変わる。【27】にあった
+   * 「つまみを押すと北・傾き60度に戻る」操作は廃止した（Minami決定：ハンドル
+   * から伝えられる操作は「回す」「上下に動かす」の2つまでにし、「北へ戻す」は
+   * 別の方位磁針（_setupCompassButton()）に分離する）。
    * 回す・傾ける中心（ピボット）は、MapLibreの既存のpadding機構
    * （flyToSpot()・getRevealPadding()参照。20本目で確立：paddingは「見える
    * 範囲」を再定義し、カメラ操作はそのpaddingの中心を軸にする）をそのまま
@@ -1011,31 +1011,37 @@ export class TerrainMapView {
    * 失敗時のリトライ等）で_createMap()が複数回走っても、ハンドルのDOM要素
    * 自体は静的HTMLで使い回しのため、ポインタ・キーボードのリスナーを
    * 毎回追加すると二重発火する。これらはdataset目印で最初の1回だけ登録し、
-   * 地図インスタンスに紐づく針の同期（'rotate'・'pitch'イベント購読）だけを
-   * 呼び出しのたびに付け直す。
+   * 地図インスタンスに紐づくダイヤル・つまみの同期（'rotate'・'pitch'
+   * イベント購読）だけを呼び出しのたびに付け直す。
    */
   _setupRotateHandle() {
     const handle = document.getElementById('map-rotate-handle');
     const knob = document.getElementById('map-rotate-knob');
-    const needle = document.getElementById('map-rotate-needle');
-    if (!handle || !knob || !needle) return;
+    const dial = document.getElementById('map-rotate-dial');
+    const thumb = document.getElementById('map-pitch-thumb');
+    if (!handle || !knob || !dial || !thumb) return;
 
-    const updateNeedle = () => {
+    const updateDial = () => {
       if (!this.map) return;
       const bearing = this.map.getBearing();
       const pitch = this.map.getPitch();
-      // 針（SVG）の初期向きは真上（北）。bearingが増える＝地図が時計回りに
-      // 回る＝画面上の北は反時計回りに動くため、針はbearingの符号を反転して
-      // 回す（MapLibre既定のNavigationControlのコンパスと同じ向きの規約）。
-      // rotateX()で傾きぶん針を寝かせて見せる（MapLibre既定コンパスの
-      // visualizePitchと同じ考え方。.map-rotate-needle-wrapのperspectiveが
-      // 奥行きを与える）。
-      needle.style.transform = `rotateX(${pitch}deg) rotate(${-bearing}deg)`;
+      // ダイヤル（ふち＋本体）ごと回す。実物のつまみと同じく、ふちの
+      // ギザギザ・本体の金属光沢も一緒に回る（ふちの目印.map-rotate-tickは
+      // ダイヤルの子要素のため、これだけで向きを示す位置が動く）。
+      dial.style.transform = `rotate(${bearing}deg)`;
       handle.setAttribute('aria-valuenow', String(Math.round(normalizeRotateAngle(bearing))));
+      // つまみの位置で傾きを示す（上＝斜めから＝pitch大、下＝真上から＝pitch0）。
+      const track = thumb.parentElement;
+      const trackHeight = track.clientHeight || 18;
+      const thumbHeight = thumb.clientHeight || 7;
+      const fraction = clamp(pitch, HANDLE_PITCH_MIN, HANDLE_PITCH_MAX) / HANDLE_PITCH_MAX;
+      const topPx = (1 - fraction) * (trackHeight - thumbHeight);
+      thumb.style.top = `${topPx}px`;
+      thumb.style.transform = 'translateX(-50%)';
     };
-    updateNeedle();
-    this.map.on('rotate', updateNeedle);
-    this.map.on('pitch', updateNeedle);
+    updateDial();
+    this.map.on('rotate', updateDial);
+    this.map.on('pitch', updateDial);
 
     if (handle.dataset.rotateHandleWired) return;
     handle.dataset.rotateHandleWired = 'true';
@@ -1045,7 +1051,8 @@ export class TerrainMapView {
       if (hint && !hint.hidden) hint.hidden = true;
     };
 
-    // --- 外側の輪：なぞって回す（【23】と同じ仕組み） ---
+    // --- 外側のふち：なぞって回す（【23】【27】と同じ仕組み。回す基準は
+    //     ダイヤルの現在の回転角そのもの＝bearing、针の仮想角度は使わない） ---
     let grabOffset = 0;
     const onRingPointerMove = (e) => {
       if (!this.map) return;
@@ -1053,11 +1060,7 @@ export class TerrainMapView {
       const cx = rect.left + rect.width / 2;
       const cy = rect.top + rect.height / 2;
       const angle = screenAngleDeg(e.clientX, e.clientY, cx, cy);
-      // つかんだ瞬間の針と指の角度差（grabOffset）を保ったまま、針が指に
-      // 追従し続けるようにする（「つかんで回す」実感を出すため、指との
-      // 相対角度ではなく絶対角度で追従させる）。
-      const newNeedleAngle = angle + grabOffset;
-      this.map.setBearing(-newNeedleAngle);
+      this.map.setBearing(angle + grabOffset);
     };
     const onRingPointerUp = (e) => {
       handle.removeEventListener('pointermove', onRingPointerMove);
@@ -1075,27 +1078,24 @@ export class TerrainMapView {
       const cx = rect.left + rect.width / 2;
       const cy = rect.top + rect.height / 2;
       const grabAngle = screenAngleDeg(e.clientX, e.clientY, cx, cy);
-      const currentNeedleAngle = -this.map.getBearing();
-      grabOffset = currentNeedleAngle - grabAngle;
+      grabOffset = this.map.getBearing() - grabAngle;
       handle.setPointerCapture(e.pointerId);
       handle.addEventListener('pointermove', onRingPointerMove);
       handle.addEventListener('pointerup', onRingPointerUp);
       handle.addEventListener('pointercancel', onRingPointerUp);
     });
 
-    // --- 真ん中のつまみ：上下にドラッグで傾き、軽く押すと北・傾き60度に復帰 ---
-    // 【重要】.map-rotate-ringはpointer-events既定（auto）のままのため、
+    // --- 真ん中のくぼみ：上下にドラッグすると傾きが変わる（押しても何も
+    //     起きない。北へ戻すのは方位磁針の役目、Minami決定） ---
+    // 【重要】.map-rotate-dialはpointer-events既定（auto）のままのため、
     // つまみの上に重なるこの要素自体のpointerdownでstopPropagation()しないと、
-    // 親（#map-rotate-handle）の輪の回転処理も同時に走ってしまう
-    // （#map-rotate-resetのstopPropagation()と同じ事情、【23】から踏襲）。
+    // 親（#map-rotate-handle）のふちの回転処理も同時に走ってしまう
+    // （【23】【27】から踏襲）。
     let knobStartY = 0;
     let knobStartPitch = 0;
-    let knobDragged = false; // KNOB_DRAG_THRESHOLD_PX以上動いたら「ドラッグ」、動かなければ「押した」
     const onKnobPointerMove = (e) => {
       if (!this.map) return;
       const dy = knobStartY - e.clientY; // 上へ動かす＝正の値
-      if (!knobDragged && Math.abs(dy) >= KNOB_DRAG_THRESHOLD_PX) knobDragged = true;
-      if (!knobDragged) return;
       const newPitch = clamp(knobStartPitch + dy * HANDLE_PITCH_DEG_PER_PX, HANDLE_PITCH_MIN, HANDLE_PITCH_MAX);
       this.map.setPitch(newPitch);
     };
@@ -1104,10 +1104,6 @@ export class TerrainMapView {
       knob.removeEventListener('pointerup', onKnobPointerUp);
       knob.removeEventListener('pointercancel', onKnobPointerUp);
       try { knob.releasePointerCapture(e.pointerId); } catch { /* 既に解放済みのブラウザがある */ }
-      if (!knobDragged && this.map) {
-        // ドラッグせずに軽く押しただけ：北・傾き60度へなめらかに戻る。
-        this.map.easeTo({ bearing: 0, pitch: SPOT_FOCUS_PITCH, duration: HANDLE_RESET_DURATION_MS });
-      }
     };
     knob.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
@@ -1118,15 +1114,15 @@ export class TerrainMapView {
       this._flySpotToken++;
       knobStartY = e.clientY;
       knobStartPitch = this.map.getPitch();
-      knobDragged = false;
       knob.setPointerCapture(e.pointerId);
       knob.addEventListener('pointermove', onKnobPointerMove);
       knob.addEventListener('pointerup', onKnobPointerUp);
       knob.addEventListener('pointercancel', onKnobPointerUp);
     });
 
-    // キーボード操作：←→で向きが少しずつ回る、↑↓で傾きが少しずつ変わる、
-    // Enterで北・傾き60度に戻る。
+    // キーボード操作：←→で向きが少しずつ回る、↑↓で傾きが少しずつ変わる
+    // （【27】にあったEnterでの復帰は、押しても北に戻らない仕様変更に合わせて
+    // 廃止。北へ戻す操作は方位磁針のEnter/クリックが担う）。
     handle.addEventListener('keydown', (e) => {
       if (!this.map) return;
       if (e.key === 'ArrowLeft') {
@@ -1149,12 +1145,40 @@ export class TerrainMapView {
         hideRotateHint();
         this._flySpotToken++;
         this.map.setPitch(clamp(this.map.getPitch() - HANDLE_PITCH_KEY_STEP_DEG, HANDLE_PITCH_MIN, HANDLE_PITCH_MAX));
-      } else if (e.key === 'Enter') {
-        e.preventDefault();
-        hideRotateHint();
-        this._flySpotToken++;
-        this.map.easeTo({ bearing: 0, pitch: SPOT_FOCUS_PITCH, duration: HANDLE_RESET_DURATION_MS });
       }
+    });
+  }
+
+  /**
+   * 【2026-10-17、32本目A、Minami決定】方位磁針（index.htmlの
+   * #map-compass-btn、ハンドルの上に別置き）。押すと北（bearing0）だけに
+   * なめらかに戻る（傾きは変えない）。ハンドルから「押すと元に戻る」操作を
+   * 外した代わり（ハンドルで伝えられる操作は「回す」「上下に動かす」の
+   * 2つまでにする、というMinami決定に伴う分離）。
+   */
+  _setupCompassButton() {
+    const btn = document.getElementById('map-compass-btn');
+    const needle = document.getElementById('map-compass-needle');
+    if (!btn || !needle) return;
+
+    const updateCompassNeedle = () => {
+      if (!this.map) return;
+      const bearing = this.map.getBearing();
+      // 【27】の針と同じ向きの規約（bearingの符号を反転して回す）。
+      needle.style.transform = `rotate(${-bearing}deg)`;
+    };
+    updateCompassNeedle();
+    this.map.on('rotate', updateCompassNeedle);
+
+    if (btn.dataset.compassWired) return;
+    btn.dataset.compassWired = 'true';
+
+    btn.addEventListener('click', () => {
+      if (!this.map) return;
+      const hint = document.getElementById('map-rotate-hint');
+      if (hint && !hint.hidden) hint.hidden = true;
+      this._flySpotToken++;
+      this.map.easeTo({ bearing: 0, duration: HANDLE_RESET_DURATION_MS });
     });
   }
 
