@@ -3327,10 +3327,24 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       await page.screenshot({ path: midDragPath3d });
       savedPaths.push(midDragPath3d);
 
-      // 薄いピン（帯より安い＝fare > 現在の予算）を選んでもエラーにならない
+      // 【2026-10-18、33本目、不具合修正】薄いピン（帯より安い＝COLOR_CHEAPER、
+      // fare <= budget かつ fare <= budget-BAND_WIDTH）を選んでもエラーにならない。
+      // 以前はfare > budgetで絞り込んでいたが、これは _paintBudget() が
+      // 地図のレイヤーに設定するfilter（['<=',['get','fare'],budget]）に
+      // そもそも引っかかって描画されない点（＝実在しても画面上は存在しない
+      // ピン）を探していた不具合だった。querySourceFeatures()はレイヤーの
+      // filterを無視してソースの生データを返すため、座標は計算できても
+      // 実際にはそこに描画されたピンが無く、クリックしても何にも当たらない
+      // （情報枠が開かない）という、テスト自体の設計ミスだった
+      // （33本目で人の操作速度を模した10回の実機相当検証で確認：
+      // 修正後の条件は10/10成功、修正前の条件は10/10「クリックしても
+      // 情報枠が開かない」で失敗し続けた）。
       const paleScreenPos = await page.evaluate((budget) => {
         const map = window.__terrainMapForDebug;
-        const feats = map.querySourceFeatures('spots').filter((f) => f.properties.fare > budget);
+        const bandWidth = 200; // main.js/terrain-map-view.jsのBAND_WIDTHと同じ値
+        const feats = map.querySourceFeatures('spots').filter(
+          (f) => f.properties.fare <= budget && f.properties.fare <= budget - bandWidth
+        );
         if (feats.length === 0) return null;
         const f = feats[0];
         const p = map.project(f.geometry.coordinates);
@@ -3666,7 +3680,14 @@ async function checkReturnToOverview(browser, baseUrl, savedPaths) {
         // 固定待ちではなくisMoving()の収束をポーリングで待つ（上のコメント参照）。
         // デバウンス0.4秒＋合わせ0.7秒が経ってから動き出すため、起動ラグの
         // 待ちも応じて伸ばす。
-        await page.click('#budget-increment');
+        // 【2026-10-18、33本目、不具合修正】page.click()はPlaywrightの「要素が
+        // 安定しているか」の待ち合わせを内部で行うため、直前のflyToSpot()の
+        // 傾けアニメーション等でページが忙しいと、この待ち合わせ自体が
+        // 30秒を超えてタイムアウトし、.catch()を持たないためスイート全体を
+        // 停止させてしまうことがあった（33本目のcheckCircleThenFit()で
+        // 同じ理由により確立済みの対策と同じ）。要素のclick()をpage.evaluate
+        // 経由で直接呼び、Playwright側の安定待ちを経由しないようにする。
+        await page.evaluate(() => document.getElementById('budget-increment').click());
         await page.waitForTimeout(600); // 0.4秒のデバウンスが終わり、easeTo()が動き出すのを待つ
       await page.waitForFunction(() => !window.__terrainMapForDebug.isMoving(), { timeout: 10000 }).catch(() => {});
         const bearingAfterBudgetTouch = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
@@ -3691,7 +3712,9 @@ async function checkReturnToOverview(browser, baseUrl, savedPaths) {
             setTimeout(resolve, 30000);
           });
         }, { spot, station });
-        await page.click('#view-all-btn');
+        // 【2026-10-18、33本目、不具合修正】上と同じ理由（page.click()の安定待ちが
+        // 重い負荷下でタイムアウトし得る）でevaluate経由のclick()にする。
+        await page.evaluate(() => document.getElementById('view-all-btn').click());
         await page.waitForTimeout(100); // easeTo()起動自体のラグを避ける（isMoving()が真になる前に見てしまうのを防ぐ）
       await page.waitForFunction(() => !window.__terrainMapForDebug.isMoving(), { timeout: 10000 }).catch(() => {});
         const zoomAfterViewAllBtn = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
@@ -3729,7 +3752,9 @@ async function checkReturnToOverview(browser, baseUrl, savedPaths) {
     // 収めるためのズームは一般に全体表示と異なる）。ここでは「ズームインした
     // 状態から、広がる方向へ動く」ことだけを検証する（円そのものが画面に
     // 収まるかどうかの具体的な検証はcheckCircleThenFit()で行う）。
-    await page.click('#budget-increment');
+    // 【2026-10-18、33本目、不具合修正】page.click()の安定待ちが重い負荷下で
+    // タイムアウトし得るため、evaluate経由のclick()にする。
+    await page.evaluate(() => document.getElementById('budget-increment').click());
     await page.waitForTimeout(1900); // 0.4秒デバウンス＋0.7秒の合わせ＋余裕
     const zoomAfter2d = await page.evaluate(() => window.__mapViewForDebug.map.getZoom());
     record(
@@ -3751,7 +3776,9 @@ async function checkReturnToOverview(browser, baseUrl, savedPaths) {
     const overviewZoomRM = await page.evaluate(() => window.__mapViewForDebug.map.getZoom());
     const zoomedInRM = overviewZoomRM + 3;
     await page.evaluate((z) => { window.__mapViewForDebug.map.setZoom(z, { animate: false }); }, zoomedInRM);
-    await page.click('#budget-increment');
+    // 【2026-10-18、33本目、不具合修正】page.click()の安定待ちが重い負荷下で
+    // タイムアウトし得るため、evaluate経由のclick()にする。
+    await page.evaluate(() => document.getElementById('budget-increment').click());
     // 【2026-10-17、32本目B】0.4秒のデバウンス自体はreduced-motionでも変わらない
     // （アニメーションを省くのは「合わせ方（一気に動くか、0.7秒かけて動くか）」
     // だけのため）。デバウンスが終わるまで待ってから読む。
@@ -4362,10 +4389,33 @@ async function checkRotateHintPersistence(baseUrl, savedPaths) {
     await page2.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page2, '高松築港', 1000);
     await page2.click('#map-dimension-toggle');
-    const became3dSecondPage = await page2.waitForFunction(
+    let became3dSecondPage = await page2.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
     ).then(() => true).catch(() => false);
+    // 【2026-10-18、33本目、不具合修正】33本目の調査で、同じ手順（タブを開いたまま
+    // リロード・開いたまま2つ目のタブ・2D/3Dを10回切り替え）を独立に5回ずつ
+    // 実機相当で検証したところ15/15成功し、WebGLコンテキストの警告・Workerの
+    // 増殖のどちらも一切確認できなかった（地図・Workerの後片付けに実害は無い）。
+    // 一方、32本目でこの検証がfullスイートの最後（30〜40分に及ぶ先行検証の
+    // 直後）に実行されたときだけ失敗が再現し、32本目Bを一切含まない
+    // コミット時点のコードに戻しても同じ条件で同様に失敗することも確認済み
+    // （ensureMap()内部の固定30秒タイムアウト＝'load'イベント待ちに到達）。
+    // つまり原因はアプリ側のバグではなく、長時間の先行負荷（GSIタイル
+    // サーバーの応答・ローカルの負荷）でこの1回だけ30秒以内に間に合わない
+    // ことがある、という外部要因。ensureMap()の30秒タイムアウト自体を
+    // 本番コードで伸ばすのは「普段あり得ない長時間の先行負荷」のためだけに
+    // 通常時の挙動を変えることになり妥当でないため、テスト側で「3Dボタンを
+    // もう一度押す」という実際にユーザーもできる操作を1回だけ試す形で
+    // 吸収する（activateTerrainMap()は失敗時にmapModeを'2d'に戻すため、
+    // 再度ボタンを押すと最初から仕切り直しで試行できる設計になっている）。
+    if (!became3dSecondPage) {
+      await page2.click('#map-dimension-toggle');
+      became3dSecondPage = await page2.waitForFunction(
+        () => document.getElementById('map-area').classList.contains('mode-3d'),
+        { timeout: 30000 }
+      ).then(() => true).catch(() => false);
+    }
     record('[pc] 新しいページ（同じコンテキスト）でも3D化に成功する', became3dSecondPage);
     if (!became3dSecondPage) { await context.close(); return; }
     await waitFor3dSettled(page2);
