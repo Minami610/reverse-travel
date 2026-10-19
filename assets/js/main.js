@@ -232,6 +232,10 @@ class ReverseTravel {
     // 閉じる操作は専用の#form-close-btn（フォームの中、開いている間だけ
     // 見える）に分離し、このボタンは「開く」専用にする。
     this.elements.searchSummaryToggle?.addEventListener('click', () => {
+      // 【2026-10-20、35本目、不具合修正】フォームを開く時点の地図カメラを
+      // 覚えておく（closeFormDiscardingEdits()参照）。編集を捨てて閉じたとき、
+      // ここへ戻すことで「開く前の状態と完全に同じ」に戻せるようにする。
+      this._cameraSnapshotBeforeFormEdit = this.captureCameraSnapshot();
       this.setFormCollapsed(false);
     });
 
@@ -239,16 +243,31 @@ class ReverseTravel {
     // 検索はせず、最後に検索した条件に戻してから畳む（入力しかけた出発駅・
     // 予算は捨てる、Minami指示）。
     this.elements.formCloseBtn?.addEventListener('click', () => {
-      if (this.lastSearchedDepartureText !== null) {
-        this.elements.departureInput.value = this.lastSearchedDepartureText;
-      }
-      this.elements.departureSuggestions.innerHTML = '';
-      if (this.lastSearchedBudget !== null) {
-        this.elements.budgetInput.value = this.lastSearchedBudget;
-        this.updateBudgetUI();
-      }
-      this.setFormCollapsed(true);
+      this.closeFormDiscardingEdits();
     });
+
+    // 【2026-10-20、35本目、Minami指示】「条件を変える」でフォームを開いている
+    // ときに、下の地図（またはタブ・一覧などフォームの外）をタップしたら、
+    // 「▲閉じる」と同じく閉じる。document全体のcapture段階で拾うことで、
+    // 地図のピン選択（MapLibre/Leafletがcanvas要素に直接付けているクリック
+    // ハンドラ）やタブ切替より先に・確実に割り込み、stopPropagation()で
+    // それらへイベントが届く前に止める（＝「そのタップでは、ピンを選んだり、
+    // 地図を動かしたりしない」をイベント配送そのもので保証する）。
+    // #search-form（出発駅の候補一覧#departure-suggestionsを含む）の内側は
+    // 対象外（入力・候補選択は今までどおり）。#form-close-btn自身も
+    // #search-formの子のため自然に対象外になり、二重発火しない。
+    document.addEventListener('click', (e) => {
+      const closeBtn = this.elements.formCloseBtn;
+      // フォームが「開いている」状態かどうかは、#form-close-btn自体が
+      // 見えているかどうかで判定する（CSS側がPC・畳んだ状態・検索前を
+      // 自然に除外しているため、ここで改めてメディアクエリ等を再実装しない）。
+      if (!closeBtn || closeBtn.offsetParent === null) return;
+      const searchForm = document.getElementById('search-form');
+      if (searchForm && searchForm.contains(e.target)) return;
+      e.stopPropagation();
+      e.preventDefault();
+      this.closeFormDiscardingEdits();
+    }, true);
 
     this.elements.mylistSortSelect?.addEventListener('change', () => this.renderMylist());
 
@@ -2270,6 +2289,91 @@ class ReverseTravel {
    * 見える＝影響しない）。
    * @param {boolean} collapsed
    */
+  /**
+   * 【2026-10-20、35本目、不具合修正】フォームを開いた時点の地図カメラ
+   * （2D：中心・ズーム、3D：中心・ズーム・傾き・向き）を覚えておく。
+   * closeFormDiscardingEdits()で「編集前にまったく戻す」ために使う。
+   * 【不具合修正】地図タブを一度も開いていない間（Leafletが一度も
+   * setView()/fitBounds()されておらず_loadedがfalseの状態。
+   * forceMarkerReposition()のコメント参照）にmap.getCenter()を呼ぶと
+   * 「Set map center and zoom first.」を投げる。これが
+   * #search-summary-toggleのクリックハンドラ内（setFormCollapsed(false)の
+   * 直前）で起きると、以降の行が実行されずフォームが開かなくなる不具合が
+   * 実機相当の検証で見つかった（0件検索後、地図タブを一度も開かずに
+   * 「条件を変える」を押す経路で再現）。カメラのスナップショットは
+   * 無くても動作に支障が無い付随機能のため、例外はtry/catchで吸収し
+   * フォームが開かなくなる事態を避ける。
+   */
+  captureCameraSnapshot() {
+    const snap = {};
+    try {
+      if (this.mapView?.map) {
+        snap.map2d = { center: this.mapView.map.getCenter(), zoom: this.mapView.map.getZoom() };
+      }
+    } catch { /* 地図タブを一度も開いていない等、位置が未確定なら諦める */ }
+    try {
+      if (this.terrainMapView?.map) {
+        snap.map3d = {
+          center: this.terrainMapView.map.getCenter(),
+          zoom: this.terrainMapView.map.getZoom(),
+          pitch: this.terrainMapView.map.getPitch(),
+          bearing: this.terrainMapView.map.getBearing(),
+        };
+      }
+    } catch { /* 同上 */ }
+    return snap;
+  }
+
+  /** captureCameraSnapshot()で覚えた状態へ、アニメーションなしで即座に戻す。 */
+  restoreCameraSnapshot(snap) {
+    if (!snap) return;
+    if (snap.map2d && this.mapView?.map) {
+      this.mapView.map.setView(snap.map2d.center, snap.map2d.zoom, { animate: false });
+    }
+    if (snap.map3d && this.terrainMapView?.map) {
+      this.terrainMapView.map.jumpTo(snap.map3d);
+    }
+  }
+
+  /**
+   * 【2026-10-17、32本目A／2026-10-20、35本目】フォームを開いている間に
+   * 閉じる共通処理。検索はせず、最後に検索した条件に戻してから畳む
+   * （入力しかけた出発駅・予算は捨てる、Minami指示）。「▲閉じる」ボタンと、
+   * フォームの外（地図・タブ・一覧等）をタップしたときの両方から呼ぶ。
+   */
+  closeFormDiscardingEdits() {
+    if (this.lastSearchedDepartureText !== null) {
+      this.elements.departureInput.value = this.lastSearchedDepartureText;
+    }
+    this.elements.departureSuggestions.innerHTML = '';
+    if (this.lastSearchedBudget !== null) {
+      this.elements.budgetInput.value = this.lastSearchedBudget;
+      this.updateBudgetUI();
+      // 【2026-10-20、35本目、不具合修正】編集中の予算操作（スライダー等）が
+      // 到達円のライブプレビューと「地図を合わせる」予約
+      // （scheduleFitCircleToView()、32本目B）を既に動かしていることがある。
+      // 入力欄の表示を戻すだけではこれらは戻らず、フォームを閉じた後（地図を
+      // タップして閉じた場合も含む）、捨てたはずの編集の予算に合わせて地図が
+      // 遅れて動いてしまう不具合があった（地図タップでフォームを閉じる検証で
+      // 発覚：「そのタップでは地図を動かさない」はずなのに、タップ自体とは
+      // 無関係な保留中のタイマーが後から発火し、地図が動いていた）。
+      // 【不具合修正】保留中のタイマーをキャンセルするだけでは、デバウンスの
+      // 猶予（0.15秒）が既に経過して地図合わせが始まって（あるいは完了して）
+      // しまっていた場合に直せない（捨てたい編集の予算に向けて、既に地図が
+      // 動き始めている／動き終わっている）。円の見た目を最後に検索した予算へ
+      // 戻すこと（userTouch:falseで新たな地図合わせの予約はしない）と、
+      // 保留中タイマーのキャンセルに加えて、フォームを開いた時点のカメラへ
+      // 無アニメーションで戻すことで、進行中・完了済みのどちらの場合も
+      // 確実に「編集前と同じ」に戻す。
+      this.updateMapBudgetLive(this.lastSearchedBudget, { userTouch: false });
+      this.mapView._cancelFitCircleToView();
+      this.terrainMapView?._cancelFitCircleToView();
+    }
+    this.restoreCameraSnapshot(this._cameraSnapshotBeforeFormEdit);
+    this._cameraSnapshotBeforeFormEdit = null;
+    this.setFormCollapsed(true);
+  }
+
   setFormCollapsed(collapsed) {
     if (!this.elements.layoutLeft) return;
     this.elements.layoutLeft.classList.toggle('form-collapsed', collapsed);

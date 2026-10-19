@@ -161,17 +161,26 @@ const SELECTED_GLOW_LAYER_ID = 'selected-spot-glow';
 const RETURN_TO_OVERVIEW_DURATION_MS = 1500;
 
 // 【2026-10-17、32本目B、Minami決定】予算の±・スライダー操作：まず円の半径を
-// この時間（0.25秒）でなめらかに変え、最後の操作からこの時間（0.4秒）
-// 止まったら、円「全体」が収まるよう地図を合わせる（0.7秒）。この一連の
-// 動きが、今までの「予算を触ったら全体表示に戻る」（fitToBudget()ベースの
-// returnToOverview()）を置き換える。
-const CIRCLE_RADIUS_ANIM_MS = 250;
-const CIRCLE_FIT_DEBOUNCE_MS = 400;
-const CIRCLE_FIT_DURATION_MS = 700;
-// 右上の方位磁針＋回転ハンドル（#map-controls-cluster、3Dのみ、8px開始＋
-// 72px＋予備）に円が隠れないための右側の追加余白。OVERVIEW_PADDING_RATIO由来の
-// 余白（短辺の8%）とのうち大きい方を使う（_fitCircleToView()参照）。
-const CIRCLE_FIT_RIGHT_CLEARANCE_PX = 90;
+// なめらかに変え、最後の操作から少し止まったら、円「全体」が収まるよう
+// 地図を合わせる。今までの「予算を触ったら全体表示に戻る」（fitToBudget()
+// ベースのreturnToOverview()）を置き換える。
+// 【2026-10-20、35本目、Minami決定】待ち時間が長すぎる（読み込みが遅いのかと
+// 思うほど）との指摘により、円0.25秒→0.2秒・デバウンス0.4秒→0.15秒・
+// 地図を合わせる動き0.7秒→0.45秒に短縮した（合計1.35秒→0.8秒）。
+const CIRCLE_RADIUS_ANIM_MS = 200;
+const CIRCLE_FIT_DEBOUNCE_MS = 150;
+const CIRCLE_FIT_DURATION_MS = 450;
+// 【2026-10-20、35本目、Minami決定：A、不具合修正】以前は「短辺の8%」と
+// 「方位磁針・ハンドルに隠れない右側の余白（90px固定）」のうち大きい方を
+// 全方向の余白として使っていたが、400×464等の小さい画面ではshortSide自体が
+// 240px前後しかなく、90px×2（上下または左右の合計）だけで短辺の75%を
+// 占めてしまい、円が極端に小さくなる不具合があった（Minami実機確認：
+// 「円が地図の中で小さくなってしまう」）。90px固定の余白とOVERVIEW_PADDING_RATIO
+// 由来の余白を max() で二重に持つ設計自体が「引きすぎ」の原因だったため、
+// 固定90pxの特別扱いをやめ、「地図を合わせたあと、円の直径が見えている
+// 範囲の短い辺の7〜8割になるように」という目標から直接、余白の比率を
+// 逆算する一本の式にした（CIRCLE_FIT_TARGET_DIAMETER_RATIO参照）。
+const CIRCLE_FIT_TARGET_DIAMETER_RATIO = 0.75; // 目標7〜8割の中間値
 
 // 帯に入る点＝明るいオレンジ＋光の輪、それより安い点＝緑がかった灰色の小さい点
 // （2026-10-10、Minami指摘：スクリーンショットで見分けづらかったため色を変更。
@@ -976,19 +985,24 @@ export class TerrainMapView {
     ];
 
     const shortSide = Math.max(1, Math.min(container.clientWidth, container.clientHeight));
-    const basePadding = Math.round(shortSide * OVERVIEW_PADDING_RATIO);
-    // 【重要】対称な（上下左右同じ）paddingを渡すことで、cameraForBounds()が
-    // 計算する中心＝円の幾何中心（出発駅）になる。右上の方位磁針・ハンドルに
-    // 隠れない余白（CIRCLE_FIT_RIGHT_CLEARANCE_PX）を含めた「一番厳しい側」を
-    // 全方向に適用するため、他の3方向は必要以上に余白が広くなるが、
-    // 出発駅中心を保ったまま確実に部品へ隠れないための単純で安全な選択。
+    // 【2026-10-20、35本目、Minami決定：A、不具合修正】「地図を合わせたあと、
+    // 円の直径が見えている範囲の短い辺の7〜8割になるように」という目標から
+    // 直接、余白の比率を逆算する（以前の「短辺の8%」と「固定90px」をmax()で
+    // 二重に持つ設計をやめた）。bounds（円の外接矩形）の一辺＝円の直径と
+    // ほぼ一致するため、cameraForBounds()が余白pxぶんを除いた残りに
+    // boundsをぴったり収めるという性質を使い、
+    // 余白(片側) = 短辺 × (1 - 目標直径比率) / 2 という単純な式で求める
+    // （目標0.75なら余白は短辺の12.5%）。対称な（上下左右同じ）paddingを
+    // 渡すことで、cameraForBounds()が計算する中心＝円の幾何中心（出発駅）に
+    // なる（出発駅中心を保つため、上下左右で余白を変えない）。
     // 【不具合修正、32本目B】上下左右対称のpaddingは「左右の合計」「上下の合計」が
     // それぞれコンテナの幅・高さ未満でないと、MapLibreが「Map cannot fit
     // within canvas」という警告を出す（getRevealPadding()が同じ理由で既に
-    // 動的にクランプしているのと同じ事情）。低い画面（400×464等）でpadding×2が
-    // 短い辺に迫る・超えるケースがverify-layoutの実機相当検証で見つかったため、
-    // ここでも短い辺の半分未満（余裕を見て半分-1px）にクランプする。
-    const padding = Math.min(Math.max(basePadding, CIRCLE_FIT_RIGHT_CLEARANCE_PX), Math.floor(shortSide / 2) - 1);
+    // 動的にクランプしているのと同じ事情）。短い辺の半分未満（余裕を見て
+    // 半分-1px）にクランプする（目標比率が0.75なら12.5%で収まるため、通常は
+    // このクランプに当たらない）。
+    const targetPadding = Math.round(shortSide * (1 - CIRCLE_FIT_TARGET_DIAMETER_RATIO) / 2);
+    const padding = Math.min(targetPadding, Math.floor(shortSide / 2) - 1);
     // 【不具合修正、32本目B、根本原因特定】上のクランプだけでは「own」viewport
     // （400×464）で実際に警告が再現した。原因を追ったところ、cameraForBounds()は
     // 引数のpaddingだけでなく、地図に残っている現在のpadding状態

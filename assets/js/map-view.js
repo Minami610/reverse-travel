@@ -57,15 +57,21 @@ function reachDestinationPoint(lat, lon, bearingDeg, distanceKm) {
 }
 
 // 【2026-10-17、32本目B、Minami決定】予算の±・スライダー操作：まず円の半径を
-// この時間（0.25秒）でなめらかに変え、最後の操作からこの時間（0.4秒）止まったら、
-// 円「全体」が収まるよう地図を合わせる（0.7秒）。3D（terrain-map-view.js）の
-// 同名の定数と同じ値・考え方だが、バンドル後は別スクリプトとして遅延読込される
-// 3D側と違い、2D（map-view.js）はmain.js等と同じグローバルスコープに連結される
-// ため、名前の衝突を避けてMAP_接頭辞を付けている（MAP_BAND_WIDTHと同じ理由）。
-const MAP_CIRCLE_RADIUS_ANIM_MS = 250;
-const MAP_CIRCLE_FIT_DEBOUNCE_MS = 400;
-const MAP_CIRCLE_FIT_DURATION_SEC = 0.7;
-const MAP_CIRCLE_FIT_PADDING_RATIO = 0.08; // 3D側のOVERVIEW_PADDING_RATIOと同じ考え方
+// なめらかに変え、最後の操作から少し止まったら、円「全体」が収まるよう
+// 地図を合わせる。3D（terrain-map-view.js）の同名の定数と同じ値・考え方だが、
+// バンドル後は別スクリプトとして遅延読込される3D側と違い、2D（map-view.js）は
+// main.js等と同じグローバルスコープに連結されるため、名前の衝突を避けて
+// MAP_接頭辞を付けている（MAP_BAND_WIDTHと同じ理由）。
+// 【2026-10-20、35本目、Minami決定】待ち時間短縮：円0.25秒→0.2秒・
+// デバウンス0.4秒→0.15秒・地図を合わせる動き0.7秒→0.45秒。
+const MAP_CIRCLE_RADIUS_ANIM_MS = 200;
+const MAP_CIRCLE_FIT_DEBOUNCE_MS = 150;
+const MAP_CIRCLE_FIT_DURATION_SEC = 0.45;
+// 【2026-10-20、35本目、Minami決定：A】「地図を合わせたあと、円の直径が
+// 見えている範囲の短い辺の7〜8割になるように」という目標から、3D側の
+// CIRCLE_FIT_TARGET_DIAMETER_RATIOと同じ考え方で余白の比率を決める
+// （2Dは方位磁針・ハンドルが無いため、3D側のような右側の追加余白は不要）。
+const MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO = 0.75;
 // 【2026-10-19、34本目、Minami決定：B】「全体を見る」・検索直後の全体表示
 // （fitToBudget()、2Dはこの定数を使わず別途maxZoom:16のみで下限なし）は
 // 変えない。円を合わせるとき（fitCircleToView()）だけ、小さいスマホで
@@ -118,6 +124,16 @@ export class MapView {
 
     this.map = L.map(this.containerId, {
       scrollWheelZoom: true,
+      // 【2026-10-20、35本目、不具合修正】Leafletのデフォルト（zoomSnap:1）は
+      // 実際に使うズームを整数へ四捨五入する。fitCircleToView()は「円の直径が
+      // 短辺の7〜8割になる」ズームを小数で計算するが、整数へスナップされると
+      // 最大で0.5レベル分（スケールで最大約1.41倍）ずれることがあり、
+      // 7〜8割の目標から外れる（実測：目標0.75に対し0.532＝約0.71倍になった
+      // ケースを確認。2^(-0.5)≈0.71と一致し、0.5レベル分のスナップで説明が
+      // つく）。3D（MapLibre）はそもそも整数スナップの概念を持たず、同じ
+      // 検証が3Dでは問題なく通ったこととも整合する。小数ズームを許可し、
+      // 計算どおりの比率になるようにする。
+      zoomSnap: 0,
     });
     L.tileLayer(GSI_TILE_URL, {
       attribution: GSI_ATTRIBUTION,
@@ -526,9 +542,23 @@ export class MapView {
     ]);
     const size = this.map.getSize();
     const shortSide = Math.max(1, Math.min(size.x, size.y));
-    // 【不具合修正、32本目B】3D側のfitCircleToView()と同じ理由で、低い画面での
-    // 極端な余白を避けるため短い辺の半分未満にクランプする。
-    const padding = Math.min(Math.round(shortSide * MAP_CIRCLE_FIT_PADDING_RATIO), Math.floor(shortSide / 2) - 1);
+    // 【2026-10-20、35本目、不具合修正】当初は3D側と同じ式（余白(片側) = 短辺 ×
+    // (1 - 目標直径比率) / 2）をそのまま使ったが、実機相当の検証で比率が
+    // 0.75の目標に対し0.899（約2割大きい）になる不具合が見つかった。
+    // 原因はLeafletのgetBoundsZoom()の仕様差：fitBounds()経由で呼ぶときは
+    // paddingTopLeft・paddingBottomRightをそれぞれ加算してgetBoundsZoom()へ
+    // 渡すため、結果的に「片側の値」×2が効く。しかし、ここでは
+    // （_overviewZoom用のfitToBudget()と同様に）getBoundsZoom()を直接呼んで
+    // おり、内部では渡したpadding Pointを1回だけ（getSize().subtract(padding)）
+    // 減算する——つまり「両側の合計」として扱われる。3D（MapLibre）の
+    // cameraForBounds()は数値1つのpaddingを「各辺に同じ量」として扱う仕様の
+    // ため3D側の式は正しいが、2DのgetBoundsZoom()直接呼びでは「片側の値」を
+    // 2倍せずに渡すと、実際に効く余白が意図の半分になり、円が目標より
+    // 大きくなる。ここでは直接呼びのため、合計分（片側×2）をそのまま渡す。
+    const padding = Math.min(
+      Math.round(shortSide * (1 - MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO)),
+      Math.floor(shortSide / 2) - 1
+    );
     const fitZoom = this.map.getBoundsZoom(bounds, false, L.point(padding, padding));
     const zoom = Math.min(Math.max(fitZoom, MAP_CIRCLE_FIT_MIN_ZOOM), 16);
     if (reachPrefersReducedMotion()) {

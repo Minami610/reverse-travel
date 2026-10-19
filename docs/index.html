@@ -1288,12 +1288,37 @@ header p {
   }
 
   /* PCでは左カラムが「検索フォーム＋地図」の2要素になる */
+  /* 【2026-10-20、35本目、不具合修正・原因特定】overflow:visibleだった
+     （最初のUI実装（74317e5）からこの値のまま、3Dの方位磁針・ハンドル等
+     どの機能追加でも見直されていなかった）。
+     根本原因を特定した：回転ハンドル（#map-rotate-dial、72×72pxの正方形を
+     border-radius:50%で丸く見せているだけ）にbearingに応じたCSS transform:
+     rotate()を適用すると（terrain-map-view.jsの_setupRotateHandle()）、
+     90度の倍数以外の角度では「見た目の円」は変わらないのに、要素の
+     軸並行バウンディングボックス（getBoundingClientRect()・scrollWidthが
+     見る値）が72×72より大きくなる（正方形を回転させると外接矩形が膨らむ、
+     純粋な幾何の性質。例：35度では一辺あたり約72×(|cos35°|+|sin35°|)
+     ≈100pxまで膨らむ）。この膨らみ分が.map-rotate-handle（はみ出しを
+     切り取っていない）→#map-area→このスロットと素通りし、.layout-left
+     （overflow-y:autoによりoverflow-xも暗黙にautoへ計算される）で横
+     スクロールバーとして表面化する（Cowork報告の再現条件・PC/富山駅前/
+     往復¥700/3D表示で実測確認：#map-rotate-dialの右端がmap-areaの右端を
+     約6〜14px超えていた。ハンドルの向きを変えるcheckRotateHandle()には
+     以前から横スクロール検証が無く、このテスト側の盲点がバグを長期間
+     見落とす一因だった）。
+     根本原因そのものの修正は.map-rotate-handle{overflow:hidden}（下記）で
+     行った（見た目の円の外側、どのみち見えない正方形の角だけを切り取る
+     ため副作用が無い）。このスロット側のoverflow:hiddenは、そもそも
+     このスロットの外へ意図して見せる要素が無い設計であることに変わりは
+     ないため、同種の不具合の再発に備える保険として維持する（常設の
+     checkNoHorizontalOverflow()をcheckCircleThenFit()・checkRotateHandle()の
+     両方に追加し、以後の回帰を検出できるようにした）。 */
   #map-slot-desktop {
     flex: 1;
     min-height: 200px;
     height: auto;
     margin-top: 0.75rem;
-    overflow: visible;
+    overflow: hidden;
   }
 
   /* PC二段組では左カラム幅（minmax）自体が制約になるため、
@@ -1789,6 +1814,13 @@ header p {
      ときにブラウザ既定のスクロール・ピンチジェスチャーとポインタイベントが
      競合し、JS側のpointermoveが安定して取れないことがある。 */
   touch-action: none;
+  /* 【2026-10-20、35本目、不具合修正】子の.map-rotate-dialはbearingに応じて
+     transform: rotate()される正方形（border-radius:50%で丸く見せているだけ）
+     のため、90度の倍数以外の角度では軸並行バウンディングボックスが72×72より
+     膨らむ（見た目の円は変わらない）。この膨らみがPCで地図の下の横スクロール
+     バーとして表面化する不具合の根本原因だったため、見た目の円の外側
+     （どのみち見えない正方形の角）だけを確実に切り取る。 */
+  overflow: hidden;
 }
 
 .map-rotate-handle:active {
@@ -4908,15 +4940,21 @@ function reachDestinationPoint(lat, lon, bearingDeg, distanceKm) {
 }
 
 // 【2026-10-17、32本目B、Minami決定】予算の±・スライダー操作：まず円の半径を
-// この時間（0.25秒）でなめらかに変え、最後の操作からこの時間（0.4秒）止まったら、
-// 円「全体」が収まるよう地図を合わせる（0.7秒）。3D（terrain-map-view.js）の
-// 同名の定数と同じ値・考え方だが、バンドル後は別スクリプトとして遅延読込される
-// 3D側と違い、2D（map-view.js）はmain.js等と同じグローバルスコープに連結される
-// ため、名前の衝突を避けてMAP_接頭辞を付けている（MAP_BAND_WIDTHと同じ理由）。
-const MAP_CIRCLE_RADIUS_ANIM_MS = 250;
-const MAP_CIRCLE_FIT_DEBOUNCE_MS = 400;
-const MAP_CIRCLE_FIT_DURATION_SEC = 0.7;
-const MAP_CIRCLE_FIT_PADDING_RATIO = 0.08; // 3D側のOVERVIEW_PADDING_RATIOと同じ考え方
+// なめらかに変え、最後の操作から少し止まったら、円「全体」が収まるよう
+// 地図を合わせる。3D（terrain-map-view.js）の同名の定数と同じ値・考え方だが、
+// バンドル後は別スクリプトとして遅延読込される3D側と違い、2D（map-view.js）は
+// main.js等と同じグローバルスコープに連結されるため、名前の衝突を避けて
+// MAP_接頭辞を付けている（MAP_BAND_WIDTHと同じ理由）。
+// 【2026-10-20、35本目、Minami決定】待ち時間短縮：円0.25秒→0.2秒・
+// デバウンス0.4秒→0.15秒・地図を合わせる動き0.7秒→0.45秒。
+const MAP_CIRCLE_RADIUS_ANIM_MS = 200;
+const MAP_CIRCLE_FIT_DEBOUNCE_MS = 150;
+const MAP_CIRCLE_FIT_DURATION_SEC = 0.45;
+// 【2026-10-20、35本目、Minami決定：A】「地図を合わせたあと、円の直径が
+// 見えている範囲の短い辺の7〜8割になるように」という目標から、3D側の
+// CIRCLE_FIT_TARGET_DIAMETER_RATIOと同じ考え方で余白の比率を決める
+// （2Dは方位磁針・ハンドルが無いため、3D側のような右側の追加余白は不要）。
+const MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO = 0.75;
 // 【2026-10-19、34本目、Minami決定：B】「全体を見る」・検索直後の全体表示
 // （fitToBudget()、2Dはこの定数を使わず別途maxZoom:16のみで下限なし）は
 // 変えない。円を合わせるとき（fitCircleToView()）だけ、小さいスマホで
@@ -4969,6 +5007,16 @@ class MapView {
 
     this.map = L.map(this.containerId, {
       scrollWheelZoom: true,
+      // 【2026-10-20、35本目、不具合修正】Leafletのデフォルト（zoomSnap:1）は
+      // 実際に使うズームを整数へ四捨五入する。fitCircleToView()は「円の直径が
+      // 短辺の7〜8割になる」ズームを小数で計算するが、整数へスナップされると
+      // 最大で0.5レベル分（スケールで最大約1.41倍）ずれることがあり、
+      // 7〜8割の目標から外れる（実測：目標0.75に対し0.532＝約0.71倍になった
+      // ケースを確認。2^(-0.5)≈0.71と一致し、0.5レベル分のスナップで説明が
+      // つく）。3D（MapLibre）はそもそも整数スナップの概念を持たず、同じ
+      // 検証が3Dでは問題なく通ったこととも整合する。小数ズームを許可し、
+      // 計算どおりの比率になるようにする。
+      zoomSnap: 0,
     });
     L.tileLayer(GSI_TILE_URL, {
       attribution: GSI_ATTRIBUTION,
@@ -5377,9 +5425,23 @@ class MapView {
     ]);
     const size = this.map.getSize();
     const shortSide = Math.max(1, Math.min(size.x, size.y));
-    // 【不具合修正、32本目B】3D側のfitCircleToView()と同じ理由で、低い画面での
-    // 極端な余白を避けるため短い辺の半分未満にクランプする。
-    const padding = Math.min(Math.round(shortSide * MAP_CIRCLE_FIT_PADDING_RATIO), Math.floor(shortSide / 2) - 1);
+    // 【2026-10-20、35本目、不具合修正】当初は3D側と同じ式（余白(片側) = 短辺 ×
+    // (1 - 目標直径比率) / 2）をそのまま使ったが、実機相当の検証で比率が
+    // 0.75の目標に対し0.899（約2割大きい）になる不具合が見つかった。
+    // 原因はLeafletのgetBoundsZoom()の仕様差：fitBounds()経由で呼ぶときは
+    // paddingTopLeft・paddingBottomRightをそれぞれ加算してgetBoundsZoom()へ
+    // 渡すため、結果的に「片側の値」×2が効く。しかし、ここでは
+    // （_overviewZoom用のfitToBudget()と同様に）getBoundsZoom()を直接呼んで
+    // おり、内部では渡したpadding Pointを1回だけ（getSize().subtract(padding)）
+    // 減算する——つまり「両側の合計」として扱われる。3D（MapLibre）の
+    // cameraForBounds()は数値1つのpaddingを「各辺に同じ量」として扱う仕様の
+    // ため3D側の式は正しいが、2DのgetBoundsZoom()直接呼びでは「片側の値」を
+    // 2倍せずに渡すと、実際に効く余白が意図の半分になり、円が目標より
+    // 大きくなる。ここでは直接呼びのため、合計分（片側×2）をそのまま渡す。
+    const padding = Math.min(
+      Math.round(shortSide * (1 - MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO)),
+      Math.floor(shortSide / 2) - 1
+    );
     const fitZoom = this.map.getBoundsZoom(bounds, false, L.point(padding, padding));
     const zoom = Math.min(Math.max(fitZoom, MAP_CIRCLE_FIT_MIN_ZOOM), 16);
     if (reachPrefersReducedMotion()) {
@@ -6434,6 +6496,10 @@ class ReverseTravel {
     // 閉じる操作は専用の#form-close-btn（フォームの中、開いている間だけ
     // 見える）に分離し、このボタンは「開く」専用にする。
     this.elements.searchSummaryToggle?.addEventListener('click', () => {
+      // 【2026-10-20、35本目、不具合修正】フォームを開く時点の地図カメラを
+      // 覚えておく（closeFormDiscardingEdits()参照）。編集を捨てて閉じたとき、
+      // ここへ戻すことで「開く前の状態と完全に同じ」に戻せるようにする。
+      this._cameraSnapshotBeforeFormEdit = this.captureCameraSnapshot();
       this.setFormCollapsed(false);
     });
 
@@ -6441,16 +6507,31 @@ class ReverseTravel {
     // 検索はせず、最後に検索した条件に戻してから畳む（入力しかけた出発駅・
     // 予算は捨てる、Minami指示）。
     this.elements.formCloseBtn?.addEventListener('click', () => {
-      if (this.lastSearchedDepartureText !== null) {
-        this.elements.departureInput.value = this.lastSearchedDepartureText;
-      }
-      this.elements.departureSuggestions.innerHTML = '';
-      if (this.lastSearchedBudget !== null) {
-        this.elements.budgetInput.value = this.lastSearchedBudget;
-        this.updateBudgetUI();
-      }
-      this.setFormCollapsed(true);
+      this.closeFormDiscardingEdits();
     });
+
+    // 【2026-10-20、35本目、Minami指示】「条件を変える」でフォームを開いている
+    // ときに、下の地図（またはタブ・一覧などフォームの外）をタップしたら、
+    // 「▲閉じる」と同じく閉じる。document全体のcapture段階で拾うことで、
+    // 地図のピン選択（MapLibre/Leafletがcanvas要素に直接付けているクリック
+    // ハンドラ）やタブ切替より先に・確実に割り込み、stopPropagation()で
+    // それらへイベントが届く前に止める（＝「そのタップでは、ピンを選んだり、
+    // 地図を動かしたりしない」をイベント配送そのもので保証する）。
+    // #search-form（出発駅の候補一覧#departure-suggestionsを含む）の内側は
+    // 対象外（入力・候補選択は今までどおり）。#form-close-btn自身も
+    // #search-formの子のため自然に対象外になり、二重発火しない。
+    document.addEventListener('click', (e) => {
+      const closeBtn = this.elements.formCloseBtn;
+      // フォームが「開いている」状態かどうかは、#form-close-btn自体が
+      // 見えているかどうかで判定する（CSS側がPC・畳んだ状態・検索前を
+      // 自然に除外しているため、ここで改めてメディアクエリ等を再実装しない）。
+      if (!closeBtn || closeBtn.offsetParent === null) return;
+      const searchForm = document.getElementById('search-form');
+      if (searchForm && searchForm.contains(e.target)) return;
+      e.stopPropagation();
+      e.preventDefault();
+      this.closeFormDiscardingEdits();
+    }, true);
 
     this.elements.mylistSortSelect?.addEventListener('change', () => this.renderMylist());
 
@@ -8472,6 +8553,91 @@ class ReverseTravel {
    * 見える＝影響しない）。
    * @param {boolean} collapsed
    */
+  /**
+   * 【2026-10-20、35本目、不具合修正】フォームを開いた時点の地図カメラ
+   * （2D：中心・ズーム、3D：中心・ズーム・傾き・向き）を覚えておく。
+   * closeFormDiscardingEdits()で「編集前にまったく戻す」ために使う。
+   * 【不具合修正】地図タブを一度も開いていない間（Leafletが一度も
+   * setView()/fitBounds()されておらず_loadedがfalseの状態。
+   * forceMarkerReposition()のコメント参照）にmap.getCenter()を呼ぶと
+   * 「Set map center and zoom first.」を投げる。これが
+   * #search-summary-toggleのクリックハンドラ内（setFormCollapsed(false)の
+   * 直前）で起きると、以降の行が実行されずフォームが開かなくなる不具合が
+   * 実機相当の検証で見つかった（0件検索後、地図タブを一度も開かずに
+   * 「条件を変える」を押す経路で再現）。カメラのスナップショットは
+   * 無くても動作に支障が無い付随機能のため、例外はtry/catchで吸収し
+   * フォームが開かなくなる事態を避ける。
+   */
+  captureCameraSnapshot() {
+    const snap = {};
+    try {
+      if (this.mapView?.map) {
+        snap.map2d = { center: this.mapView.map.getCenter(), zoom: this.mapView.map.getZoom() };
+      }
+    } catch { /* 地図タブを一度も開いていない等、位置が未確定なら諦める */ }
+    try {
+      if (this.terrainMapView?.map) {
+        snap.map3d = {
+          center: this.terrainMapView.map.getCenter(),
+          zoom: this.terrainMapView.map.getZoom(),
+          pitch: this.terrainMapView.map.getPitch(),
+          bearing: this.terrainMapView.map.getBearing(),
+        };
+      }
+    } catch { /* 同上 */ }
+    return snap;
+  }
+
+  /** captureCameraSnapshot()で覚えた状態へ、アニメーションなしで即座に戻す。 */
+  restoreCameraSnapshot(snap) {
+    if (!snap) return;
+    if (snap.map2d && this.mapView?.map) {
+      this.mapView.map.setView(snap.map2d.center, snap.map2d.zoom, { animate: false });
+    }
+    if (snap.map3d && this.terrainMapView?.map) {
+      this.terrainMapView.map.jumpTo(snap.map3d);
+    }
+  }
+
+  /**
+   * 【2026-10-17、32本目A／2026-10-20、35本目】フォームを開いている間に
+   * 閉じる共通処理。検索はせず、最後に検索した条件に戻してから畳む
+   * （入力しかけた出発駅・予算は捨てる、Minami指示）。「▲閉じる」ボタンと、
+   * フォームの外（地図・タブ・一覧等）をタップしたときの両方から呼ぶ。
+   */
+  closeFormDiscardingEdits() {
+    if (this.lastSearchedDepartureText !== null) {
+      this.elements.departureInput.value = this.lastSearchedDepartureText;
+    }
+    this.elements.departureSuggestions.innerHTML = '';
+    if (this.lastSearchedBudget !== null) {
+      this.elements.budgetInput.value = this.lastSearchedBudget;
+      this.updateBudgetUI();
+      // 【2026-10-20、35本目、不具合修正】編集中の予算操作（スライダー等）が
+      // 到達円のライブプレビューと「地図を合わせる」予約
+      // （scheduleFitCircleToView()、32本目B）を既に動かしていることがある。
+      // 入力欄の表示を戻すだけではこれらは戻らず、フォームを閉じた後（地図を
+      // タップして閉じた場合も含む）、捨てたはずの編集の予算に合わせて地図が
+      // 遅れて動いてしまう不具合があった（地図タップでフォームを閉じる検証で
+      // 発覚：「そのタップでは地図を動かさない」はずなのに、タップ自体とは
+      // 無関係な保留中のタイマーが後から発火し、地図が動いていた）。
+      // 【不具合修正】保留中のタイマーをキャンセルするだけでは、デバウンスの
+      // 猶予（0.15秒）が既に経過して地図合わせが始まって（あるいは完了して）
+      // しまっていた場合に直せない（捨てたい編集の予算に向けて、既に地図が
+      // 動き始めている／動き終わっている）。円の見た目を最後に検索した予算へ
+      // 戻すこと（userTouch:falseで新たな地図合わせの予約はしない）と、
+      // 保留中タイマーのキャンセルに加えて、フォームを開いた時点のカメラへ
+      // 無アニメーションで戻すことで、進行中・完了済みのどちらの場合も
+      // 確実に「編集前と同じ」に戻す。
+      this.updateMapBudgetLive(this.lastSearchedBudget, { userTouch: false });
+      this.mapView._cancelFitCircleToView();
+      this.terrainMapView?._cancelFitCircleToView();
+    }
+    this.restoreCameraSnapshot(this._cameraSnapshotBeforeFormEdit);
+    this._cameraSnapshotBeforeFormEdit = null;
+    this.setFormCollapsed(true);
+  }
+
   setFormCollapsed(collapsed) {
     if (!this.elements.layoutLeft) return;
     this.elements.layoutLeft.classList.toggle('form-collapsed', collapsed);

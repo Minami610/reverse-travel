@@ -608,12 +608,37 @@ header p {
   }
 
   /* PCでは左カラムが「検索フォーム＋地図」の2要素になる */
+  /* 【2026-10-20、35本目、不具合修正・原因特定】overflow:visibleだった
+     （最初のUI実装（74317e5）からこの値のまま、3Dの方位磁針・ハンドル等
+     どの機能追加でも見直されていなかった）。
+     根本原因を特定した：回転ハンドル（#map-rotate-dial、72×72pxの正方形を
+     border-radius:50%で丸く見せているだけ）にbearingに応じたCSS transform:
+     rotate()を適用すると（terrain-map-view.jsの_setupRotateHandle()）、
+     90度の倍数以外の角度では「見た目の円」は変わらないのに、要素の
+     軸並行バウンディングボックス（getBoundingClientRect()・scrollWidthが
+     見る値）が72×72より大きくなる（正方形を回転させると外接矩形が膨らむ、
+     純粋な幾何の性質。例：35度では一辺あたり約72×(|cos35°|+|sin35°|)
+     ≈100pxまで膨らむ）。この膨らみ分が.map-rotate-handle（はみ出しを
+     切り取っていない）→#map-area→このスロットと素通りし、.layout-left
+     （overflow-y:autoによりoverflow-xも暗黙にautoへ計算される）で横
+     スクロールバーとして表面化する（Cowork報告の再現条件・PC/富山駅前/
+     往復¥700/3D表示で実測確認：#map-rotate-dialの右端がmap-areaの右端を
+     約6〜14px超えていた。ハンドルの向きを変えるcheckRotateHandle()には
+     以前から横スクロール検証が無く、このテスト側の盲点がバグを長期間
+     見落とす一因だった）。
+     根本原因そのものの修正は.map-rotate-handle{overflow:hidden}（下記）で
+     行った（見た目の円の外側、どのみち見えない正方形の角だけを切り取る
+     ため副作用が無い）。このスロット側のoverflow:hiddenは、そもそも
+     このスロットの外へ意図して見せる要素が無い設計であることに変わりは
+     ないため、同種の不具合の再発に備える保険として維持する（常設の
+     checkNoHorizontalOverflow()をcheckCircleThenFit()・checkRotateHandle()の
+     両方に追加し、以後の回帰を検出できるようにした）。 */
   #map-slot-desktop {
     flex: 1;
     min-height: 200px;
     height: auto;
     margin-top: 0.75rem;
-    overflow: visible;
+    overflow: hidden;
   }
 
   /* PC二段組では左カラム幅（minmax）自体が制約になるため、
@@ -1109,6 +1134,13 @@ header p {
      ときにブラウザ既定のスクロール・ピンチジェスチャーとポインタイベントが
      競合し、JS側のpointermoveが安定して取れないことがある。 */
   touch-action: none;
+  /* 【2026-10-20、35本目、不具合修正】子の.map-rotate-dialはbearingに応じて
+     transform: rotate()される正方形（border-radius:50%で丸く見せているだけ）
+     のため、90度の倍数以外の角度では軸並行バウンディングボックスが72×72より
+     膨らむ（見た目の円は変わらない）。この膨らみがPCで地図の下の横スクロール
+     バーとして表面化する不具合の根本原因だったため、見た目の円の外側
+     （どのみち見えない正方形の角）だけを確実に切り取る。 */
+  overflow: hidden;
 }
 
 .map-rotate-handle:active {
