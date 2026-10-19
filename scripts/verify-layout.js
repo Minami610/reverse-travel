@@ -1770,28 +1770,28 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
       record(`[${label}] 検証用スポット「城生城」が見つかる`, false);
     }
 
-    // 3. 予算¥2000（対象範囲が広がる）でも引きすぎない（ズーム9.5以上）。
-    // 【2026-10-11修正】固定1000ms待機だと、fitToBudget()のeaseTo（600ms）が
-    // システム負荷（検証スイート全体を通しで流しているとき等）で遅れ、
-    // まだ開始前の値を読んでしまうことがあった（実機確認：単体では正しく
-    // 9.5になるのに、スイート内では9.00になるケースを再現）。固定時間でなく、
-    // 実際にズームが変化し終わるまでポーリングして待つ。
+    // 3. 予算¥2000（対象範囲が広がる）でも引きすぎない。
+    // 【2026-10-11修正】固定1000ms待機だと、easeToがシステム負荷（検証スイート
+    // 全体を通しで流しているとき等）で遅れ、まだ開始前の値を読んでしまう
+    // ことがあった。固定時間でなく、実際にズームが変化し終わるまで
+    // ポーリングして待つ。
+    // 【不具合修正、34本目】予算スライダーの'input'発火は、32本目以降
+    // fitToBudget()（ズーム下限9.5）ではなくscheduleFitCircleToView()経由の
+    // fitCircleToView()（34本目でズーム下限8.5にゆるめた）を呼ぶため、この
+    // 検証の期待値も9.5のままでは成立しない（高松築港で実測：8.76）。
+    // 待ち方も、0.4秒のデバウンスを経てから動き出す新しい仕組みに合わせ、
+    // 固定800msの「余韻」ではなくmoveendベースで確実に止まるまで待つ。
     if (label === 'sp') await page.click('.tab-btn[data-tab="list"]').catch(() => {});
-    const zoomBeforeWide = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
     await page.evaluate(() => {
       const slider = document.getElementById('budget-slider');
       slider.value = '2000';
       slider.dispatchEvent(new Event('input', { bubbles: true }));
       slider.dispatchEvent(new Event('change', { bubbles: true }));
     });
-    await page.waitForFunction(
-      (prevZoom) => window.__terrainMapForDebug.getZoom() !== prevZoom,
-      zoomBeforeWide,
-      { timeout: 5000 }
-    ).catch(() => {});
-    await page.waitForTimeout(800); // easeTo完了後の余韻
+    await page.waitForTimeout(600); // 0.4秒のデバウンスが終わり、easeTo()が動き出すのを待つ
+    await waitForTerrainCameraIdle(page);
     const zoomOverview = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
-    record(`[${label}] 3Dで予算¥2000のときのズームが9.5以上`, zoomOverview >= 9.5, `zoom=${zoomOverview.toFixed(2)}`);
+    record(`[${label}] 3Dで予算¥2000のときのズームが8.5以上`, zoomOverview >= 8.45, `zoom=${zoomOverview.toFixed(2)}`);
 
     if (label === 'sp') await page.click('.tab-btn[data-tab="map"]').catch(() => {});
     const overviewBox = await page.locator('#map-area').boundingBox();
@@ -3687,7 +3687,11 @@ async function checkReturnToOverview(browser, baseUrl, savedPaths) {
         // 停止させてしまうことがあった（33本目のcheckCircleThenFit()で
         // 同じ理由により確立済みの対策と同じ）。要素のclick()をpage.evaluate
         // 経由で直接呼び、Playwright側の安定待ちを経由しないようにする。
-        await page.evaluate(() => document.getElementById('budget-increment').click());
+        // 【2026-10-19、34本目、Minami指示】ただしevaluate経由の直接click()は、
+        // ボタンが他の部品に隠れていても押せてしまい、重なりの不具合を
+        // 見逃す。押す前にボタン中心のelementFromPoint()を確認する
+        // （clickElementChecked()参照）。
+        await clickElementChecked(page, 'budget-increment', '[3D] 予算操作で全体に戻る検証：＋');
         await page.waitForTimeout(600); // 0.4秒のデバウンスが終わり、easeTo()が動き出すのを待つ
       await page.waitForFunction(() => !window.__terrainMapForDebug.isMoving(), { timeout: 10000 }).catch(() => {});
         const bearingAfterBudgetTouch = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
@@ -3714,7 +3718,8 @@ async function checkReturnToOverview(browser, baseUrl, savedPaths) {
         }, { spot, station });
         // 【2026-10-18、33本目、不具合修正】上と同じ理由（page.click()の安定待ちが
         // 重い負荷下でタイムアウトし得る）でevaluate経由のclick()にする。
-        await page.evaluate(() => document.getElementById('view-all-btn').click());
+        // 【2026-10-19、34本目】押す前の隠れチェックも合わせて行う。
+        await clickElementChecked(page, 'view-all-btn', '[3D] 「全体を見る」ボタン');
         await page.waitForTimeout(100); // easeTo()起動自体のラグを避ける（isMoving()が真になる前に見てしまうのを防ぐ）
       await page.waitForFunction(() => !window.__terrainMapForDebug.isMoving(), { timeout: 10000 }).catch(() => {});
         const zoomAfterViewAllBtn = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
@@ -3754,7 +3759,8 @@ async function checkReturnToOverview(browser, baseUrl, savedPaths) {
     // 収まるかどうかの具体的な検証はcheckCircleThenFit()で行う）。
     // 【2026-10-18、33本目、不具合修正】page.click()の安定待ちが重い負荷下で
     // タイムアウトし得るため、evaluate経由のclick()にする。
-    await page.evaluate(() => document.getElementById('budget-increment').click());
+    // 【2026-10-19、34本目】押す前の隠れチェックも合わせて行う。
+    await clickElementChecked(page, 'budget-increment', '[2D] 手でズームしたあと予算を触る：＋');
     await page.waitForTimeout(1900); // 0.4秒デバウンス＋0.7秒の合わせ＋余裕
     const zoomAfter2d = await page.evaluate(() => window.__mapViewForDebug.map.getZoom());
     record(
@@ -3778,7 +3784,8 @@ async function checkReturnToOverview(browser, baseUrl, savedPaths) {
     await page.evaluate((z) => { window.__mapViewForDebug.map.setZoom(z, { animate: false }); }, zoomedInRM);
     // 【2026-10-18、33本目、不具合修正】page.click()の安定待ちが重い負荷下で
     // タイムアウトし得るため、evaluate経由のclick()にする。
-    await page.evaluate(() => document.getElementById('budget-increment').click());
+    // 【2026-10-19、34本目】押す前の隠れチェックも合わせて行う。
+    await clickElementChecked(page, 'budget-increment', '[reduced-motion] 予算を触る：＋');
     // 【2026-10-17、32本目B】0.4秒のデバウンス自体はreduced-motionでも変わらない
     // （アニメーションを省くのは「合わせ方（一気に動くか、0.7秒かけて動くか）」
     // だけのため）。デバウンスが終わるまで待ってから読む。
@@ -3811,6 +3818,50 @@ async function waitForTerrainCameraIdle(page, { timeoutMs = 20000 } = {}) {
     map.once('moveend', resolve);
     setTimeout(resolve, timeoutMs);
   }), timeoutMs);
+}
+
+/**
+ * 【2026-10-19、34本目、Minami指示】checkReturnToOverview()・checkCircleThenFit()
+ * （32・33本目）のボタン操作は、Playwrightのclick()が重い負荷下で実要素が
+ * 安定するまで待ち続けてタイムアウトする問題（33本目で判明）を避けるため、
+ * page.evaluate経由でDOMのclick()を直接呼んでいた。しかしこれだと、ボタンが
+ * 他の部品の裏に隠れていても（＝実際の利用者なら押せない状態でも）押せて
+ * しまい、重なりの不具合を見逃す。押す前にボタンの中心へ
+ * document.elementFromPoint()し、返ってきた要素がボタン自身かその子孫で
+ * あることを確認する。隠れていた場合は何に隠れていたかをrecord()で
+ * 失敗として記録する（それでもクリック自体は行い、以降のテストの流れは
+ * 止めない）。
+ * @param {import('playwright').Page} page
+ * @param {string} elementId - id属性（#なし）
+ * @param {string} label - record()に渡す検証名の接頭辞
+ */
+async function clickElementChecked(page, elementId, label) {
+  const check = await page.evaluate((id) => {
+    const el = document.getElementById(id);
+    if (!el) return { found: false };
+    const rect = el.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const topEl = document.elementFromPoint(cx, cy);
+    const ok = !!topEl && (topEl === el || el.contains(topEl));
+    const describe = (node) => {
+      if (!node) return null;
+      if (node.id) return `#${node.id}`;
+      if (typeof node.className === 'string' && node.className) return `${node.tagName}.${node.className.split(' ')[0]}`;
+      return node.tagName;
+    };
+    return { found: true, ok, obscuredBy: ok ? null : describe(topEl) };
+  }, elementId);
+  if (!check.found) {
+    record(`${label}：#${elementId} が見つかる`, false);
+    return;
+  }
+  record(
+    `${label}：押す位置（#${elementId}の中心）が他の部品に隠れていない`,
+    check.ok,
+    check.obscuredBy ? `隠していた要素: ${check.obscuredBy}` : undefined
+  );
+  await page.evaluate((id) => document.getElementById(id).click(), elementId);
 }
 
 /** 到達円の外接範囲（N/E/S/W、72分割の円周上の点すべて）が、#map-areaの
@@ -3873,14 +3924,15 @@ async function circleFullyWithinFrame(page, mode) {
  * 触ったら全体表示に戻る」（checkReturnToOverview側の該当検証）はこれに
  * 置き換わった。ここでは、B-2で要求された「円が先に変わり、あとから地図が
  * 追いかける」順序・「連打しても地図は最後の1回しか動かない」・「－で縮む」・
- * 「3Dで向き・傾きを変えたあとは、それを壊さない」・「最低ズーム9.5を割らない」を
- * 検証し、あわせて必須スクリーンショット（PC・400×464×2D/3D×「広がった直後」
- * 「地図が収まったあと」の8枚）を撮る。
+ * 「3Dで向き・傾きを変えたあとは、それを壊さない」・「最低ズーム8.5を割らない」
+ * （34本目でMinami決定：Bにより9.5→8.5へゆるめた。「全体を見る」・検索直後の
+ * 全体表示＝fitToBudget()は9.5のまま）を検証し、あわせて必須スクリーンショット
+ * （PC・400×464×2D/3D×「広がった直後」「地図が収まったあと」の8枚）を撮る。
  */
 async function checkCircleThenFit(browser, baseUrl, savedPaths) {
   console.log('\n=== 予算操作：円が広がってから地図を合わせる検証（32本目B） ===');
 
-  // --- 1) 3D：順序（円→あとから地図）・円が画面に収まる・最低ズーム9.5 ---
+  // --- 1) 3D：順序（円→あとから地図）・円が画面に収まる・最低ズーム8.5 ---
   {
     const context = await browser.newContext({ viewport: VIEWPORTS.pc });
     const page = await context.newPage();
@@ -3916,7 +3968,8 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       // しまう（_tmp-repro-dblmove.mjsで実測・再現済み、本ラウンドの調査用
       // スクリプトにつき使用後に削除）。要素のclick()をpage.evaluate経由で
       // 直接呼び、Playwright側の安定待ちを経由しないようにする。
-      await page.evaluate(() => document.getElementById('budget-increment').click());
+      // 【2026-10-19、34本目】押す前の隠れチェックも合わせて行う。
+      await clickElementChecked(page, 'budget-increment', '[circle-fit/3D] 順序確認：＋');
       // 0.25秒の半径アニメーションは終わっているが、0.4秒のデバウンスはまだ
       // 終わっていない時点（＝地図はまだ動いていないはず）を見る。
       await page.waitForTimeout(300);
@@ -3945,22 +3998,34 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
         `前=${zoomBefore} / 合わせ後=${zoomAfterFit}`
       );
       const withinFrame = await circleFullyWithinFrame(page, '3d');
-      // 【不具合修正、32本目B】最低ズーム9.5に当たっているときは画面からはみ出る
+      // 【不具合修正、34本目】円を合わせるとき（fitCircleToView()）の最低ズームは
+      // 34本目でMinami決定：Bにより8.5へゆるめた（9.5は「全体を見る」・検索直後の
+      // 全体表示＝fitToBudget()のみ）。8.5に当たっているときは画面からはみ出る
       // ことがある（下の「－で縮んだあとも」の記録コメント参照）。
-      const atZoomFloor = zoomAfterFit <= 9.55;
+      const atZoomFloor = zoomAfterFit <= 8.55;
       record(
-        '[circle-fit/3D] 地図を合わせたあと、円全体が画面に収まっている（最低ズーム9.5に当たっている場合を除く）',
+        '[circle-fit/3D] 地図を合わせたあと、円全体が画面に収まっている（最低ズーム8.5に当たっている場合を除く）',
         withinFrame.ok || atZoomFloor,
         JSON.stringify({ ...withinFrame, zoom: zoomAfterFit, atZoomFloor })
       );
-      record('[circle-fit/3D] 最低ズーム9.5を下回らない', zoomAfterFit >= 9.45, `zoom=${zoomAfterFit}`);
+      record('[circle-fit/3D] 最低ズーム8.5を下回らない', zoomAfterFit >= 8.45, `zoom=${zoomAfterFit}`);
 
       // --- 連打：地図の移動は最後の1回だけ ---
+      // 【2026-10-19、34本目、不具合修正】3回ともclickElementChecked()（隠れ
+      // チェック＋click、evaluate往復2回）にすると、1回ごとのevaluate往復が
+      // 増える分だけ「連打」の間隔が実際には広がり、3D描画でページのメイン
+      // スレッドが混み合っている状況下では間隔が0.4秒のデバウンスを超えて
+      // しまい、本来1回のはずの地図合わせが複数回に分かれる（実機相当の
+      // 検証で、連打のつもりが実時間で600ms〜1.2秒間隔になり、moveendが
+      // 5回に分かれることを再現・特定した）。ボタンの位置は3回の連打の間に
+      // 動かないため、隠れチェックは1回目だけ行い、2・3回目は
+      // page.evaluate経由の素のclick()（evaluate往復1回）にして、意図どおりの
+      // 「連打」に近い間隔を保つ。
       await page.evaluate(() => {
         window.__moveEndCount = 0;
         window.__terrainMapForDebug.on('moveend', () => { window.__moveEndCount += 1; });
       });
-      await page.evaluate(() => document.getElementById('budget-increment').click());
+      await clickElementChecked(page, 'budget-increment', '[circle-fit/3D] 連打1回目：＋');
       await page.waitForTimeout(80);
       await page.evaluate(() => document.getElementById('budget-increment').click());
       await page.waitForTimeout(80);
@@ -3975,7 +4040,7 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       await page.waitForTimeout(100);
       const bearingBeforePlus = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
       const pitchBeforePlus = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
-      await page.evaluate(() => document.getElementById('budget-increment').click());
+      await clickElementChecked(page, 'budget-increment', '[circle-fit/3D] 向き・傾きを変えたあと：＋');
       await page.waitForTimeout(600);
       await waitForTerrainCameraIdle(page);
       const bearingAfterPlus = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
@@ -3992,9 +4057,15 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       );
 
       // --- －を押すと円が縮み、そのあと地図が合わせ直される ---
+      // 【2026-10-19、34本目、不具合修正】直前の「向き・傾きを変えたあとに＋」の
+      // 半径アニメーション（0.25秒）がまだ終わっていないうちに「押す前」の値を
+      // 読んでしまい、縮んだはずなのに増えて見えることがあった（実機相当の
+      // 検証で、前=29.45.../直後=30.06...という矛盾を確認）。押す前に一呼吸
+      // 置いて確実に静定させる。
+      await page.waitForTimeout(400);
       const radiusBeforeMinus = await page.evaluate(() => window.__terrainViewForDebug._reachCircleRadiusKm);
-      await page.evaluate(() => document.getElementById('budget-decrement').click());
-      await page.waitForTimeout(300);
+      await clickElementChecked(page, 'budget-decrement', '[circle-fit/3D] －を押す');
+      await page.waitForTimeout(400);
       const radiusRightAfterMinus = await page.evaluate(() => window.__terrainViewForDebug._reachCircleRadiusKm);
       record(
         '[circle-fit/3D] －を押すと円が縮む',
@@ -4005,20 +4076,22 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       await waitForTerrainCameraIdle(page);
       const zoomAfterMinus = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
       const withinFrameAfterMinus = await circleFullyWithinFrame(page, '3d');
-      // 【不具合修正、32本目B】最低ズーム9.5は必ず守る（Minami指示）。この下限に
-      // 当たっているときは、fitToBudget()の既存の考え方（「下限で全点が入りきらない
-      // 場合は画面の外に出てよい」）と同じ理由で、円がはみ出すことがある
-      // （実際に回転・傾き・大きい半径が重なると発生することを確認済み：
-      // cameraForBounds()が計算した必要ズームが9.5を下回り、9.5に引き上げた
-      // ことではみ出た）。下限に当たっていないのにはみ出ている場合だけ失敗にする。
-      const atZoomFloorMinus = zoomAfterMinus <= 9.55;
+      // 【不具合修正、32本目B／34本目】円を合わせるときの最低ズームは34本目で
+      // 8.5へゆるめた（Minami決定：B。9.5のままなのは「全体を見る」・検索直後の
+      // 全体表示＝fitToBudget()のみ）。この下限に当たっているときは、
+      // fitToBudget()の既存の考え方（「下限で全点が入りきらない場合は画面の外に
+      // 出てよい」）と同じ理由で、円がはみ出すことがある（実際に400×464・3Dで
+      // 半径29km級のとき、8.5まで引いても画面に収まりきらないことを34本目の
+      // 実機相当検証（表）で確認済み）。下限に当たっていないのにはみ出ている
+      // 場合だけ失敗にする。
+      const atZoomFloorMinus = zoomAfterMinus <= 8.55;
       record(
-        '[circle-fit/3D] －で縮んだあとも、円全体が画面に収まっている（最低ズーム9.5に当たっている場合を除く）',
+        '[circle-fit/3D] －で縮んだあとも、円全体が画面に収まっている（最低ズーム8.5に当たっている場合を除く）',
         withinFrameAfterMinus.ok || atZoomFloorMinus,
         JSON.stringify({ ...withinFrameAfterMinus, zoom: zoomAfterMinus, atZoomFloorMinus })
       );
 
-      // --- ¥2000でも最低ズーム9.5を割らない ---
+      // --- ¥2000でも最低ズーム8.5を割らない ---
       await page.evaluate(() => {
         const el = document.getElementById('budget-slider');
         el.value = 2000;
@@ -4027,13 +4100,13 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       await page.waitForTimeout(600);
       await waitForTerrainCameraIdle(page);
       const zoomAt2000 = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
-      record('[circle-fit/3D] ¥2000でも最低ズーム9.5を下回らない', zoomAt2000 >= 9.45, `zoom=${zoomAt2000}`);
+      record('[circle-fit/3D] ¥2000でも最低ズーム8.5を下回らない', zoomAt2000 >= 8.45, `zoom=${zoomAt2000}`);
     }
     if (pageErrors.length > 0) record('[circle-fit/3D] 検証中にページエラーが発生していない', false, pageErrors.join('; '));
     await context.close();
   }
 
-  // --- 2) 2D：順序（円→あとから地図）・円が画面に収まる・最低ズーム9.5 ---
+  // --- 2) 2D：順序（円→あとから地図）・円が画面に収まる・最低ズーム8.5 ---
   {
     const context = await browser.newContext({ viewport: VIEWPORTS.pc });
     const page = await context.newPage();
@@ -4049,7 +4122,7 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
 
     const zoomBefore2d = await page.evaluate(() => window.__mapViewForDebug.map.getZoom());
     const radiusBefore2d = await page.evaluate(() => window.__mapViewForDebug._reachCircleRadiusKm);
-    await page.evaluate(() => document.getElementById('budget-increment').click());
+    await clickElementChecked(page, 'budget-increment', '[circle-fit/2D] 順序確認：＋');
     await page.waitForTimeout(300);
     const radiusRightAfter2d = await page.evaluate(() => window.__mapViewForDebug._reachCircleRadiusKm);
     const zoomRightAfter2d = await page.evaluate(() => window.__mapViewForDebug.map.getZoom());
@@ -4066,12 +4139,12 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
     await page.waitForTimeout(1600);
     const zoomAfterFit2d = await page.evaluate(() => window.__mapViewForDebug.map.getZoom());
     const withinFrame2d = await circleFullyWithinFrame(page, '2d');
-    // 【不具合修正、32本目B】3D側と同じ理由（最低ズーム9.5に当たっているときは
-    // 画面からはみ出ることがある、Minami指示の「入りきらない点は画面の外に
-    // 出てよい」が優先されるため）。
-    const atZoomFloor2d = zoomAfterFit2d <= 9.55;
+    // 【不具合修正、32本目B／34本目】3D側と同じ理由（最低ズームは34本目で
+    // 8.5へゆるめた。Minami指示の「入りきらない点は画面の外に出てよい」が
+    // 優先されるため）。
+    const atZoomFloor2d = zoomAfterFit2d <= 8.55;
     record(
-      '[circle-fit/2D] 地図を合わせたあと、円全体が画面に収まっている（最低ズーム9.5に当たっている場合を除く）',
+      '[circle-fit/2D] 地図を合わせたあと、円全体が画面に収まっている（最低ズーム8.5に当たっている場合を除く）',
       withinFrame2d.ok || atZoomFloor2d,
       JSON.stringify({ ...withinFrame2d, zoom: zoomAfterFit2d, atZoomFloor2d })
     );
@@ -4083,7 +4156,7 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
     });
     await page.waitForTimeout(1900);
     const zoomAt2000_2d = await page.evaluate(() => window.__mapViewForDebug.map.getZoom());
-    record('[circle-fit/2D] ¥2000でも最低ズーム9.5を下回らない', zoomAt2000_2d >= 9.45, `zoom=${zoomAt2000_2d}`);
+    record('[circle-fit/2D] ¥2000でも最低ズーム8.5を下回らない', zoomAt2000_2d >= 8.45, `zoom=${zoomAt2000_2d}`);
 
     if (pageErrors.length > 0) record('[circle-fit/2D] 検証中にページエラーが発生していない', false, pageErrors.join('; '));
     await context.close();
@@ -4122,7 +4195,17 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       }
       const mapAreaBox = () => page.locator('#map-area').boundingBox();
 
-      await page.evaluate(() => document.getElementById('budget-increment').click());
+      // 【2026-10-19、34本目、不具合修正】34本目で追加した隠れチェックが、
+      // ここで実際に不具合を検出した：スマホ幅（label!=='pc'）では
+      // PC用の予算ステッパー（#budget-increment）はCSSで常に非表示
+      // （22本目、.form-group-budget）のため、中心座標がHEADER等の裏に
+      // 隠れてしまう。以前はpage.evaluate経由の直接click()がこの非表示
+      // 状態を無視して“押せて”しまっていたため気づかなかった（隠れていても
+      // DOMのclick()はイベントハンドラを発火させてしまう）。スマホ幅では
+      // 実際に画面に出ている予算操作帯のボタン（#mobile-budget-increment）
+      // を押すようにする。
+      const incrementId = label === 'pc' ? 'budget-increment' : 'mobile-budget-increment';
+      await clickElementChecked(page, incrementId, `[circle-fit/${label}/${dim}] スクリーンショット用：＋`);
       await page.waitForTimeout(300); // 半径アニメーション(0.25秒)は終わり、地図はまだ動いていない
       const overflowPath = path.join(screenshotDir, `circle-then-fit-${dim}-${label}-overflow.png`);
       await page.screenshot({ path: overflowPath, clip: await mapAreaBox() });
@@ -4140,6 +4223,68 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
 
       await context.close();
     }
+  }
+
+  // --- 4) 【34本目】¥2000にして地図を合わせたあとの必須スクリーンショット
+  //     （400×464の3D・PCの3D）。あわせて「全体を見る」の最低ズームが
+  //     8.5の影響を受けず9.5のままであることを検証する。 ---
+  for (const [label, viewport] of Object.entries({ own: { width: 400, height: 464 }, pc: VIEWPORTS.pc })) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAt(page, '高松築港', 1000);
+    await waitForAllSpotsPrefetchSettled(page);
+    if (label !== 'pc') {
+      await page.click('.tab-btn[data-tab="map"]');
+      await page.waitForTimeout(300);
+    }
+    await page.click('#map-dimension-toggle');
+    const became3d = await page.waitForFunction(
+      () => document.getElementById('map-area').classList.contains('mode-3d'),
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
+    record(`[circle-fit-2000/${label}] 3D化（スクリーンショット撮影用）`, became3d);
+    if (became3d) {
+      await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+      await page.waitForTimeout(1500);
+
+      await page.evaluate(() => {
+        const el = document.getElementById('budget-slider');
+        el.value = 2000;
+        el.dispatchEvent(new Event('input'));
+      });
+      await page.waitForTimeout(600);
+      await waitForTerrainCameraIdle(page);
+      const zoomAt2000 = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
+      record(`[circle-fit-2000/${label}] ¥2000にして地図を合わせたあと、最低ズーム8.5を下回らない`, zoomAt2000 >= 8.45, `zoom=${zoomAt2000}`);
+
+      const mapAreaBox = await page.locator('#map-area').boundingBox();
+      const shotPath = path.join(screenshotDir, `circle-fit-2000-3d-${label}.png`);
+      await page.screenshot({ path: shotPath, clip: mapAreaBox });
+      savedPaths.push(shotPath);
+      console.log(`  保存: circle-fit-2000-3d-${label}.png`);
+
+      // 【34本目、Minami指示】「全体を見る」（fitToBudget()）は8.5の影響を
+      // 受けず、今までどおり9.5のままであることを確認する。「全体を見る」
+      // ボタンは場所に寄っている（_focusedOnSpot）ときしか表示されないため、
+      // ボタン経由ではなくfitToBudget()自体を直接呼んで検証する（押せる状態
+      // かどうかの検証はcheckReturnToOverview側で別途行っている）。
+      await page.evaluate(() => { window.__terrainViewForDebug.fitToBudget(2000); });
+      await page.waitForTimeout(100);
+      await page.waitForFunction(() => !window.__terrainMapForDebug.isMoving(), { timeout: 10000 }).catch(() => {});
+      const zoomAfterViewAll = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
+      record(
+        `[circle-fit-2000/${label}] 「全体を見る」の最低ズームは9.5のまま（8.5の影響を受けない）`,
+        zoomAfterViewAll >= 9.45,
+        `zoom=${zoomAfterViewAll}`
+      );
+    }
+    if (pageErrors.length > 0) record(`[circle-fit-2000/${label}] 検証中にページエラーが発生していない`, false, pageErrors.join('; '));
+    await context.close();
   }
 }
 

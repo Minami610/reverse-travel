@@ -4917,7 +4917,12 @@ const MAP_CIRCLE_RADIUS_ANIM_MS = 250;
 const MAP_CIRCLE_FIT_DEBOUNCE_MS = 400;
 const MAP_CIRCLE_FIT_DURATION_SEC = 0.7;
 const MAP_CIRCLE_FIT_PADDING_RATIO = 0.08; // 3D側のOVERVIEW_PADDING_RATIOと同じ考え方
-const MAP_CIRCLE_FIT_MIN_ZOOM = 9.5; // 3D側のOVERVIEW_MIN_ZOOMと同じ値
+// 【2026-10-19、34本目、Minami決定：B】「全体を見る」・検索直後の全体表示
+// （fitToBudget()、2Dはこの定数を使わず別途maxZoom:16のみで下限なし）は
+// 変えない。円を合わせるとき（fitCircleToView()）だけ、小さいスマホで
+// 円が枠に収まらないことがあるため、3D側のCIRCLE_FIT_MIN_ZOOMと同じ
+// 考え方でゆるい下限（8.5）にする。
+const MAP_CIRCLE_FIT_MIN_ZOOM = 8.5;
 
 /** 到達円の半径表記（例: 0.8km, 12km）。10km未満は小数第1位まで、以上は整数に丸める。
  * 【2026-10-14、25本目】地図上のラベルを廃止し、main.jsのスマホ予算操作帯・PCの

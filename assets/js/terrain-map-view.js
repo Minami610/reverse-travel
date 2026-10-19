@@ -72,6 +72,14 @@ const BG_AERIAL_LAYER_ID = 'gsi-bg-aerial';
 // 下限が無いのが今回の不具合だった）。
 const OVERVIEW_PADDING_RATIO = 0.08;
 const OVERVIEW_MIN_ZOOM = 9.5;
+// 【2026-10-19、34本目、Minami決定：B】「全体を見る」・検索直後の全体表示
+// （fitToBudget()）は今までどおりOVERVIEW_MIN_ZOOM(9.5)のまま変えない。
+// 一方、32本目Bの「金額を変えて円を合わせる」（fitCircleToView()）だけは、
+// 小さいスマホ（400×464）の3Dで円が枠からはみ出したまま戻らないことがある
+// （9.5にかかって、それ以上は引けないため）。円を合わせるときだけ、より
+// ゆるい下限（8.5）を使う。8.5でも収まらないときだけ、はみ出しを許す
+// （Minami指示：従来どおり「入りきらない点は画面の外に出てよい」）。
+const CIRCLE_FIT_MIN_ZOOM = 8.5;
 // 場所に寄ったときの見え方（Minami指示：ズーム14前後、pitch60前後）。
 const SPOT_FOCUS_ZOOM = 14;
 const SPOT_FOCUS_PITCH = 60;
@@ -997,7 +1005,7 @@ export class TerrainMapView {
     const bearing = this.map.getBearing();
     const camera = this.map.cameraForBounds(bounds, { padding, pitch, bearing });
     if (!camera) return;
-    const zoom = Math.max(camera.zoom, OVERVIEW_MIN_ZOOM);
+    const zoom = Math.max(camera.zoom, CIRCLE_FIT_MIN_ZOOM);
 
     this.map.easeTo({
       center: [dep.stop_lon, dep.stop_lat],
