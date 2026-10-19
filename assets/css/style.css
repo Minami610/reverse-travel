@@ -937,9 +937,15 @@ header p {
 }
 
 /* スライダーを動かして、まだ検索し直していない間だけ押せるボタンらしい見た目にする
-   （main.jsのupdateMobileBudgetOverlay()がこのクラスを付け外しする）。 */
+   （main.jsのupdateMobileBudgetOverlay()がこのクラスを付け外しする）。
+   【2026-10-20、36本目、Minami指示】以前は緑（--color-main、検索前の
+   #search-btnの既定色と同じ）だったが、PCの「この条件で検索」
+   （#search-btn.search-btn-pending、オレンジ）と色をそろえる。形（丸ピル）・
+   角丸・文字サイズはこのボタン本来のまま変えない（色・見た目の強さだけを
+   そろえる、というMinami指示のため）。 */
 #mobile-budget-search-btn.mobile-budget-search-btn-pending {
-  background-color: var(--color-main);
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-deep) 100%);
+  border-color: transparent;
   color: white;
 }
 

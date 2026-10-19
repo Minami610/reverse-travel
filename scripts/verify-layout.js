@@ -3061,6 +3061,26 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       cardsBeforeListDrag === cardsAfterListDrag && tabStillListAfterDrag,
       JSON.stringify({ cardsBeforeListDrag, cardsAfterListDrag, tabStillListAfterDrag })
     );
+    // 【2026-10-20、36本目、Minami指示】＋を2回押して検索し直す前（pending
+    // 状態）の「¥◯で探す」ボタンが、PCの「この条件で検索」
+    // （#search-btn.search-btn-pending）と同じオレンジ（--color-accent系の
+    // グラデーション）になっていること。以前は緑（--color-main、検索前の
+    // #search-btnの既定色と同じ）だった。
+    const pendingBtnStyle = await page.evaluate(() => {
+      const btn = document.getElementById('mobile-budget-search-btn');
+      const cs = getComputedStyle(btn);
+      return {
+        isPending: btn.classList.contains('mobile-budget-search-btn-pending'),
+        backgroundImage: cs.backgroundImage,
+      };
+    });
+    record(
+      `[${label}/一覧タブ] 予算変更後（検索前）の「¥◯で探す」ボタンがPCの「この条件で検索」と同じオレンジ`,
+      pendingBtnStyle.isPending
+        && pendingBtnStyle.backgroundImage.includes('gradient')
+        && !pendingBtnStyle.backgroundImage.includes('114, 176, 29') /* --color-main(緑)のrgbが含まれていない */,
+      JSON.stringify(pendingBtnStyle)
+    );
     await page.click('#mobile-budget-search-btn');
     await page.waitForFunction(
       (prev) => document.querySelectorAll('.spot-card').length !== prev || document.querySelector('.no-results') !== null,
@@ -4086,6 +4106,179 @@ async function circleFullyWithinFrame(page, mode) {
 const TEST_CIRCLE_RADIUS_ANIM_MS = 200;
 const TEST_CIRCLE_FIT_DEBOUNCE_MS = 150;
 const TEST_CIRCLE_FIT_DURATION_MS = 450;
+
+/**
+ * 【2026-10-20、36本目、Minami指示】検索した直後（初回の「この条件で検索」・
+ * 「¥◯で探す」）の地図合わせも、金額を変えたときと同じ「円に合わせる」計算
+ * （fitCircleToView、最低ズーム8.5）になっていること。以前は古い全体表示の
+ * 計算（fitToBudget、2Dは下限なし・3Dは最低ズーム9.5、スポット座標基準）の
+ * ままで、予算によっては円が画面のごく一部にしか見えなかったり、逆に
+ * はみ出したりしていた（Minami実機確認：富山駅前・往復¥500で円が小さすぎる、
+ * ¥1,500ではみ出す）。
+ * PC・400×464 × 2D/3D × ¥500/¥1500で、円の直径が見えている範囲の短辺の
+ * 7〜8割になることを検証する（35本目と同じ目標比率・同じ許容例外＝
+ * 400×464/3D/高予算で最低ズーム8.5に当たる場合を除く）。
+ */
+async function checkInitialSearchCircleFit(browser, baseUrl, savedPaths) {
+  console.log('\n=== 36本目：検索直後の地図合わせが「円に合わせる」計算になっていることの検証 ===');
+
+  for (const [vLabel, viewport] of Object.entries({ pc: VIEWPORTS.pc, own: { width: 400, height: 464 } })) {
+    for (const dim of ['2d', '3d']) {
+      for (const budget of [500, 1500]) {
+        const context = await browser.newContext({ viewport });
+        const page = await context.newPage();
+        const pageErrors = [];
+        page.on('pageerror', (e) => pageErrors.push(e.message));
+        await page.goto(baseUrl, { waitUntil: 'load' });
+        await page.waitForSelector('#departure-input');
+        await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+
+        // 【不具合修正】own/3D等、重いタブ切替＋3D化の組み合わせで、まれに
+        // どこかのクリック待ちが応答せず（GPU負荷等による環境要因と推定、
+        // 本セッションで既知の3D関連の負荷依存の揺らぎと同種）スイート全体が
+        // クラッシュすることがあった（実機相当の検証で発覚）。この関数内の
+        // 操作全体をtry/catchで囲み、万一失敗しても次の組み合わせへ進む。
+        try {
+        // セットアップ検索（3D切替をこの時点で済ませておく）。
+        await searchAt(page, '富山駅前', 1000);
+        if (vLabel !== 'pc') {
+          await page.click('.tab-btn[data-tab="map"]');
+          await page.waitForTimeout(300);
+        }
+        if (dim === '3d') {
+          await page.click('#map-dimension-toggle');
+          const became3d = await page.waitForFunction(
+            () => document.getElementById('map-area').classList.contains('mode-3d'),
+            { timeout: 30000 }
+          ).then(() => true).catch(() => false);
+          record(`[${vLabel}/${dim}/¥${budget}] 3D化（検証の前提）`, became3d);
+          if (!became3d) continue;
+          await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+          await page.waitForTimeout(1000);
+        }
+
+        // Coworkの再現条件と同じ「地図（2D/3Dどちらか）が既に見えている状態で、
+        // 改めて検索する」。
+        // 【不具合修正】当初はsearchAt()（「.spot-cardが見える」ことを前提に
+        // 待つ、page.waitForSelector()の既定state:'visible'）を使い、地図
+        // タブを見ている間（.spot-cardがある一覧タブはdisplay:none）は
+        // 検索前に一覧タブへ戻していた。しかしこれは3Dで別の不具合を誘発した：
+        // 一覧タブへ戻すと#spots-map-3dもdisplay:noneになり、検索の結果
+        // 呼ばれるfitCircleToView()自身のガード（container.clientWidth===0なら
+        // 何もしない、32本目Bの既存設計）に引っかかって地図合わせが無言で
+        // 空振りし、カメラがセットアップ検索（¥1000）のまま取り残される
+        // （own/3D/¥500で実機相当の検証により発覚：比率が0.19/0.35という
+        // 明らかな不一致になった）。タブを切り替えず「地図」タブを見たまま
+        // 検索できるよう、.spot-cardの出現をstate:'attached'（表示状態を
+        // 問わない）で待つ専用の検索処理に差し替える。
+        await ensureFormExpanded(page);
+        await page.fill('#departure-input', '');
+        await page.fill('#departure-input', '富山駅前');
+        await page.waitForTimeout(400);
+        await page.locator('.suggestion-item', { hasText: '富山駅前' }).first().click();
+        await page.evaluate((v) => {
+          const el = document.getElementById('budget-slider');
+          el.value = v;
+          el.dispatchEvent(new Event('input'));
+        }, budget);
+        await page.click('#search-btn');
+        await page.waitForSelector('.spot-card, .no-results', { timeout: 15000, state: 'attached' });
+        await page.waitForTimeout(300);
+        if (vLabel !== 'pc') {
+          await page.click('.tab-btn[data-tab="map"]');
+          await page.waitForTimeout(300);
+        }
+        await page.waitForTimeout(500);
+        if (dim === '3d') {
+          await page.waitForFunction(() => !window.__terrainMapForDebug.isMoving(), { timeout: 15000 }).catch(() => {});
+        }
+        await page.waitForTimeout(800);
+
+        const ratio = dim === '3d'
+          ? await page.evaluate(() => {
+              const tv = window.__terrainViewForDebug;
+              const map = window.__terrainMapForDebug;
+              const dep = tv._lastDepartureStation;
+              const radiusKm = tv._reachCircleRadiusKm;
+              const toRad = (d) => (d * Math.PI) / 180;
+              const toDeg = (r) => (r * 180) / Math.PI;
+              const R = 6371;
+              const dest = (lat, lon, bearingDeg, distanceKm) => {
+                const delta = distanceKm / R;
+                const theta = toRad(bearingDeg);
+                const phi1 = toRad(lat);
+                const lambda1 = toRad(lon);
+                const phi2 = Math.asin(Math.sin(phi1) * Math.cos(delta) + Math.cos(phi1) * Math.sin(delta) * Math.cos(theta));
+                const lambda2 = lambda1 + Math.atan2(Math.sin(theta) * Math.sin(delta) * Math.cos(phi1), Math.cos(delta) - Math.sin(phi1) * Math.sin(phi2));
+                return { lat: toDeg(phi2), lon: toDeg(lambda2) };
+              };
+              const n = dest(dep.stop_lat, dep.stop_lon, 0, radiusKm);
+              const s = dest(dep.stop_lat, dep.stop_lon, 180, radiusKm);
+              const e = dest(dep.stop_lat, dep.stop_lon, 90, radiusKm);
+              const w = dest(dep.stop_lat, dep.stop_lon, 270, radiusKm);
+              const pn = map.project([n.lon, n.lat]);
+              const ps = map.project([s.lon, s.lat]);
+              const pe = map.project([e.lon, e.lat]);
+              const pw = map.project([w.lon, w.lat]);
+              const vertDiameterPx = Math.hypot(pn.x - ps.x, pn.y - ps.y);
+              const horizDiameterPx = Math.hypot(pe.x - pw.x, pe.y - pw.y);
+              const rect = document.getElementById('map-area').getBoundingClientRect();
+              const shortSide = Math.min(rect.width, rect.height);
+              return { vertRatio: vertDiameterPx / shortSide, horizRatio: horizDiameterPx / shortSide, zoom: map.getZoom() };
+            })
+          : await page.evaluate(() => {
+              const mv = window.__mapViewForDebug;
+              const map = mv.map;
+              const [lat, lon] = mv.departureLatLng;
+              const radiusKm = mv._reachCircleRadiusKm;
+              const toRad = (d) => (d * Math.PI) / 180;
+              const toDeg = (r) => (r * 180) / Math.PI;
+              const R = 6371;
+              const dest = (latA, lonA, bearingDeg, distanceKm) => {
+                const delta = distanceKm / R;
+                const theta = toRad(bearingDeg);
+                const phi1 = toRad(latA);
+                const lambda1 = toRad(lonA);
+                const phi2 = Math.asin(Math.sin(phi1) * Math.cos(delta) + Math.cos(phi1) * Math.sin(delta) * Math.cos(theta));
+                const lambda2 = lambda1 + Math.atan2(Math.sin(theta) * Math.sin(delta) * Math.cos(phi1), Math.cos(delta) - Math.sin(phi1) * Math.sin(phi2));
+                return [toDeg(phi2), toDeg(lambda2)];
+              };
+              const n = dest(lat, lon, 0, radiusKm);
+              const s = dest(lat, lon, 180, radiusKm);
+              const e = dest(lat, lon, 90, radiusKm);
+              const w = dest(lat, lon, 270, radiusKm);
+              const pn = map.latLngToContainerPoint(n);
+              const ps = map.latLngToContainerPoint(s);
+              const pe = map.latLngToContainerPoint(e);
+              const pw = map.latLngToContainerPoint(w);
+              const vertDiameterPx = Math.hypot(pn.x - ps.x, pn.y - ps.y);
+              const horizDiameterPx = Math.hypot(pe.x - pw.x, pe.y - pw.y);
+              const rect = document.getElementById('map-area').getBoundingClientRect();
+              const shortSide = Math.min(rect.width, rect.height);
+              return { vertRatio: vertDiameterPx / shortSide, horizRatio: horizDiameterPx / shortSide, zoom: map.getZoom() };
+            });
+
+        const atZoomFloor = dim === '3d' ? ratio.zoom <= 8.55 : ratio.zoom <= 8.55;
+        const ratioOk = dim === '3d'
+          ? (ratio.vertRatio >= 0.65 && ratio.vertRatio <= 0.85) || (ratio.horizRatio >= 0.65 && ratio.horizRatio <= 0.85)
+          : (ratio.vertRatio >= 0.65 && ratio.vertRatio <= 0.85 && ratio.horizRatio >= 0.65 && ratio.horizRatio <= 0.85);
+        record(
+          `[${vLabel}/${dim}/¥${budget}] 検索直後、円の直径が見えている範囲の短辺の7〜8割（最低ズーム8.5に当たっている場合を除く）`,
+          ratioOk || atZoomFloor,
+          JSON.stringify({ ...ratio, atZoomFloor })
+        );
+        await checkNoHorizontalOverflow(page, `[${vLabel}/${dim}/¥${budget}] 検索直後`);
+
+        if (pageErrors.length > 0) record(`[${vLabel}/${dim}/¥${budget}] 検証中にページエラーが発生していない`, false, pageErrors.join('; '));
+        } catch (e) {
+          record(`[${vLabel}/${dim}/¥${budget}] 検証中にクラッシュしない`, false, e.message);
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  }
+}
 
 /**
  * 【2026-10-17、32本目B、Minami決定】予算の±・スライダー操作：まず到達円の
@@ -5566,6 +5759,7 @@ async function main() {
     await checkCrossDimensionSelectionScroll(browser, baseUrl, savedPaths);
     await checkReturnToOverview(browser, baseUrl, savedPaths);
     await checkCircleThenFit(browser, baseUrl, savedPaths);
+    await checkInitialSearchCircleFit(browser, baseUrl, savedPaths);
     await checkBreadcrumbTrail(browser, baseUrl, savedPaths);
     await checkBudgetSlider(browser, baseUrl, savedPaths);
     await checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths);

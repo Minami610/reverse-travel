@@ -1617,9 +1617,15 @@ header p {
 }
 
 /* スライダーを動かして、まだ検索し直していない間だけ押せるボタンらしい見た目にする
-   （main.jsのupdateMobileBudgetOverlay()がこのクラスを付け外しする）。 */
+   （main.jsのupdateMobileBudgetOverlay()がこのクラスを付け外しする）。
+   【2026-10-20、36本目、Minami指示】以前は緑（--color-main、検索前の
+   #search-btnの既定色と同じ）だったが、PCの「この条件で検索」
+   （#search-btn.search-btn-pending、オレンジ）と色をそろえる。形（丸ピル）・
+   角丸・文字サイズはこのボタン本来のまま変えない（色・見た目の強さだけを
+   そろえる、というMinami指示のため）。 */
 #mobile-budget-search-btn.mobile-budget-search-btn-pending {
-  background-color: var(--color-main);
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-deep) 100%);
+  border-color: transparent;
   color: white;
 }
 
@@ -5094,8 +5100,20 @@ class MapView {
     });
 
     this.applyBudget(budget);
+    // 【2026-10-20、36本目、Minami指示】検索直後の地図合わせを、金額操作時と
+    // 同じ「円に合わせる」計算（fitCircleToView、最低ズーム8.5）に揃える。
+    // fitToBudget()自体はこのまま呼ぶ（_overviewZoom・lastBounds・lastBudgetの
+    // 記録のため。「全体を見る」自体の計算は変えない、Minami指示）が、実際に
+    // カメラを置く位置はfitCircleToView()で上書きする。
     this.fitToBudget(budget, { animate: false });
     this.updateReachCircle(budget, { style: 'settled' });
+    this.fitCircleToView({ radiusKm: this.computeReachRadiusKm(budget), animate: false });
+    // 【不具合修正】_overviewZoomをfitToBudget()が計算した値（スポット座標
+    // 基準）のまま残すと、検索直後（実際のカメラはfitCircleToView()の位置）
+    // でisZoomedInPastOverview()が「もう全体より寄っている」と誤判定し、
+    // 「全体を見る」ボタンが検索直後から出てしまう。実際にカメラを置いた
+    // 位置（fitCircleToView()の結果）を基準に更新し直す。
+    if (this.map) this._overviewZoom = this.map.getZoom();
     if (reveal) this._startWaveReveal();
 
     // PC/スマホの切り替えやタブが非表示（display:none）のタイミングで
@@ -5257,38 +5275,67 @@ class MapView {
     const options = { padding: [48, 48], maxZoom: 16 };
     this._overviewZoom = Math.min(this.map.getBoundsZoom(bounds, false, L.point(48, 48)), options.maxZoom);
     if (reachPrefersReducedMotion()) {
-      this.map.fitBounds(bounds, options);
+      // 【2026-10-20、36本目、不具合修正】animate:falseをoptionsに含めず
+      // this.map.fitBounds()を呼ぶと、Leafletが「animateを指定しない」場合の
+      // 既定の挙動として、ズームの差が小さければ独自のCSSズームトランジション
+      // （既定で約0.25秒）を内部的に開始してしまう。これはfitToBudget()の
+      // 「animate:false（瞬時に合わせる）」という約束に反するだけでなく、
+      // 直後に別の瞬時なsetView()（render()が続けて呼ぶfitCircleToView()、
+      // 36本目）を呼んでも、先に始まっていたこのトランジションの完了イベント
+      // （_onZoomTransitionEnd）が後から発火し、fitCircleToView()が設定した
+      // ズームを無言で上書きしてしまう不具合があった（検索直後、円の比率が
+      // 目標の7〜8割から大きくずれる形で実機相当の検証で発覚）。
+      // animate:falseを明示し、Leaflet自身のトランジションも確実に無効化する。
+      this.map.fitBounds(bounds, { ...options, animate: false });
     } else if (animate) {
       this.map.flyToBounds(bounds, { ...options, duration: durationSec });
     } else {
-      this.map.fitBounds(bounds, options);
+      // 上のreachPrefersReducedMotion()分岐と同じ理由でanimate:falseを明示する。
+      this.map.fitBounds(bounds, { ...options, animate: false });
     }
     if (this.onFocusChange) this.onFocusChange(false);
   }
 
-  /** 直近のbounds（出発駅＋スポット）に再フィットする。地図が非表示の間に
-   * 描画された場合や、レイアウト切り替えでコンテナサイズが変わった際に使う */
+  /** 直近の検索条件に再フィットする。地図が非表示の間に描画された場合や、
+   * レイアウト切り替えでコンテナサイズが変わった際に使う。
+   * 【2026-10-20、36本目、不具合修正】以前はthis.lastBounds（fitToBudget()が
+   * 記録したスポット座標基準の範囲）へfitBounds()するだけだったため、
+   * render()内でfitCircleToView()（円に合わせる計算）を呼んだ直後でも、
+   * render()末尾のrequestAnimationFrame（コンテナがまだ非表示だった場合の
+   * 保険）やlayout-controller.jsのタブ切替時にこれが呼ばれると、次のフレームで
+   * 古いfitBounds()の結果に上書きされてしまっていた（PCで検索直後の円が
+   * 目標比率（短辺の7〜8割）からずれる不具合として実機相当の検証で発覚：
+   * ¥500で比率1.24、¥1000で1.28等）。検索直後と同じ「円に合わせる」計算へ
+   * 揃える。 */
   refitBounds() {
-    if (this.map && this.lastBounds.length > 0) {
-      // 【不具合修正、22本目】スマホで「一覧」タブを見ながら検索し、初めて
-      // 「地図」タブを開いたとき、ピンの位置が画面外にずれる不具合が実機相当の
-      // 検証で見つかった。原因はLeafletの実装そのもの：invalidateSize()は
-      // `if (!this._loaded) return this;` を内部で持ち、地図がまだ一度も
-      // fitBounds/setViewされていない（_loadedがfalse）間は何もしない。
-      // さらにgetSize()は`this._size && !this._sizeChanged`の間はコンテナを
-      // 再計測せず、作成時（非表示・0×0だった時点）にキャッシュした値を
-      // 返し続ける。結果、invalidateSize()を呼んでもコンテナが正しい寸法に
-      // なったことが地図に伝わらず、この直後のfitBounds()がgetBoundsZoom()を
-      // 0×0基準で計算して最大ズーム（16）に張り付いてしまっていた。
-      // _loadedがまだfalseのときだけ、Leaflet内部のキャッシュ（_size・
-      // _sizeChanged）を直接リセットし、次の計測でコンテナの実寸を
-      // 強制的に測り直させる（invalidateSize()では代替できないため、
-      // Leaflet内部プロパティへの直接アクセスで対処する）。
-      if (!this.map._loaded) {
-        this.map._size = null;
-        this.map._sizeChanged = true;
-      }
-      this.map.fitBounds(this.lastBounds, { padding: [36, 36], maxZoom: 16 });
+    if (!this.map) return;
+    // 【不具合修正、22本目】スマホで「一覧」タブを見ながら検索し、初めて
+    // 「地図」タブを開いたとき、ピンの位置が画面外にずれる不具合が実機相当の
+    // 検証で見つかった。原因はLeafletの実装そのもの：invalidateSize()は
+    // `if (!this._loaded) return this;` を内部で持ち、地図がまだ一度も
+    // fitBounds/setViewされていない（_loadedがfalse）間は何もしない。
+    // さらにgetSize()は`this._size && !this._sizeChanged`の間はコンテナを
+    // 再計測せず、作成時（非表示・0×0だった時点）にキャッシュした値を
+    // 返し続ける。結果、invalidateSize()を呼んでもコンテナが正しい寸法に
+    // なったことが地図に伝わらず、この直後のfitBounds()がgetBoundsZoom()を
+    // 0×0基準で計算して最大ズーム（16）に張り付いてしまっていた。
+    // _loadedがまだfalseのときだけ、Leaflet内部のキャッシュ（_size・
+    // _sizeChanged）を直接リセットし、次の計測でコンテナの実寸を
+    // 強制的に測り直させる（invalidateSize()では代替できないため、
+    // Leaflet内部プロパティへの直接アクセスで対処する）。
+    if (!this.map._loaded && this.lastBounds.length > 0) {
+      this.map._size = null;
+      this.map._sizeChanged = true;
+    }
+    const radiusKm = this.lastBudget != null ? this.computeReachRadiusKm(this.lastBudget) : 0;
+    if (radiusKm > 0) {
+      this.fitCircleToView({ radiusKm, animate: false });
+      if (this.map) this._overviewZoom = this.map.getZoom();
+    } else if (this.lastBounds.length > 0) {
+      // 到達範囲0km（0件検索）等、円が無いときだけ以前どおりスポット座標
+      // （実質は出発駅のみ）基準でフィットする。
+      // 【36本目、不具合修正】fitToBudget()と同じ理由でanimate:falseを明示する。
+      this.map.fitBounds(this.lastBounds, { padding: [36, 36], maxZoom: 16, animate: false });
     }
   }
 
@@ -5410,10 +5457,16 @@ class MapView {
    * 出発駅からの半径で決まる円の外接範囲を使う）。2Dに向き（bearing）・
    * 傾き（pitch）は無いため変更不要。中心は出発駅に固定する（円は必ず
    * 出発駅中心のため、対称なpaddingを使えば出発駅中心のままで収まる）。
+   * 【2026-10-20、36本目、Minami指示】検索直後の初回表示にも同じ計算を使う
+   * ため、半径（radiusKm）・アニメーションの有無（animate）を上書きできる
+   * ようにした。省略時は今まで通り_reachCircleRadiusKm（円の現在の描画値）・
+   * animate:trueのまま（予算操作時の挙動は変えない）。検索直後は
+   * _reachCircleRadiusKmがまだ0→目標値へアニメーション中（_animateCircleRadius()
+   * 参照）のため、目標値（computeReachRadiusKm()）を直接渡す必要がある。
+   * @param {{radiusKm?: number, animate?: boolean}} [opts]
    */
-  fitCircleToView() {
+  fitCircleToView({ radiusKm = this._reachCircleRadiusKm, animate = true } = {}) {
     if (!this.map || !this.departureLatLng) return;
-    const radiusKm = this._reachCircleRadiusKm;
     if (!radiusKm || radiusKm <= 0) return;
     if (!this.isContainerVisible()) return;
     const [lat, lon] = this.departureLatLng;
@@ -5444,7 +5497,7 @@ class MapView {
     );
     const fitZoom = this.map.getBoundsZoom(bounds, false, L.point(padding, padding));
     const zoom = Math.min(Math.max(fitZoom, MAP_CIRCLE_FIT_MIN_ZOOM), 16);
-    if (reachPrefersReducedMotion()) {
+    if (reachPrefersReducedMotion() || !animate) {
       this.map.setView(this.departureLatLng, zoom, { animate: false });
     } else {
       this.map.flyTo(this.departureLatLng, zoom, { duration: MAP_CIRCLE_FIT_DURATION_SEC });
@@ -7626,7 +7679,17 @@ class ReverseTravel {
     // activateTerrainMap()が後から呼ばれたときに自動で反映される）。
     if (this.terrainMapView) {
       this.terrainMapView.render(departureStation, this.currentAllSpots, budget, { reveal: true });
-      this.terrainMapView.fitToBudget(budget);
+      // 【2026-10-20、36本目、Minami指示】検索直後の地図合わせを、金額操作時と
+      // 同じ「円に合わせる」計算（fitCircleToView、最低ズーム8.5）に揃える。
+      // 以前はfitToBudget()（スポット座標基準・最低ズーム9.5）のままで、
+      // 予算によっては円がごく一部にしか見えない／画面からはみ出すことがあった
+      // （Minami実機確認：富山駅前・往復¥500で円が小さすぎる、¥1,500ではみ出す）。
+      // 「全体を見る」自体の計算は変えない（returnToOverview()は引き続き
+      // fitToBudget()を使う）。
+      this.terrainMapView.fitCircleToView({
+        radiusKm: this.terrainMapView.computeReachRadiusKm(budget),
+        animate: false,
+      });
     }
 
     // 【2026-10-14、25本目、不具合修正】updateMobileBudgetOverlay()・

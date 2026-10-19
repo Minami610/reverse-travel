@@ -853,17 +853,29 @@ export class TerrainMapView {
    * @param {{style?: 'live'|'settled'}} [opts] - settled:検索確定後（薄くする）
    */
   updateReachCircle(budget, { style = 'live' } = {}) {
+    this._animateCircleRadius(this.computeReachRadiusKm(budget), style);
+  }
+
+  /**
+   * 【2026-10-20、36本目】指定した予算以内で一番遠い場所までの直線距離（km）。
+   * updateReachCircle()が円の半径アニメーションの目標として使うのと同じ計算を、
+   * アニメーション中の値（_reachCircleRadiusKm）を介さず直接呼べるよう独立
+   * させた（検索直後にfitCircleToView()へ渡す「最終的な」半径が必要なため。
+   * map-view.jsのcomputeReachRadiusKm()と同じ役割・同じ名前）。
+   * @param {number} budget
+   * @returns {number}
+   */
+  computeReachRadiusKm(budget) {
     const dep = this._lastDepartureStation;
-    let maxKm = 0;
-    if (dep && isFiniteNumber(dep.stop_lat) && isFiniteNumber(dep.stop_lon)
-      && this._lastSpots && this._lastSpots.length > 0) {
-      maxKm = this._lastSpots.reduce((max, s) => {
-        if (!isFiniteNumber(s.latitude) || !isFiniteNumber(s.longitude)) return max;
-        if (s.source_round_trip_fare > budget) return max;
-        return Math.max(max, haversineKm(dep.stop_lat, dep.stop_lon, s.latitude, s.longitude));
-      }, 0);
+    if (!dep || !isFiniteNumber(dep.stop_lat) || !isFiniteNumber(dep.stop_lon)
+      || !this._lastSpots || this._lastSpots.length === 0) {
+      return 0;
     }
-    this._animateCircleRadius(maxKm, style);
+    return this._lastSpots.reduce((max, s) => {
+      if (!isFiniteNumber(s.latitude) || !isFiniteNumber(s.longitude)) return max;
+      if (s.source_round_trip_fare > budget) return max;
+      return Math.max(max, haversineKm(dep.stop_lat, dep.stop_lon, s.latitude, s.longitude));
+    }, 0);
   }
 
   /**
@@ -957,11 +969,17 @@ export class TerrainMapView {
    * ハンドルで向き・傾きを変えたあとに＋／−を押しても戻らない）。
    * 中心は出発駅に固定する（円は必ず出発駅中心のため、対称な余白
    * （padding）を使えば出発駅中心＝cameraForBounds()が計算する中心と一致する）。
+   * 【2026-10-20、36本目、Minami指示】検索直後の初回表示にも同じ計算を使う
+   * ため、半径（radiusKm）・アニメーションの有無（animate）を上書きできる
+   * ようにした。省略時は今まで通り_reachCircleRadiusKm（円の現在の描画値）・
+   * animate:trueのまま（予算操作時の挙動は変えない）。検索直後は
+   * _reachCircleRadiusKmがまだ0→目標値へアニメーション中（_animateCircleRadius()
+   * 参照）のため、目標値を直接渡す必要がある。
+   * @param {{radiusKm?: number, animate?: boolean}} [opts]
    */
-  fitCircleToView() {
+  fitCircleToView({ radiusKm = this._reachCircleRadiusKm, animate = true } = {}) {
     if (!this.map) return;
     const dep = this._lastDepartureStation;
-    const radiusKm = this._reachCircleRadiusKm;
     if (!dep || !isFiniteNumber(dep.stop_lat) || !isFiniteNumber(dep.stop_lon) || !radiusKm || radiusKm <= 0) {
       return;
     }
@@ -1026,7 +1044,7 @@ export class TerrainMapView {
       zoom,
       pitch,
       bearing,
-      duration: prefersReducedMotion() ? 0 : CIRCLE_FIT_DURATION_MS,
+      duration: (prefersReducedMotion() || !animate) ? 0 : CIRCLE_FIT_DURATION_MS,
       padding: CLEAR_PADDING,
     });
     this._focusedOnSpot = false;

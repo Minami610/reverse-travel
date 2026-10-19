@@ -1362,7 +1362,17 @@ class ReverseTravel {
     // activateTerrainMap()が後から呼ばれたときに自動で反映される）。
     if (this.terrainMapView) {
       this.terrainMapView.render(departureStation, this.currentAllSpots, budget, { reveal: true });
-      this.terrainMapView.fitToBudget(budget);
+      // 【2026-10-20、36本目、Minami指示】検索直後の地図合わせを、金額操作時と
+      // 同じ「円に合わせる」計算（fitCircleToView、最低ズーム8.5）に揃える。
+      // 以前はfitToBudget()（スポット座標基準・最低ズーム9.5）のままで、
+      // 予算によっては円がごく一部にしか見えない／画面からはみ出すことがあった
+      // （Minami実機確認：富山駅前・往復¥500で円が小さすぎる、¥1,500ではみ出す）。
+      // 「全体を見る」自体の計算は変えない（returnToOverview()は引き続き
+      // fitToBudget()を使う）。
+      this.terrainMapView.fitCircleToView({
+        radiusKm: this.terrainMapView.computeReachRadiusKm(budget),
+        animate: false,
+      });
     }
 
     // 【2026-10-14、25本目、不具合修正】updateMobileBudgetOverlay()・
