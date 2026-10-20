@@ -1504,7 +1504,10 @@ class ReverseTravel {
         // クリックすると無関係な別の場所を押してしまう）。根本原因・調査の
         // 経緯はmap-view.jsのforceMarkerReposition()参照（render()完了後にも
         // 同じ問題が起きるため、そちらと処理を共通化した）。
-        this.mapView.forceMarkerReposition();
+        // 【2026-10-21、40本目、不具合修正】3D表示中に検索していた場合、2D側の地図合わせ・
+        // ピンの塗り分け・円の描き直しが保留されたままになっていた（MapView.handleShown()
+        // 参照）。forceMarkerReposition()に加えて、それらもここでやり直す。
+        this.mapView.handleShown();
       }
     });
     // 【2026-10-15、11本目②】「全体を見る」ボタンの表示判定は2D/3Dそれぞれ

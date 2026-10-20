@@ -107,20 +107,11 @@ export class LayoutController {
         // 呼ぶ順に直した（refitBounds()自体が、地図がまだ一度もfitBounds/
         // setViewされていない場合のLeaflet内部キャッシュの問題に対処する。
         // map-view.jsのrefitBounds()のコメント参照）。
-        this.mapView.map.invalidateSize();
-        this.mapView.refitBounds();
-        this.mapView.forceMarkerReposition();
-        // コンテナが0×0の間にスライダーが動かされ、マーカーの塗り替えを
-        // 保留していた場合（MapView.applyBudget参照）、実寸を得たここで
-        // 改めて反映する。
-        if (this.mapView.lastBudget != null) this.mapView.applyBudget(this.mapView.lastBudget);
-        // 【2026-10-13、10本目②】検索時に地図タブが非表示（コンテナ0×0）だった
-        // ため、波のように点を出す演出が空振りに終わっていた場合、実寸を得た
-        // ここで改めてやり直す（MapView._startWaveReveal参照）。
-        if (this.mapView._pendingWaveReveal) {
-          this.mapView._pendingWaveReveal = false;
-          this.mapView._startWaveReveal();
-        }
+        // 【40本目】以下の一連の処理（invalidateSize→refitBounds→forceMarkerReposition→
+        // 保留していた塗り替え・波の演出のやり直し）は、2D/3D切替で2Dに戻ったときにも
+        // 同じことが必要だったため、MapView.handleShown()へまとめた（円の描き直しも追加）。
+        // タブ切替では従来どおり、毎回検索直後の見え方へ合わせ直す（forceRefit:true）。
+        this.mapView.handleShown({ forceRefit: true });
       }
       if (this.terrainMapView?.map) {
         this.terrainMapView.resize();

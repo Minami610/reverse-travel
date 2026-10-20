@@ -134,6 +134,7 @@ export class MapView {
     this._waveToken = 0;
     this._waveTimers = [];
     this._pendingWaveReveal = false; // 【2026-10-13、10本目②】layout-controller.jsのinvalidateMapSize()参照
+    this._needsSearchFit = false; // 【40本目】見えていない間に検索があり、見えたときに検索直後の見え方へ合わせ直す必要がある
     this._overviewZoom = null; // 【2026-10-15、11本目②】直近のfitToBudget()が合わせたズーム（寄っているか判定用）
 
     this.onSelectionChange = null; // (spotId) => void … ピン選択と一覧パネルの連動用
@@ -241,7 +242,10 @@ export class MapView {
     // 揃えたため、検索直後と「全体を見る」の見え方は同じになる。
     this.fitToBudget(budget, { animate: false });
     this.updateReachCircle(budget, { style: 'settled' });
-    this.fitCircleToView({ radiusKm: this.computeReachRadiusKm(budget), animate: false });
+    const fittedZoom = this.fitCircleToView({ radiusKm: this.computeReachRadiusKm(budget), animate: false });
+    // 【40本目、不具合修正】3D表示中など2Dが見えていない間の検索では、ここで合わせられない。
+    // 見えたとき（handleShown()）に検索直後の見え方へ合わせ直すため覚えておく。
+    this._needsSearchFit = fittedZoom == null;
     // 【不具合修正】_overviewZoomをfitToBudget()が計算した値（スポット座標
     // 基準）のまま残すと、検索直後（実際のカメラはfitCircleToView()の位置）
     // でisZoomedInPastOverview()が「もう全体より寄っている」と誤判定し、
@@ -428,6 +432,38 @@ export class MapView {
       this.map.fitBounds(bounds, { ...options, animate: false });
     }
     if (this.onFocusChange) this.onFocusChange(false);
+  }
+
+  /**
+   * 【2026-10-21、40本目、不具合修正】2Dの地図が見えるようになったとき（2D/3D切替で
+   * 2Dに戻ったとき・スマホで地図タブを開いたとき）に呼ぶ。
+   * 3D表示中に検索した（または裏の¥2000取得がrender()をやり直した）場合、2Dは
+   * 非表示（display:none）のため、render()の中の「地図合わせ」「ピンの塗り分け
+   * （applyBudget）」「円の描き直し（_paintReachCircle）」がすべて保留されたままに
+   * なる。以前は2D/3D切替（main.jsのapplyMapMode()）がforceMarkerReposition()しか
+   * 呼ばず、これらを誰もやり直していなかった（Minami実機確認：富山駅北口・往復¥500で、
+   * 2Dにすると地図が寄りすぎ・ピンで画面が埋まり円が見えない。再現：3Dで¥2000→¥500と
+   * 検索してから2Dに戻すと、ズームは¥2000のまま・円は18.2kmのまま・¥500を超える
+   * ピンも全部表示）。
+   * @param {{forceRefit?: boolean}} [opts] - true：保留が無くても検索直後の見え方へ
+   *   合わせ直す（スマホのタブ切替の従来の動き、layout-controller.js）。false（既定）：
+   *   2D/3D切替。見えていない間に検索があったときだけ合わせ直し、そうでなければ
+   *   ユーザーが2Dで見ていた位置のまま（従来どおり）にする。
+   */
+  handleShown({ forceRefit = false } = {}) {
+    if (!this.map || !this.isContainerVisible()) return;
+    this.map.invalidateSize();
+    if (forceRefit || this._needsSearchFit) {
+      this.refitBounds();
+      this._needsSearchFit = false;
+    }
+    this.forceMarkerReposition();
+    if (this.lastBudget != null) this.applyBudget(this.lastBudget);
+    if (this._reachCircleRadiusKm > 0) this._paintReachCircle(this._reachCircleRadiusKm, this._pendingCircleStyle);
+    if (this._pendingWaveReveal) {
+      this._pendingWaveReveal = false;
+      this._startWaveReveal();
+    }
   }
 
   /** 直近の検索条件に再フィットする。地図が非表示の間に描画された場合や、

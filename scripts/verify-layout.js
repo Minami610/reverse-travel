@@ -5823,6 +5823,130 @@ async function checkReturnToListMatchesSearchView(browser, baseUrl, savedPaths) 
 }
 
 /**
+ * 【2026-10-21、40本目、不具合修正】2Dで、検索した直後の見え方（円が短辺の0.75）になって
+ * いること。3D表示中に検索すると、非表示の2D側では地図合わせ・ピンの塗り分け・円の
+ * 描き直しが保留されたままになり、2Dへ切り替えても誰もやり直していなかった（Minami実機
+ * 確認：富山駅北口・往復¥500で、2Dにすると寄りすぎ・ピンで画面が埋まり円が見えない）。
+ * PC、富山駅北口・往復¥500で次の3通りを確かめる：
+ *   「3Dで検索 → 2Dに切り替え」「2Dで検索」「2Dで検索 → 3Dに切り替え → 2Dに戻す」。
+ * どの場合も、円の直径が短辺の0.75前後・描かれている円が今の半径・¥500を超えるピンは
+ * 出ていないこと。あわせて「2Dで検索」した直後のスクリーンショットを撮る。
+ */
+async function checkTwoDSearchViewAfterModeSwitch(browser, baseUrl, savedPaths) {
+  console.log('\n=== 40本目：2Dで検索した直後の見え方（3Dとの切り替えを含む） ===');
+  const state2d = (page) => page.evaluate(() => {
+    const mv = window.__mapViewForDebug;
+    const map = mv.map;
+    const [lat, lon] = mv.departureLatLng;
+    const toRad = (d) => (d * Math.PI) / 180;
+    const toDeg = (r) => (r * 180) / Math.PI;
+    const r = mv._reachCircleRadiusKm;
+    const d = r / 6371;
+    const p1 = toRad(lat);
+    const lon2 = toRad(lon) + Math.atan2(Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p1));
+    const pe = map.latLngToContainerPoint([lat, toDeg(lon2)]);
+    const pc = map.latLngToContainerPoint([lat, lon]);
+    const size = map.getSize();
+    let shownOverBudget = 0;
+    mv.markersBySpotId.forEach((marker, id) => {
+      const el = marker.getElement();
+      if (el && el.style.display !== 'none' && mv.fareBySpotId.get(id) > mv.lastBudget) shownOverBudget++;
+    });
+    return {
+      ratio: (2 * Math.hypot(pe.x - pc.x, pe.y - pc.y)) / Math.min(size.x, size.y),
+      radiusKm: r,
+      drawnKm: mv._reachCircle ? mv._reachCircle.getRadius() / 1000 : null,
+      shownOverBudget,
+      zoom: map.getZoom(),
+    };
+  });
+  const check = async (page, label) => {
+    await page.waitForTimeout(400);
+    await page.waitForFunction(() => {
+      const mv = window.__mapViewForDebug;
+      return mv._circleAnimFrame == null && !mv.map._flyToFrame;
+    }, { timeout: 10000 }).catch(() => {});
+    const s = await state2d(page);
+    record(
+      `${label} 円の直径が短辺の0.75前後（0.7〜0.8）・描かれている円が今の半径・¥500を超えるピンが出ていない`,
+      s.ratio >= 0.7 && s.ratio <= 0.8 && s.drawnKm !== null && Math.abs(s.drawnKm - s.radiusKm) < 0.01 && s.shownOverBudget === 0,
+      JSON.stringify(s)
+    );
+  };
+  const to3d = async (page, label) => {
+    await page.click('#map-dimension-toggle');
+    const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+    record(`${label} 3D化（検証の前提）`, ok);
+    if (ok) await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+    return ok;
+  };
+  const to2d = async (page) => {
+    await page.click('#map-dimension-toggle');
+    await page.waitForFunction(() => !document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).catch(() => {});
+  };
+  const newPage = async () => {
+    const context = await browser.newContext({ viewport: VIEWPORTS.pc });
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    return { context, page, errors };
+  };
+
+  // 「3Dで検索 → 2Dに切り替え」：2Dで¥2000を見てから3Dにし、3Dのまま¥500で検索して2Dに戻す
+  // （2D側に古いズーム・古い円・¥500を超えるピンが残っていた再現手順）。
+  {
+    const { context, page, errors } = await newPage();
+    const label = '[40/pc] 3Dで検索→2Dに切り替え：';
+    try {
+      await searchAtAndWaitPrefetch(page, '富山駅北口', 2000);
+      if (await to3d(page, label)) {
+        await searchAtAndWaitPrefetch(page, '富山駅北口', 500);
+        await page.waitForTimeout(500);
+        await to2d(page);
+        await check(page, label);
+      }
+      record(`${label} ページエラーが出ていない`, errors.length === 0, errors.join(' / '));
+    } catch (e) {
+      record(`${label} 検証中にクラッシュしない`, false, e.message);
+    } finally {
+      await context.close();
+    }
+  }
+  // 「2Dで検索」→「3Dに切り替え → 2Dに戻す」。
+  {
+    const { context, page, errors } = await newPage();
+    const label = '[40/pc] 2Dで検索：';
+    try {
+      await searchAtAndWaitPrefetch(page, '富山駅北口', 500);
+      await check(page, label);
+      // 地図（タイル）の読み込みが終わってから撮る。
+      await page.waitForFunction(() => {
+        const tiles = [...document.querySelectorAll('#spots-map .leaflet-tile')];
+        return tiles.length > 0 && tiles.every((t) => t.classList.contains('leaflet-tile-loaded'));
+      }, { timeout: 30000 }).catch(() => {});
+      await page.waitForTimeout(300);
+      const shotPath = path.join(screenshotDir, 'round40-2d-north-500-pc.png');
+      await page.screenshot({ path: shotPath, clip: await page.locator('#map-area').boundingBox() });
+      savedPaths.push(shotPath);
+      const label2 = '[40/pc] 2Dで検索→3Dに切り替え→2Dに戻す：';
+      if (await to3d(page, label2)) {
+        await page.waitForTimeout(500);
+        await to2d(page);
+        await check(page, label2);
+      }
+      record(`${label} ページエラーが出ていない`, errors.length === 0, errors.join(' / '));
+    } catch (e) {
+      record(`${label} 検証中にクラッシュしない`, false, e.message);
+    } finally {
+      await context.close();
+    }
+  }
+}
+
+/**
  * 【2026-10-11、6本目E】「見てきた場所」の足あと表示を検証する。
  * 高松築港・往復¥1000の1件目「多和神社」は、実データ確認済みで
  * 「この先へ」を2回たどれる（多和神社→志度寺→玉泉寺）ため、3か所たどる
@@ -6673,6 +6797,7 @@ async function main() {
     await checkInitialSearchCircleFit(browser, baseUrl, savedPaths);
     await checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths);
     await checkReturnToListMatchesSearchView(browser, baseUrl, savedPaths);
+    await checkTwoDSearchViewAfterModeSwitch(browser, baseUrl, savedPaths);
     await checkBreadcrumbTrail(browser, baseUrl, savedPaths);
     await checkBudgetSlider(browser, baseUrl, savedPaths);
     await checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths);
