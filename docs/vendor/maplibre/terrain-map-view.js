@@ -65,23 +65,12 @@ const HILLSHADE_HIGHLIGHT_COLOR_EXPR = ['interpolate', ['linear'], ['zoom'], BG_
 const BG_PALE_LAYER_ID = 'gsi-bg-pale';
 const BG_AERIAL_LAYER_ID = 'gsi-bg-aerial';
 
-// 【2026-10-11、5本目】俯瞰（fitToBudget）の引きすぎ対策：余白は地図の大きさの
-// 比率（短辺の8%）にし、ズームの下限（9.5）を設ける。maxZoomではなく下限で
-// 抑えるのは、Minami指示「上限で入りきらない点は画面の外に出てよい」ため
-// （fitBoundsのmaxZoomは「寄りすぎ」を防ぐ上限であり、「引きすぎ」を防ぐ
-// 下限が無いのが今回の不具合だった）。
-const OVERVIEW_PADDING_RATIO = 0.08;
-const OVERVIEW_MIN_ZOOM = 9.5;
-// 【2026-10-20、37本目】検索直後（36本目）・「全体を見る」（37本目）はどちらも
-// fitCircleToView()に揃えたため、OVERVIEW_MIN_ZOOM(9.5)を使うのは今は
-// fitToBudget()を直接呼ぶ「← 一覧に戻る」（main.jsのshowResultsList()）だけ。
-// 【2026-10-19、34本目、Minami決定：B】「全体を見る」・検索直後の全体表示
-// （fitToBudget()）は今までどおりOVERVIEW_MIN_ZOOM(9.5)のまま変えない。
-// 一方、32本目Bの「金額を変えて円を合わせる」（fitCircleToView()）だけは、
-// 小さいスマホ（400×464）の3Dで円が枠からはみ出したまま戻らないことがある
-// （9.5にかかって、それ以上は引けないため）。円を合わせるときだけ、より
-// ゆるい下限（8.5）を使う。8.5でも収まらないときだけ、はみ出しを許す
-// （Minami指示：従来どおり「入りきらない点は画面の外に出てよい」）。
+// 【2026-10-19、34本目、Minami決定：B】円を合わせるとき（fitCircleToView()）の最低ズーム。
+// 小さいスマホ（400×464）の3Dで円が枠からはみ出したまま戻らないことがあったため、
+// 旧「全体表示」（fitToBudget()、最低ズーム9.5）より、ゆるい下限（8.5）にした。
+// 8.5でも収まらないときだけ、はみ出しを許す（Minami指示：「入りきらない点は画面の
+// 外に出てよい」）。【39本目】検索直後・「全体を見る」・「← 一覧に戻る」・金額操作の
+// すべてがfitCircleToView()に揃い、旧fitToBudget()と9.5は削除した。
 const CIRCLE_FIT_MIN_ZOOM = 8.5;
 // 場所に寄ったときの見え方（Minami指示：ズーム14前後、pitch60前後）。
 const SPOT_FOCUS_ZOOM = 14;
@@ -360,7 +349,7 @@ export class TerrainMapView {
     this._lastSpots = null;
     this._lastBudget = null;
     this._flySpotToken = 0; // 【2026-10-13、8本目】flyToSpot()の「降りる→傾ける」演出を、ユーザー操作や次のflyToSpot呼び出しで無効化するための世代カウンタ
-    this._focusedOnSpot = false; // 【2026-10-15、11本目②】flyToSpot()で寄っている間true。fitToBudget()で全体に戻るとfalse
+    this._focusedOnSpot = false; // 【2026-10-15、11本目②】flyToSpot()で寄っている間true。fitCircleToView()で円に合わせるとfalse
     this._flyFocusedSpotId = null; // 【2026-10-15、26本目】_focusedOnSpotがtrueのとき、今寄っているspot.id
     this._reachCircleRadiusKm = 0; // 【2026-10-13、10本目②】現在描画中の円の半径（なめらかな変化の起点）
     this._pendingCircleStyle = 'live';
@@ -370,6 +359,7 @@ export class TerrainMapView {
     this._reachCircleTargetKm = 0; // 【37本目】半径アニメーションの行き先（地図合わせの判断は途中の値ではなくこれを使う）
     this._circleFitAnim = null; // 【37本目】{zoom}：fitCircleToView()が動かしている最中の行き先ズーム（moveendで消す）
     this._circleWave = null; // 【37本目】＋の波：{fromKm, toKm, radiusKm, opacity, frame}
+    this._pendingReturnToSearchView = false; // 【39本目】地図が見えていない間に「← 一覧に戻る」が押された
     this._waveFrame = null; // requestAnimationFrameのID（検索後の点の波の演出）
     this._waveToken = 0; // 保留中の波の演出を無効化する世代カウンタ（新しい検索・render()で進める）
   }
@@ -710,6 +700,7 @@ export class TerrainMapView {
   render(departureStation, spots, budget, { reveal = false } = {}) {
     this._cancelFitCircleToView(); // 新しい検索で、前の予算操作から保留中の地図合わせは無効化する
     this._cancelCircleWave();
+    this._pendingReturnToSearchView = false; // 新しい検索の見え方が優先
     this._lastDepartureStation = departureStation;
     this._lastSpots = spots;
     this._lastBudget = budget;
@@ -1222,71 +1213,10 @@ export class TerrainMapView {
     if (this.onFocusChange) this.onFocusChange(false);
   }
 
-  /**
-   * スライダーを指から離したときに呼ぶ。帯に入る点・安い点（=budget以下すべて）が
-   * 画面に収まるよう、滑らかにカメラを引く/寄せる（Minami指示）。
-   * ドラッグ中は呼ばない（カクつき防止）。
-   *
-   * 【2026-10-11修正、5本目】固定96pxの余白・maxZoom13のみ（下限無し）だと、
-   * 予算を上げて対象範囲が北陸全体規模に広がったとき、画面に対して相対的に
-   * 余白が小さすぎる・引きの下限が無いため「斜めになっただけの遠景」まで
-   * 引いてしまい、3Dの良さが見えなくなっていた（Minami実機確認）。
-   * 余白を地図の大きさの比率（短辺の8%）にし、引きの下限（ズーム9.5）を
-   * 設けた。下限はMapLibreのfitBounds自体には無い（maxZoomは寄りすぎを防ぐ
-   * 上限専用）ため、cameraForBounds()で計算だけ行い、結果のズームが下限を
-   * 下回ったら9.5に引き上げてeaseToで適用する。下限で全点が入りきらない
-   * 場合は出発駅を中心にする（Minami指示：入りきらない点は画面の外に出てよい）。
-   * 【2026-10-15、11本目②】この「全体の位置」に戻すたびに_focusedOnSpotを
-   * falseにし、onFocusChangeで「全体を見る」ボタンの表示を更新する。
-   * @param {number} budget
-   * @param {{durationMs?: number}} [opts] - 既定600ms。予算操作時の自動復帰・
-   *   「全体を見る」ボタンではMinami指示の1.5秒前後（RETURN_TO_OVERVIEW_DURATION_MS）を渡す。
-   */
-  fitToBudget(budget, { durationMs = 600 } = {}) {
-    if (!this.map) return;
-    this._cancelFitCircleToView();
-    const visible = (this._lastSpots || []).filter(
-      (s) => isFiniteNumber(s.latitude) && isFiniteNumber(s.longitude) && s.source_round_trip_fare <= budget
-    );
-    if (visible.length === 0) return;
-    const lngs = visible.map((s) => s.longitude);
-    const lats = visible.map((s) => s.latitude);
-    if (this._lastDepartureStation) {
-      lngs.push(this._lastDepartureStation.stop_lon);
-      lats.push(this._lastDepartureStation.stop_lat);
-    }
-    const bounds = [
-      [Math.min(...lngs), Math.min(...lats)],
-      [Math.max(...lngs), Math.max(...lats)],
-    ];
-
-    const container = this.map.getContainer();
-    const shortSide = Math.max(1, Math.min(container.clientWidth, container.clientHeight));
-    const padding = Math.round(shortSide * OVERVIEW_PADDING_RATIO);
-
-    const camera = this.map.cameraForBounds(bounds, { padding, pitch: DEFAULT_PITCH });
-    if (!camera) return;
-    const zoomBelowFloor = camera.zoom < OVERVIEW_MIN_ZOOM;
-    const zoom = zoomBelowFloor ? OVERVIEW_MIN_ZOOM : camera.zoom;
-    const center = zoomBelowFloor && this._lastDepartureStation
-      ? [this._lastDepartureStation.stop_lon, this._lastDepartureStation.stop_lat]
-      : camera.center;
-
-    // 【2026-10-13、10本目①】向き（bearing）は変えない（Minami指示）。現在の
-    // bearingをそのまま渡すことで、実質「変えない」になる。
-    // 【2026-10-13、20本目修正】flyToSpot()で設定した帯よけのpadding
-    // （REVEAL_ABOVE_BAND_PADDING）が残ったままだと、MapLibreのpaddingは
-    // 明示的に指定しない限り残り続けるため、全体表示の構図（短い辺の8%・
-    // 最小ズーム9.5）が狂う。ここで明示的に0へ戻す。
-    this.map.easeTo({
-      center, zoom, pitch: DEFAULT_PITCH, bearing: this.map.getBearing(),
-      duration: prefersReducedMotion() ? 0 : durationMs,
-      padding: CLEAR_PADDING,
-    });
-    this._focusedOnSpot = false;
-    this._flyFocusedSpotId = null;
-    if (this.onFocusChange) this.onFocusChange(false);
-  }
+  // 【2026-10-20、39本目】ここにあった旧「全体表示」fitToBudget()（スポット座標基準・
+  // 余白は短辺の8%・最低ズーム9.5）は、検索直後（36本目）・「全体を見る」（37本目）・
+  // 「← 一覧に戻る」（39本目）がすべてfitCircleToView()に揃い、呼び出し元が無くなったため
+  // 削除した（経緯はgit logの5本目・34本目・37本目・39本目を参照）。
 
   /**
    * 【2026-10-15、11本目②、Minami決定：C】「全体を見る」ボタン・予算操作時の
@@ -1296,6 +1226,35 @@ export class TerrainMapView {
    */
   returnToOverview() {
     if (!this._focusedOnSpot || this._lastBudget == null) return;
+    this.returnToSearchView({ durationMs: RETURN_TO_OVERVIEW_DURATION_MS });
+  }
+
+  /**
+   * 【2026-10-20、39本目、Minami決定】検索した直後と同じ見え方（最後に検索した金額の円に
+   * fitCircleToView()で0.75、傾き57°、向きは変えない）へ戻る。「全体を見る」
+   * （returnToOverview()、寄っているときだけ）と「← 一覧に戻る」（main.jsの
+   * showResultsList()、以前はfitToBudget()・最低ズーム9.5）の共通処理。
+   * スマホで詳細画面から一覧タブへ戻ったときのように、地図が見えていない
+   * （コンテナ0×0）ときは合わせられないため、次に地図が見えたとき（resize()）に
+   * 合わせ直す（以前のfitToBudget()も、見えていない間に呼ばれた分のカメラ位置は
+   * 地図タブを開いたときにそのまま残っていた）。
+   * @param {{durationMs?: number}} [opts]
+   */
+  returnToSearchView({ durationMs = CIRCLE_FIT_DURATION_MS } = {}) {
+    if (!this.map || this._lastBudget == null) return;
+    const container = this.map.getContainer();
+    if (container.clientWidth === 0 || container.clientHeight === 0) {
+      this._pendingReturnToSearchView = true;
+      return;
+    }
+    this._pendingReturnToSearchView = false;
+    // 詳細画面のあいだ地図が非表示（display:none）だった直後は、MapLibreが内部に
+    // 持つ地図の大きさがまだ古いまま（大きさの変化の検知は非同期）で、そのまま
+    // 合わせると検索直後とズームがずれる（400×464で実測：0.4ずれた）。先に確定させる。
+    this.map.resize();
+    // 場所へ寄る途中（flyToSpot()の「降りる→傾ける」の後半が保留中）に戻ったとき、
+    // あとから傾ける動きが始まって戻った位置を上書きしないよう無効化する。
+    this._flySpotToken++;
     // 【2026-10-20、37本目、Minami決定】以前は昔の全体表示の計算（fitToBudget()、
     // スポット座標基準・最低ズーム9.5）で戻していたため、検索直後（36本目から
     // fitCircleToView()、最低ズーム8.5）と見え方が違っていた。「全体を見る」は
@@ -1306,7 +1265,7 @@ export class TerrainMapView {
     this.fitCircleToView({
       radiusKm: this.computeReachRadiusKm(this._lastBudget),
       pitch: DEFAULT_PITCH,
-      durationMs: RETURN_TO_OVERVIEW_DURATION_MS,
+      durationMs,
     });
   }
 
@@ -1825,7 +1784,10 @@ export class TerrainMapView {
   }
 
   resize() {
-    if (this.map) this.map.resize();
+    if (!this.map) return;
+    this.map.resize();
+    // 【39本目】見えていない間に「← 一覧に戻る」が押されていたら、見えたここで合わせる。
+    if (this._pendingReturnToSearchView) this.returnToSearchView({ durationMs: 0 });
   }
 
   /** 2D切替時・再試行時にWebGLコンテキストを確実に解放する（上限超過による失敗を防ぐ） */

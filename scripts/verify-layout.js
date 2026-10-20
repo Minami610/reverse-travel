@@ -1773,14 +1773,21 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
       const scrollTop = await page.evaluate(() => document.getElementById('detail-container')?.scrollTop ?? -1);
       record(`[${label}] 詳細画面が一番上から始まる`, scrollTop === 0, `scrollTop=${scrollTop}`);
 
-      // 足あとの「一覧」（旧「← 一覧に戻る」）で引きすぎ対策の範囲に戻る
+      // 足あとの「一覧」（旧「← 一覧に戻る」）で、寄った位置から引いて戻る。
+      // 【39本目、Minami決定】以前は旧全体表示（fitToBudget()、最低ズーム9.5）で
+      // 「ズーム9.5以上」を検証していたが、検索した直後と同じ「円に合わせる」計算
+      // （fitCircleToView()、最低ズーム8.5）に揃えたため、ここでは「寄った位置
+      // （ズーム14前後）から引いて、最低ズーム8.5を割らない」ことだけを見る
+      // （検索直後と同じ中心・ズームに戻ることはcheckReturnToListMatchesSearchView()で検証）。
       await page.click('.breadcrumb-list-link');
       await page.waitForTimeout(1000);
       if (label === 'sp') await page.click('.tab-btn[data-tab="map"]').catch(() => {});
+      await page.waitForTimeout(200);
+      await waitForTerrainCameraIdle(page);
       const zoomAfterBack = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
       record(
-        `[${label}] 足あとの「一覧」で俯瞰（ズーム9.5以上）に戻る`,
-        zoomAfterBack >= 9.5,
+        `[${label}] 足あとの「一覧」で、寄った位置から引いて戻る（最低ズーム8.5以上）`,
+        zoomAfterBack >= 8.45 && zoomAfterBack < 12,
         `zoom=${zoomAfterBack.toFixed(2)}`
       );
     } else {
@@ -5163,6 +5170,24 @@ async function clickAndSampleWave(page, dim, buttonId, durationMs = 1200) {
   }), { dim, buttonId, durationMs });
 }
 
+/** 【39本目】clickElementChecked()のセレクタ版（idを持たないボタン用）。 */
+async function clickSelectorChecked(page, selector, label) {
+  const check = await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return { found: false };
+    const rect = el.getBoundingClientRect();
+    const topEl = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    const ok = !!topEl && (topEl === el || el.contains(topEl));
+    return { found: true, ok, obscuredBy: ok ? null : (topEl && (topEl.id ? '#' + topEl.id : topEl.tagName)) };
+  }, selector);
+  record(
+    `${label}：押す位置が他の部品に隠れていない`,
+    check.found && check.ok,
+    check.found ? (check.obscuredBy ? `隠していた要素: ${check.obscuredBy}` : undefined) : `${selector} が見つからない`
+  );
+  if (check.found) await page.evaluate((sel) => document.querySelector(sel).click(), selector);
+}
+
 /** 【37本目】clickElementChecked()の「隠れていないか」の確認だけを行う（押さない）。 */
 async function assertNotObscured(page, elementId, label) {
   const check = await page.evaluate((id) => {
@@ -5663,6 +5688,138 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
       }
     }
   }
+}
+
+/**
+ * 【2026-10-20、39本目、Minami決定】3Dの「← 一覧に戻る」（詳細画面の足あとの「一覧」）でも、
+ * 「全体を見る」（37本目）と同じく検索した直後と同じ見え方（中心・ズーム・傾き）に戻ること。
+ * - PC・400×464：地図のピンをタップして寄る →「詳細を見る」→「一覧」で戻る。
+ * - 400×464のみ：一覧タブのカードから詳細を開き（地図は隠れている）→「一覧」で戻る →
+ *   地図タブを開いた時点で、検索直後の見え方になっている（隠れている間は合わせられないため、
+ *   見えたときに合わせ直す。terrain-map-view.jsのreturnToSearchView()参照）。
+ * 2Dは詳細画面を開いても地図の中心・ズームを変えないため対象外（main.jsのshowResultsList()参照）。
+ */
+async function checkReturnToListMatchesSearchView(browser, baseUrl, savedPaths) {
+  console.log('\n=== 39本目：3Dの「← 一覧に戻る」で検索直後と同じ見え方に戻る ===');
+
+  const tapSpotPin = async (page) => {
+    const target = await page.evaluate(() => {
+      const tv = window.__terrainViewForDebug;
+      const map = window.__terrainMapForDebug;
+      const rect = map.getContainer().getBoundingClientRect();
+      const dep = tv._lastDepartureStation;
+      const pd = map.project([dep.stop_lon, dep.stop_lat]);
+      const cands = (tv._lastSpots || [])
+        .filter((s) => s.source_round_trip_fare <= tv._lastBudget && s.source_round_trip_fare > tv._lastBudget - 200)
+        .map((s) => ({ s, p: map.project([s.longitude, s.latitude]) }))
+        .filter(({ p }) => p.x > 40 && p.x < rect.width - 100 && p.y > 60 && p.y < rect.height - 60
+          && Math.hypot(p.x - pd.x, p.y - pd.y) > 50);
+      if (cands.length === 0) return null;
+      const { s, p } = cands[0];
+      return { name: s.name, x: rect.left + p.x, y: rect.top + p.y };
+    });
+    if (!target) return null;
+    await page.evaluate(() => {
+      window.__tiltDone = false;
+      window.__terrainViewForDebug.onTiltComplete = () => { window.__tiltDone = true; };
+    });
+    await page.mouse.click(target.x, target.y);
+    await page.waitForFunction(() => window.__tiltDone === true, { timeout: 30000 }).catch(() => {});
+    await waitForTerrainCameraIdle(page);
+    return target;
+  };
+
+  const runCase = async (vLabel, viewport, mode) => {
+    const label = `[39/back-to-list/${vLabel}/${mode}]`;
+    const isMobile = vLabel !== 'pc';
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+    page.on('console', (msg) => {
+      if (msg.type() === 'error' && !isKnownAcceptableConsoleMessage(msg.text())) errors.push(msg.text());
+    });
+    try {
+      await page.goto(baseUrl, { waitUntil: 'load' });
+      await page.waitForSelector('#departure-input');
+      await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+      await searchAt(page, '富山駅前', 500);
+      await waitForAllSpotsPrefetchSettled(page);
+      if (isMobile) {
+        await page.click('.tab-btn[data-tab="map"]');
+        await page.waitForTimeout(300);
+      }
+      await page.click('#map-dimension-toggle');
+      const became3d = await page.waitForFunction(
+        () => document.getElementById('map-area').classList.contains('mode-3d'),
+        { timeout: 30000 }
+      ).then(() => true).catch(() => false);
+      record(`${label} 3D化（検証の前提）`, became3d);
+      if (!became3d) return;
+      await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+      // 3Dの地図が見えている状態で検索し直し、検索した直後の見え方を記録する。
+      await searchKeepingMapVisible(page, '富山駅前', 500, isMobile);
+      await page.waitForTimeout(500);
+      await waitForTerrainCameraIdle(page);
+      await waitForTerrainTilesLoaded(page);
+      const baseline = await measureCircleState(page, '3d');
+
+      if (mode === 'pin') {
+        const tapped = await tapSpotPin(page);
+        if (!tapped) { record(`${label} タップできるピンが見つかる（検証の前提）`, false); return; }
+        const focused = await measureCircleState(page, '3d');
+        record(
+          `${label} ピンをタップすると、その場所へ寄る`,
+          focused.zoom > baseline.zoom + 1,
+          JSON.stringify({ spot: tapped.name, baselineZoom: baseline.zoom, focusedZoom: focused.zoom })
+        );
+        await clickSelectorChecked(page, '.spot-info-detail-btn', `${label} 「詳細を見る」`);
+      } else {
+        // 一覧タブのカードから詳細を開く（地図タブは隠れている）。
+        await page.click('.tab-btn[data-tab="list"]');
+        await page.waitForTimeout(300);
+        await page.locator('.spot-card').first().click();
+      }
+      await page.waitForFunction(() => document.getElementById('app-layout').getAttribute('data-view') === 'detail', { timeout: 10000 });
+      await page.waitForTimeout(mode === 'pin' ? 300 : 3500); // card：詳細を開いたときの寄り（flyToSpot）が進むのを待つ
+      // page.click()は3Dの描画負荷が高いと「クリック中」のまま応答しなくなることがある
+      // （33本目と同じ既知の事情）。clickElementChecked()と同じく、押す位置が他の部品に
+      // 隠れていないかを確かめてからDOMのclick()で押す。
+      await clickSelectorChecked(page, '#detail-breadcrumb .breadcrumb-list-link', `${label} 足あとの「一覧」`);
+      await page.waitForFunction(() => document.getElementById('app-layout').getAttribute('data-view') === 'results', { timeout: 10000 });
+      if (mode === 'card') {
+        // 一覧に戻った時点では地図タブは隠れている。地図タブを開いた時点で合わせ直される。
+        await page.click('.tab-btn[data-tab="map"]');
+      }
+      await page.waitForTimeout(200);
+      await waitForTerrainCameraIdle(page);
+      await page.waitForTimeout(900);
+      await waitForTerrainCameraIdle(page);
+      const back = await measureCircleState(page, '3d');
+      const shift = await centerShiftPx(page, '3d', baseline.center);
+      record(
+        `${label} 「一覧」で戻ると、検索した直後と同じ中心・ズーム・傾きに戻る`,
+        Math.abs(back.zoom - baseline.zoom) < 0.05 && shift < 3 && Math.abs(back.pitch - baseline.pitch) < 0.5
+          && Math.abs(back.bearing - baseline.bearing) < 0.5,
+        JSON.stringify({ baselineZoom: baseline.zoom, backZoom: back.zoom, centerShiftPx: +shift.toFixed(2), baselinePitch: baseline.pitch, backPitch: back.pitch })
+      );
+      const box = await page.locator('#map-area').boundingBox();
+      if (box) {
+        const shotPath = path.join(screenshotDir, `round39-back-to-list-3d-${vLabel}-${mode}.png`);
+        await page.screenshot({ path: shotPath, clip: box });
+        savedPaths.push(shotPath);
+      }
+      record(`${label} コンソールにエラーが出ていない（標高タイルの404を除く）`, errors.length === 0, errors.join(' / '));
+    } catch (e) {
+      record(`${label} 検証中にクラッシュしない`, false, e.message);
+    } finally {
+      await context.close();
+    }
+  };
+
+  await runCase('pc', VIEWPORTS.pc, 'pin');
+  await runCase('own', { width: 400, height: 464 }, 'pin');
+  await runCase('own', { width: 400, height: 464 }, 'card');
 }
 
 /**
@@ -6515,6 +6672,7 @@ async function main() {
     await checkCircleThenFit(browser, baseUrl, savedPaths);
     await checkInitialSearchCircleFit(browser, baseUrl, savedPaths);
     await checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths);
+    await checkReturnToListMatchesSearchView(browser, baseUrl, savedPaths);
     await checkBreadcrumbTrail(browser, baseUrl, savedPaths);
     await checkBudgetSlider(browser, baseUrl, savedPaths);
     await checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths);

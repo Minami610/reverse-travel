@@ -8953,8 +8953,14 @@ class ReverseTravel {
     // 【2026-10-11、5本目】「← 一覧に戻る」で、3Dのときは帯の点が見える
     // 俯瞰位置に戻す（Minami指示。fitToBudget自体の引きすぎ対策は
     // terrain-map-view.js参照）。2Dは元々寄らないため変化なし。
-    if (this.terrainMapView?.map && this.currentBudget != null) {
-      this.terrainMapView.fitToBudget(this.currentBudget);
+    // 【2026-10-20、39本目、Minami決定】以前はfitToBudget()（スポット座標基準・
+    // 最低ズーム9.5）で戻していたが、「全体を見る」（37本目）と同じく検索した直後と
+    // 同じ見え方（fitCircleToView()、0.75・傾き57°・向きは変えない）へ戻す。
+    // 動きの長さは今までどおり0.6秒（「全体を見る」の1.5秒より短い、画面切替に伴う戻り）。
+    // 2Dは詳細画面を開いても地図の中心・ズームを変えない（ピンを押したときの
+    // revealAboveBand()も、ズームはそのままずらすだけ）ため、ここでは何もしない。
+    if (this.terrainMapView?.map) {
+      this.terrainMapView.returnToSearchView({ durationMs: 600 });
     }
   }
 
