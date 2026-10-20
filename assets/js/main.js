@@ -783,8 +783,11 @@ class ReverseTravel {
     if (userTouch) {
       this.hideSpotInfoPanel();
     }
-    this.mapView.updateReachCircle(budget, { style: 'live' });
-    this.terrainMapView?.updateReachCircle(budget, { style: 'live' });
+    // 【37本目、Minami決定：B2】ユーザーが金額を上げたときだけ、前の縁から
+    // 新しい縁へ波を1本出す（下げたとき・裏取得による更新では出さない。
+    // 広がったかどうかは各地図側で半径を比べて判断する）。
+    this.mapView.updateReachCircle(budget, { style: 'live', wave: userTouch });
+    this.terrainMapView?.updateReachCircle(budget, { style: 'live', wave: userTouch });
     if (userTouch) {
       // 【2026-10-17、32本目B、Minami決定】まず円の半径が変わるのを見せ、
       // 最後の操作から0.4秒止まったら地図を円全体が収まる大きさへ合わせる。
@@ -1367,8 +1370,8 @@ class ReverseTravel {
       // 以前はfitToBudget()（スポット座標基準・最低ズーム9.5）のままで、
       // 予算によっては円がごく一部にしか見えない／画面からはみ出すことがあった
       // （Minami実機確認：富山駅前・往復¥500で円が小さすぎる、¥1,500ではみ出す）。
-      // 「全体を見る」自体の計算は変えない（returnToOverview()は引き続き
-      // fitToBudget()を使う）。
+      // 【37本目】「全体を見る」（returnToOverview()）も同じfitCircleToView()に
+      // 揃えた（検索直後と同じ見え方に戻る）。
       this.terrainMapView.fitCircleToView({
         radiusKm: this.terrainMapView.computeReachRadiusKm(budget),
         animate: false,

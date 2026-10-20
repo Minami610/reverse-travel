@@ -4966,7 +4966,25 @@ const MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO = 0.75;
 // 変えない。円を合わせるとき（fitCircleToView()）だけ、小さいスマホで
 // 円が枠に収まらないことがあるため、3D側のCIRCLE_FIT_MIN_ZOOMと同じ
 // 考え方でゆるい下限（8.5）にする。
+// 【37本目】検索直後（36本目）・「全体を見る」（37本目）もfitCircleToView()に
+// 揃えたため、今は円に合わせるすべての場面でこの8.5が下限になる。
 const MAP_CIRCLE_FIT_MIN_ZOOM = 8.5;
+// 【2026-10-20、37本目、Minami決定：A】金額操作のあと、地図を動かすのは
+// 「円がはみ出しそう」「小さくなりすぎた」ときだけにする（35本目は毎回0.75へ
+// 合わせ直していたため、金額を足しても画面上の円がほとんど大きくならず、
+// 新しいエリアが開けた感じが無かった）。円の直径÷見えている範囲の短辺が
+// 上限（0.9）をこえたら0.75へ引き、下限（0.35）を下回ったら0.6へ寄る。
+// その間は地図を動かさず、円だけが広がる・縮む。
+const MAP_CIRCLE_REFIT_UPPER_RATIO = 0.9;
+const MAP_CIRCLE_REFIT_LOWER_RATIO = 0.35;
+const MAP_CIRCLE_ZOOM_IN_TARGET_RATIO = 0.6;
+// 【2026-10-20、37本目、Minami決定：B2】＋で円が広がるとき、前の縁から新しい縁へ
+// うすい青の線（波）を1本だけ広げて消す。色は円の縁と同じ青、太さ3px、
+// 0.5秒で、はじめ少し濃く→広がりながらうすくなる。白い光・ぼかし・点滅は使わない。
+const MAP_CIRCLE_WAVE_DURATION_MS = 500;
+const MAP_CIRCLE_WAVE_START_OPACITY = 0.7;
+const MAP_CIRCLE_WAVE_WEIGHT = 3;
+const MAP_REACH_CIRCLE_COLOR = '#2F6FB2';
 
 /** 到達円の半径表記（例: 0.8km, 12km）。10km未満は小数第1位まで、以上は整数に丸める。
  * 【2026-10-14、25本目】地図上のラベルを廃止し、main.jsのスマホ予算操作帯・PCの
@@ -4999,6 +5017,9 @@ class MapView {
     this._circleAnimFrame = null; // 【2026-10-17、32本目B】半径を0.25秒ほどでなめらかに変えるrequestAnimationFrameのID
     this._circleAnimToken = 0; // 進行中の半径アニメーションを無効化する世代カウンタ
     this._circleFitTimer = null; // 【2026-10-17、32本目B】円が収まるよう地図を合わせる、0.4秒デバウンスのsetTimeout ID
+    this._reachCircleTargetKm = 0; // 【37本目】半径アニメーションの行き先（地図合わせの判断は途中の値ではなくこれを使う）
+    this._circleFitAnim = null; // 【37本目】{zoom, endsAt}：fitCircleToView()が動かしている最中の行き先ズーム
+    this._circleWave = null; // 【37本目】＋の波：{layer, fromKm, toKm, radiusKm, opacity, frame}
     this._waveToken = 0;
     this._waveTimers = [];
     this._pendingWaveReveal = false; // 【2026-10-13、10本目②】layout-controller.jsのinvalidateMapSize()参照
@@ -5100,11 +5121,13 @@ class MapView {
     });
 
     this.applyBudget(budget);
+    this._cancelCircleWave();
     // 【2026-10-20、36本目、Minami指示】検索直後の地図合わせを、金額操作時と
     // 同じ「円に合わせる」計算（fitCircleToView、最低ズーム8.5）に揃える。
-    // fitToBudget()自体はこのまま呼ぶ（_overviewZoom・lastBounds・lastBudgetの
-    // 記録のため。「全体を見る」自体の計算は変えない、Minami指示）が、実際に
-    // カメラを置く位置はfitCircleToView()で上書きする。
+    // fitToBudget()自体はこのまま呼ぶ（lastBounds・lastBudgetの記録のため）が、
+    // 実際にカメラを置く位置はfitCircleToView()で上書きする。
+    // 【37本目】「全体を見る」（returnToOverview()）も同じfitCircleToView()に
+    // 揃えたため、検索直後と「全体を見る」の見え方は同じになる。
     this.fitToBudget(budget, { animate: false });
     this.updateReachCircle(budget, { style: 'settled' });
     this.fitCircleToView({ radiusKm: this.computeReachRadiusKm(budget), animate: false });
@@ -5352,11 +5375,27 @@ class MapView {
   /**
    * 「全体を見る」ボタン・予算操作時の自動復帰（Minami決定：C）。寄っている
    * ときに全体の位置へなめらかに引く。向き（bearing）は2Dに無いため変更不要。
+   * 【2026-10-20、37本目、Minami決定】以前は昔の全体表示の計算（fitToBudget()、
+   * スポット座標基準）で戻していたため、検索直後（36本目からfitCircleToView()）
+   * より引いた位置に戻ってしまっていた。「全体を見る」は「最初の見え方に戻る」
+   * ボタンなので、検索直後と同じfitCircleToView()（いつも0.75に合わせる。
+   * 金額操作時の「必要なときだけ動かす」判断は使わない）で、最後に検索した
+   * 金額の円に合わせる。
    * @param {{durationSec?: number}} [opts]
    */
   returnToOverview({ durationSec = 1.5 } = {}) {
     if (!this.map || this.lastBudget == null || !this.isZoomedInPastOverview()) return;
-    this.fitToBudget(this.lastBudget, { animate: true, durationSec });
+    this._cancelFitCircleToView();
+    const zoom = this.fitCircleToView({
+      radiusKm: this.computeReachRadiusKm(this.lastBudget),
+      animate: true,
+      durationSec,
+    });
+    // 行き先のズームを全体の基準にする（検索直後に記録した値と同じになるはずだが、
+    // その後の画面サイズ変更等にも追従させる）。途中のzoomendでは行き先より
+    // 寄った値が出るが、そのときボタンが一瞬残っても最後のzoomendで消える。
+    if (zoom != null) this._overviewZoom = zoom;
+    if (this.onFocusChange) this.onFocusChange(false);
   }
 
   /**
@@ -5391,8 +5430,64 @@ class MapView {
    * @param {number} budget
    * @param {{style?: 'live'|'settled'}} [opts] - settled:検索確定後（薄くする）
    */
-  updateReachCircle(budget, { style = 'live' } = {}) {
-    this._animateCircleRadius(this.computeReachRadiusKm(budget), style);
+  updateReachCircle(budget, { style = 'live', wave = false } = {}) {
+    const targetKm = this.computeReachRadiusKm(budget);
+    // 【37本目、Minami決定：B2】ユーザーが金額を上げて円が広がるときだけ、
+    // 「その時の縁」（アニメーション途中ならその値）から新しい縁へ波を出す。
+    if (wave && targetKm > this._reachCircleRadiusKm + 0.01) {
+      this._startCircleWave(this._reachCircleRadiusKm, targetKm);
+    }
+    this._animateCircleRadius(targetKm, style);
+  }
+
+  /**
+   * 【2026-10-20、37本目、Minami決定：B2】前の円の縁（fromKm）から新しい縁（toKm）へ、
+   * うすい青の線を1本広げて消す。地理座標上の円（L.circle）として描くため、
+   * 地図が動いている途中でも常に円の縁と同じ位置に出る。続けて押されたら
+   * 前の波は途中でも消して、新しい波に置き換える。動きを減らす設定のときは出さない。
+   */
+  _startCircleWave(fromKm, toKm) {
+    this._cancelCircleWave();
+    if (reachPrefersReducedMotion() || !this.map || !this.departureLatLng) return;
+    if (!this.isContainerVisible()) return;
+    const layer = L.circle(this.departureLatLng, {
+      radius: Math.max(fromKm, 0) * 1000,
+      color: MAP_REACH_CIRCLE_COLOR,
+      weight: MAP_CIRCLE_WAVE_WEIGHT,
+      opacity: MAP_CIRCLE_WAVE_START_OPACITY,
+      fill: false,
+      interactive: false,
+    }).addTo(this.map);
+    const wave = { layer, fromKm, toKm, radiusKm: fromKm, opacity: MAP_CIRCLE_WAVE_START_OPACITY, frame: null };
+    this._circleWave = wave;
+    const startTime = performance.now();
+    const step = (now) => {
+      if (this._circleWave !== wave) return;
+      // 【37本目、不具合修正】requestAnimationFrameに渡される時刻はそのフレームの開始時刻で、
+      // 直前にperformance.now()で取ったstartTimeより前になることがある（負の進み具合になり、
+      // 最初の1コマだけ前の縁より内側・濃い色で描かれていた）。0未満にならないよう抑える。
+      const progress = Math.min(1, Math.max(0, (now - startTime) / MAP_CIRCLE_WAVE_DURATION_MS));
+      // 広がりは終わりに向けてゆるやかに（ease-out）、うすくなるのは一定の速さで。
+      const eased = 1 - (1 - progress) * (1 - progress);
+      wave.radiusKm = fromKm + (toKm - fromKm) * eased;
+      wave.opacity = MAP_CIRCLE_WAVE_START_OPACITY * (1 - progress);
+      layer.setRadius(wave.radiusKm * 1000);
+      layer.setStyle({ opacity: wave.opacity });
+      if (progress < 1) {
+        wave.frame = requestAnimationFrame(step);
+      } else {
+        this._cancelCircleWave();
+      }
+    };
+    wave.frame = requestAnimationFrame(step);
+  }
+
+  _cancelCircleWave() {
+    const wave = this._circleWave;
+    if (!wave) return;
+    this._circleWave = null;
+    if (wave.frame) cancelAnimationFrame(wave.frame);
+    if (this.map) this.map.removeLayer(wave.layer);
   }
 
   /**
@@ -5403,6 +5498,7 @@ class MapView {
    */
   _animateCircleRadius(targetKm, style) {
     this._pendingCircleStyle = style;
+    this._reachCircleTargetKm = targetKm;
     if (this._circleAnimFrame) {
       cancelAnimationFrame(this._circleAnimFrame);
       this._circleAnimFrame = null;
@@ -5416,7 +5512,10 @@ class MapView {
     const startTime = performance.now();
     const step = (now) => {
       if (token !== this._circleAnimToken || !this.map) return;
-      const progress = Math.min(1, (now - startTime) / MAP_CIRCLE_RADIUS_ANIM_MS);
+      // 【37本目、不具合修正】requestAnimationFrameに渡される時刻はそのフレームの開始時刻で、
+      // 直前にperformance.now()で取ったstartTimeより前になることがある（負の進み具合になり、
+      // 最初の1コマだけ前の縁より内側・濃い色で描かれていた）。0未満にならないよう抑える。
+      const progress = Math.min(1, Math.max(0, (now - startTime) / MAP_CIRCLE_RADIUS_ANIM_MS));
       const km = startKm + (targetKm - startKm) * progress;
       this._paintReachCircle(km, this._pendingCircleStyle);
       if (progress < 1) {
@@ -5438,7 +5537,10 @@ class MapView {
     this._cancelFitCircleToView();
     this._circleFitTimer = setTimeout(() => {
       this._circleFitTimer = null;
-      this.fitCircleToView();
+      // 【37本目、Minami決定：A】金額操作のあとは、はみ出しそう・小さすぎる
+      // ときだけ動かす。半径は描画途中の値ではなく行き先（アニメーション
+      // 0.2秒はデバウンス0.15秒より長く、まだ途中のことがあるため）で判断する。
+      this.fitCircleToView({ radiusKm: this._reachCircleTargetKm, onlyIfNeeded: true });
     }, MAP_CIRCLE_FIT_DEBOUNCE_MS);
   }
 
@@ -5463,12 +5565,22 @@ class MapView {
    * animate:trueのまま（予算操作時の挙動は変えない）。検索直後は
    * _reachCircleRadiusKmがまだ0→目標値へアニメーション中（_animateCircleRadius()
    * 参照）のため、目標値（computeReachRadiusKm()）を直接渡す必要がある。
-   * @param {{radiusKm?: number, animate?: boolean}} [opts]
+   * 【2026-10-20、37本目、Minami決定：A】onlyIfNeeded:true（金額操作のあと）のときは、
+   * 今の円の直径÷短辺がMAP_CIRCLE_REFIT_UPPER_RATIO（0.9）をこえたときだけ0.75へ引き、
+   * MAP_CIRCLE_REFIT_LOWER_RATIO（0.35）を下回ったときだけ0.6へ寄る。その間は動かさない。
+   * 検索直後・「全体を見る」は従来どおり常に0.75へ合わせる（onlyIfNeeded:false）。
+   * @param {{radiusKm?: number, animate?: boolean, onlyIfNeeded?: boolean, durationSec?: number}} [opts]
+   * @returns {number|null} 動かした先のズーム（動かさなかったときはnull）
    */
-  fitCircleToView({ radiusKm = this._reachCircleRadiusKm, animate = true } = {}) {
-    if (!this.map || !this.departureLatLng) return;
-    if (!radiusKm || radiusKm <= 0) return;
-    if (!this.isContainerVisible()) return;
+  fitCircleToView({
+    radiusKm = this._reachCircleRadiusKm,
+    animate = true,
+    onlyIfNeeded = false,
+    durationSec = MAP_CIRCLE_FIT_DURATION_SEC,
+  } = {}) {
+    if (!this.map || !this.departureLatLng) return null;
+    if (!radiusKm || radiusKm <= 0) return null;
+    if (!this.isContainerVisible()) return null;
     const [lat, lon] = this.departureLatLng;
     const bounds = L.latLngBounds([
       reachDestinationPoint(lat, lon, 0, radiusKm),
@@ -5495,13 +5607,37 @@ class MapView {
       Math.round(shortSide * (1 - MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO)),
       Math.floor(shortSide / 2) - 1
     );
+    // fitZoomは「円の直径が短辺の0.75になるズーム」。2D（メルカトル）ではズームが
+    // 1上がると画面上の長さがちょうど2倍になるため、任意のズームzでの比率は
+    // 0.75 × 2^(z − fitZoom)、比率rになるズームは fitZoom + log2(r / 0.75) で求まる。
     const fitZoom = this.map.getBoundsZoom(bounds, false, L.point(padding, padding));
-    const zoom = Math.min(Math.max(fitZoom, MAP_CIRCLE_FIT_MIN_ZOOM), 16);
+    let targetZoom = fitZoom;
+    let currentZoom = null;
+    if (onlyIfNeeded) {
+      // 前の地図合わせがまだ動いている途中なら、途中のズームではなく行き先で判断する。
+      const anim = this._circleFitAnim;
+      currentZoom = anim && performance.now() < anim.endsAt ? anim.zoom : this.map.getZoom();
+      const ratio = MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO * Math.pow(2, currentZoom - fitZoom);
+      if (ratio > MAP_CIRCLE_REFIT_UPPER_RATIO) {
+        targetZoom = fitZoom;
+      } else if (ratio < MAP_CIRCLE_REFIT_LOWER_RATIO) {
+        targetZoom = fitZoom + Math.log2(MAP_CIRCLE_ZOOM_IN_TARGET_RATIO / MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO);
+      } else {
+        return null;
+      }
+    }
+    const zoom = Math.min(Math.max(targetZoom, MAP_CIRCLE_FIT_MIN_ZOOM), 16);
+    // 最低ズーム8.5（または最大16）に張り付いていて、もう動く余地が無いときは動かさない
+    // （¥2000付近で＋を押すたびに同じ場所へ飛び直す空の動きを出さない）。
+    if (onlyIfNeeded && Math.abs(zoom - currentZoom) < 0.02) return null;
     if (reachPrefersReducedMotion() || !animate) {
+      this._circleFitAnim = null;
       this.map.setView(this.departureLatLng, zoom, { animate: false });
     } else {
-      this.map.flyTo(this.departureLatLng, zoom, { duration: MAP_CIRCLE_FIT_DURATION_SEC });
+      this._circleFitAnim = { zoom, endsAt: performance.now() + durationSec * 1000 + 100 };
+      this.map.flyTo(this.departureLatLng, zoom, { duration: durationSec });
     }
+    return zoom;
   }
 
   /**
@@ -7100,8 +7236,11 @@ class ReverseTravel {
     if (userTouch) {
       this.hideSpotInfoPanel();
     }
-    this.mapView.updateReachCircle(budget, { style: 'live' });
-    this.terrainMapView?.updateReachCircle(budget, { style: 'live' });
+    // 【37本目、Minami決定：B2】ユーザーが金額を上げたときだけ、前の縁から
+    // 新しい縁へ波を1本出す（下げたとき・裏取得による更新では出さない。
+    // 広がったかどうかは各地図側で半径を比べて判断する）。
+    this.mapView.updateReachCircle(budget, { style: 'live', wave: userTouch });
+    this.terrainMapView?.updateReachCircle(budget, { style: 'live', wave: userTouch });
     if (userTouch) {
       // 【2026-10-17、32本目B、Minami決定】まず円の半径が変わるのを見せ、
       // 最後の操作から0.4秒止まったら地図を円全体が収まる大きさへ合わせる。
@@ -7684,8 +7823,8 @@ class ReverseTravel {
       // 以前はfitToBudget()（スポット座標基準・最低ズーム9.5）のままで、
       // 予算によっては円がごく一部にしか見えない／画面からはみ出すことがあった
       // （Minami実機確認：富山駅前・往復¥500で円が小さすぎる、¥1,500ではみ出す）。
-      // 「全体を見る」自体の計算は変えない（returnToOverview()は引き続き
-      // fitToBudget()を使う）。
+      // 【37本目】「全体を見る」（returnToOverview()）も同じfitCircleToView()に
+      // 揃えた（検索直後と同じ見え方に戻る）。
       this.terrainMapView.fitCircleToView({
         radiusKm: this.terrainMapView.computeReachRadiusKm(budget),
         animate: false,

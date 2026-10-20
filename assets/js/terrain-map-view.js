@@ -72,6 +72,9 @@ const BG_AERIAL_LAYER_ID = 'gsi-bg-aerial';
 // 下限が無いのが今回の不具合だった）。
 const OVERVIEW_PADDING_RATIO = 0.08;
 const OVERVIEW_MIN_ZOOM = 9.5;
+// 【2026-10-20、37本目】検索直後（36本目）・「全体を見る」（37本目）はどちらも
+// fitCircleToView()に揃えたため、OVERVIEW_MIN_ZOOM(9.5)を使うのは今は
+// fitToBudget()を直接呼ぶ「← 一覧に戻る」（main.jsのshowResultsList()）だけ。
 // 【2026-10-19、34本目、Minami決定：B】「全体を見る」・検索直後の全体表示
 // （fitToBudget()）は今までどおりOVERVIEW_MIN_ZOOM(9.5)のまま変えない。
 // 一方、32本目Bの「金額を変えて円を合わせる」（fitCircleToView()）だけは、
@@ -149,6 +152,14 @@ const REACH_CIRCLE_SOURCE_ID = 'reach-circle';
 const REACH_CIRCLE_FILL_LAYER_ID = 'reach-circle-fill';
 const REACH_CIRCLE_LINE_LAYER_ID = 'reach-circle-line';
 const REACH_CIRCLE_POINTS = 72; // 円を近似する多角形の頂点数（5°刻み）
+// 【2026-10-20、37本目、Minami決定：B2】＋で円が広がるときの波（前の縁→新しい縁へ1本）。
+// 2D（map-view.js）のMAP_CIRCLE_WAVE_*と同じ値・考え方。円の縁と同じ青・太さ3px・0.5秒、
+// はじめ少し濃く→広がりながらうすくなる。白い光・ぼかし・点滅は使わない。
+const REACH_WAVE_SOURCE_ID = 'reach-wave';
+const REACH_WAVE_LINE_LAYER_ID = 'reach-wave-line';
+const CIRCLE_WAVE_DURATION_MS = 500;
+const CIRCLE_WAVE_START_OPACITY = 0.7;
+const CIRCLE_WAVE_WIDTH = 3;
 const WAVE_DURATION_MS = 1000; // Minami指示：検索後、点を波のように出す所要時間（全体で1秒前後）
 // 【2026-10-15、11本目①】選んだピンの強調（吹き出し廃止の代わり）。circleレイヤーは
 // 単一のpaintプロパティしか持てないため、選択中の1件だけ別ソース・別レイヤーで
@@ -181,6 +192,12 @@ const CIRCLE_FIT_DURATION_MS = 450;
 // 範囲の短い辺の7〜8割になるように」という目標から直接、余白の比率を
 // 逆算する一本の式にした（CIRCLE_FIT_TARGET_DIAMETER_RATIO参照）。
 const CIRCLE_FIT_TARGET_DIAMETER_RATIO = 0.75; // 目標7〜8割の中間値
+// 【2026-10-20、37本目、Minami決定：A】金額操作のあとは、円の直径÷短辺（3Dは35本目と
+// 同じく横方向で測る）が0.9をこえたときだけ0.75へ引き、0.35を下回ったときだけ0.6へ
+// 寄る。その間は地図を動かさず円だけが広がる・縮む（2Dのmap-view.jsと同じ値）。
+const CIRCLE_REFIT_UPPER_RATIO = 0.9;
+const CIRCLE_REFIT_LOWER_RATIO = 0.35;
+const CIRCLE_ZOOM_IN_TARGET_RATIO = 0.6;
 
 // 帯に入る点＝明るいオレンジ＋光の輪、それより安い点＝緑がかった灰色の小さい点
 // （2026-10-10、Minami指摘：スクリーンショットで見分けづらかったため色を変更。
@@ -226,6 +243,17 @@ function destinationPoint(lat, lon, bearingDeg, distanceKm) {
     Math.cos(delta) - Math.sin(phi1) * Math.sin(phi2)
   );
   return { lat: toDeg(phi2), lon: toDeg(lambda2) };
+}
+
+/** 出発駅中心・半径radiusKmの円周（[lon, lat]の閉じたリング）。到達円と＋の波で共用する。 */
+function buildCircleRing(dep, radiusKm) {
+  const ring = [];
+  for (let i = 0; i <= REACH_CIRCLE_POINTS; i++) {
+    const bearingDeg = (360 / REACH_CIRCLE_POINTS) * i;
+    const { lat, lon } = destinationPoint(dep.stop_lat, dep.stop_lon, bearingDeg, radiusKm);
+    ring.push([lon, lat]);
+  }
+  return ring;
 }
 
 function prefersReducedMotion() {
@@ -339,6 +367,9 @@ export class TerrainMapView {
     this._circleAnimFrame = null; // 【2026-10-17、32本目B】半径を0.25秒ほどでなめらかに変えるrequestAnimationFrameのID
     this._circleAnimToken = 0; // 進行中の半径アニメーションを無効化する世代カウンタ
     this._circleFitTimer = null; // 【2026-10-17、32本目B】円が収まるよう地図を合わせる、0.4秒デバウンスのsetTimeout ID
+    this._reachCircleTargetKm = 0; // 【37本目】半径アニメーションの行き先（地図合わせの判断は途中の値ではなくこれを使う）
+    this._circleFitAnim = null; // 【37本目】{zoom}：fitCircleToView()が動かしている最中の行き先ズーム（moveendで消す）
+    this._circleWave = null; // 【37本目】＋の波：{fromKm, toKm, radiusKm, opacity, frame}
     this._waveFrame = null; // requestAnimationFrameのID（検索後の点の波の演出）
     this._waveToken = 0; // 保留中の波の演出を無効化する世代カウンタ（新しい検索・render()で進める）
   }
@@ -412,6 +443,10 @@ export class TerrainMapView {
             type: 'geojson',
             data: { type: 'FeatureCollection', features: [] },
           },
+          [REACH_WAVE_SOURCE_ID]: {
+            type: 'geojson',
+            data: { type: 'FeatureCollection', features: [] },
+          },
         },
         layers: [
           // 淡色地図は常に不透明で下に敷く（航空写真の未読込部分はここが
@@ -455,6 +490,14 @@ export class TerrainMapView {
             type: 'line',
             source: REACH_CIRCLE_SOURCE_ID,
             paint: { 'line-color': '#2F6FB2', 'line-opacity': 0.55, 'line-width': 1.5 },
+          },
+          // 【37本目】＋の波。到達円と同じく地形にドレープする通常のlineレイヤーで、
+          // 円の縁の上・スポットの点より下に描く。
+          {
+            id: REACH_WAVE_LINE_LAYER_ID,
+            type: 'line',
+            source: REACH_WAVE_SOURCE_ID,
+            paint: { 'line-color': '#2F6FB2', 'line-opacity': 0, 'line-width': CIRCLE_WAVE_WIDTH },
           },
           {
             id: SPOTS_LAYER_ID,
@@ -666,6 +709,7 @@ export class TerrainMapView {
    */
   render(departureStation, spots, budget, { reveal = false } = {}) {
     this._cancelFitCircleToView(); // 新しい検索で、前の予算操作から保留中の地図合わせは無効化する
+    this._cancelCircleWave();
     this._lastDepartureStation = departureStation;
     this._lastSpots = spots;
     this._lastBudget = budget;
@@ -852,8 +896,75 @@ export class TerrainMapView {
    * @param {number} budget
    * @param {{style?: 'live'|'settled'}} [opts] - settled:検索確定後（薄くする）
    */
-  updateReachCircle(budget, { style = 'live' } = {}) {
-    this._animateCircleRadius(this.computeReachRadiusKm(budget), style);
+  updateReachCircle(budget, { style = 'live', wave = false } = {}) {
+    const targetKm = this.computeReachRadiusKm(budget);
+    // 【37本目、Minami決定：B2】ユーザーが金額を上げて円が広がるときだけ、
+    // 「その時の縁」（アニメーション途中ならその値）から新しい縁へ波を出す。
+    if (wave && targetKm > this._reachCircleRadiusKm + 0.01) {
+      this._startCircleWave(this._reachCircleRadiusKm, targetKm);
+    }
+    this._animateCircleRadius(targetKm, style);
+  }
+
+  /**
+   * 【2026-10-20、37本目、Minami決定：B2】前の円の縁（fromKm）から新しい縁（toKm）へ、
+   * うすい青の線を1本広げて消す（2Dのmap-view.jsと同じ動き）。地理座標上の
+   * リングとして描くため、向き・傾きを変えたあとや地図が動いている途中でも、
+   * 常に円の縁に沿って出る。続けて押されたら前の波は途中でも消して置き換える。
+   * 動きを減らす設定のとき・地図が見えていないときは出さない。
+   */
+  _startCircleWave(fromKm, toKm) {
+    this._cancelCircleWave();
+    if (prefersReducedMotion() || !this.map) return;
+    const dep = this._lastDepartureStation;
+    const source = this.map.getSource(REACH_WAVE_SOURCE_ID);
+    if (!source || !dep || !isFiniteNumber(dep.stop_lat) || !isFiniteNumber(dep.stop_lon)) return;
+    const container = this.map.getContainer();
+    if (container.clientWidth === 0 || container.clientHeight === 0) return;
+    const wave = { fromKm, toKm, radiusKm: fromKm, opacity: CIRCLE_WAVE_START_OPACITY, frame: null };
+    this._circleWave = wave;
+    const paint = () => {
+      wave.ring = wave.radiusKm > 0 ? buildCircleRing(dep, wave.radiusKm) : null; // 検証用（verify-layout.js）にも残す
+      source.setData({
+        type: 'FeatureCollection',
+        features: wave.ring
+          ? [{ type: 'Feature', geometry: { type: 'LineString', coordinates: wave.ring }, properties: {} }]
+          : [],
+      });
+      this.map.setPaintProperty(REACH_WAVE_LINE_LAYER_ID, 'line-opacity', wave.opacity);
+    };
+    paint();
+    const startTime = performance.now();
+    const step = (now) => {
+      if (this._circleWave !== wave || !this.map) return;
+      // 【37本目、不具合修正】requestAnimationFrameに渡される時刻はそのフレームの開始時刻で、
+      // 直前にperformance.now()で取ったstartTimeより前になることがある（負の進み具合になり、
+      // 最初の1コマだけ前の縁より内側・濃い色で描かれていた）。0未満にならないよう抑える。
+      const progress = Math.min(1, Math.max(0, (now - startTime) / CIRCLE_WAVE_DURATION_MS));
+      // 広がりは終わりに向けてゆるやかに（ease-out）、うすくなるのは一定の速さで。
+      const eased = 1 - (1 - progress) * (1 - progress);
+      wave.radiusKm = fromKm + (toKm - fromKm) * eased;
+      wave.opacity = CIRCLE_WAVE_START_OPACITY * (1 - progress);
+      paint();
+      if (progress < 1) {
+        wave.frame = requestAnimationFrame(step);
+      } else {
+        this._cancelCircleWave();
+      }
+    };
+    wave.frame = requestAnimationFrame(step);
+  }
+
+  _cancelCircleWave() {
+    const wave = this._circleWave;
+    if (!wave) return;
+    this._circleWave = null;
+    if (wave.frame) cancelAnimationFrame(wave.frame);
+    const source = this.map?.getSource(REACH_WAVE_SOURCE_ID);
+    if (source) source.setData({ type: 'FeatureCollection', features: [] });
+    if (this.map?.getLayer(REACH_WAVE_LINE_LAYER_ID)) {
+      this.map.setPaintProperty(REACH_WAVE_LINE_LAYER_ID, 'line-opacity', 0);
+    }
   }
 
   /**
@@ -887,6 +998,7 @@ export class TerrainMapView {
    */
   _animateCircleRadius(targetKm, style) {
     this._pendingCircleStyle = style;
+    this._reachCircleTargetKm = targetKm;
     if (this._circleAnimFrame) {
       cancelAnimationFrame(this._circleAnimFrame);
       this._circleAnimFrame = null;
@@ -900,7 +1012,10 @@ export class TerrainMapView {
     const startTime = performance.now();
     const step = (now) => {
       if (token !== this._circleAnimToken || !this.map) return;
-      const progress = Math.min(1, (now - startTime) / CIRCLE_RADIUS_ANIM_MS);
+      // 【37本目、不具合修正】requestAnimationFrameに渡される時刻はそのフレームの開始時刻で、
+      // 直前にperformance.now()で取ったstartTimeより前になることがある（負の進み具合になり、
+      // 最初の1コマだけ前の縁より内側・濃い色で描かれていた）。0未満にならないよう抑える。
+      const progress = Math.min(1, Math.max(0, (now - startTime) / CIRCLE_RADIUS_ANIM_MS));
       const km = startKm + (targetKm - startKm) * progress;
       this._paintReachCircle(km, this._pendingCircleStyle);
       if (progress < 1) {
@@ -921,12 +1036,7 @@ export class TerrainMapView {
       if (source) source.setData({ type: 'FeatureCollection', features: [] });
       return;
     }
-    const ring = [];
-    for (let i = 0; i <= REACH_CIRCLE_POINTS; i++) {
-      const bearingDeg = (360 / REACH_CIRCLE_POINTS) * i;
-      const { lat, lon } = destinationPoint(dep.stop_lat, dep.stop_lon, bearingDeg, radiusKm);
-      ring.push([lon, lat]);
-    }
+    const ring = buildCircleRing(dep, radiusKm);
     source.setData({
       type: 'FeatureCollection',
       features: [{ type: 'Feature', geometry: { type: 'Polygon', coordinates: [ring] }, properties: {} }],
@@ -948,7 +1058,10 @@ export class TerrainMapView {
     this._cancelFitCircleToView();
     this._circleFitTimer = setTimeout(() => {
       this._circleFitTimer = null;
-      this.fitCircleToView();
+      // 【37本目、Minami決定：A】金額操作のあとは、はみ出しそう・小さすぎる
+      // ときだけ動かす。半径は描画途中の値ではなく行き先で判断する
+      // （半径アニメーション0.2秒はデバウンス0.15秒より長く、まだ途中のことがあるため）。
+      this.fitCircleToView({ radiusKm: this._reachCircleTargetKm, onlyIfNeeded: true });
     }, CIRCLE_FIT_DEBOUNCE_MS);
   }
 
@@ -975,13 +1088,26 @@ export class TerrainMapView {
    * animate:trueのまま（予算操作時の挙動は変えない）。検索直後は
    * _reachCircleRadiusKmがまだ0→目標値へアニメーション中（_animateCircleRadius()
    * 参照）のため、目標値を直接渡す必要がある。
-   * @param {{radiusKm?: number, animate?: boolean}} [opts]
+   * 【2026-10-20、37本目、Minami決定：A】onlyIfNeeded:true（金額操作のあと）のときは、
+   * 今の円の横方向の直径÷短辺がCIRCLE_REFIT_UPPER_RATIO（0.9）をこえたときだけ0.75へ引き、
+   * CIRCLE_REFIT_LOWER_RATIO（0.35）を下回ったときだけ0.6へ寄る。その間は動かさない
+   * （寄っている状態・「全体を見る」ボタンにも触れない）。検索直後・「全体を見る」は
+   * 従来どおり常に0.75へ合わせる（onlyIfNeeded:false）。
+   * 【37本目】「全体を見る」用に、傾き（pitch）と動きの長さ（durationMs）も上書きできる。
+   * @param {{radiusKm?: number, animate?: boolean, onlyIfNeeded?: boolean, pitch?: number, durationMs?: number}} [opts]
+   * @returns {number|null} 動かした先のズーム（動かさなかったときはnull）
    */
-  fitCircleToView({ radiusKm = this._reachCircleRadiusKm, animate = true } = {}) {
-    if (!this.map) return;
+  fitCircleToView({
+    radiusKm = this._reachCircleRadiusKm,
+    animate = true,
+    onlyIfNeeded = false,
+    pitch: pitchOverride,
+    durationMs = CIRCLE_FIT_DURATION_MS,
+  } = {}) {
+    if (!this.map) return null;
     const dep = this._lastDepartureStation;
     if (!dep || !isFiniteNumber(dep.stop_lat) || !isFiniteNumber(dep.stop_lon) || !radiusKm || radiusKm <= 0) {
-      return;
+      return null;
     }
     // 【不具合修正、32本目B】スマホの予算操作帯（#mobile-budget-overlay）は
     // 「一覧」タブを見ている間も操作できる（22本目）ため、0.4秒のデバウンス後に
@@ -992,7 +1118,39 @@ export class TerrainMapView {
     // 見えていないときは何もしない（円自体は既に正しい半径で描画済みのため、
     // 地図タブへ戻って次に予算を操作したときに改めて合わせ直せば実害はない）。
     const container = this.map.getContainer();
-    if (container.clientWidth === 0 || container.clientHeight === 0) return;
+    if (container.clientWidth === 0 || container.clientHeight === 0) return null;
+    const shortSide = Math.max(1, Math.min(container.clientWidth, container.clientHeight));
+
+    if (onlyIfNeeded) {
+      // 【37本目】35本目と同じく横方向で測る：出発駅から「画面の左右」の向き
+      // （地図の向き±90°）へ半径ぶん進んだ2点を今のカメラで画面に写し、その距離を
+      // 直径とする（縦方向は傾きによる遠近で縮んで見えるため使わない）。
+      // 前の地図合わせがまだ動いている途中なら、途中のズームではなく行き先の
+      // ズームで判断する（ズームが1上がると画面上の長さは2倍になる）。
+      const bearingNow = this.map.getBearing();
+      const left = destinationPoint(dep.stop_lat, dep.stop_lon, bearingNow - 90, radiusKm);
+      const right = destinationPoint(dep.stop_lat, dep.stop_lon, bearingNow + 90, radiusKm);
+      const pl = this.map.project([left.lon, left.lat]);
+      const pr = this.map.project([right.lon, right.lat]);
+      const zoomNow = this.map.getZoom();
+      const effectiveZoom = this._circleFitAnim ? this._circleFitAnim.zoom : zoomNow;
+      const ratio = (Math.hypot(pr.x - pl.x, pr.y - pl.y) / shortSide) * Math.pow(2, effectiveZoom - zoomNow);
+      if (!(ratio > 0) || !Number.isFinite(ratio)) return null;
+      let targetRatio;
+      if (ratio > CIRCLE_REFIT_UPPER_RATIO) targetRatio = CIRCLE_FIT_TARGET_DIAMETER_RATIO;
+      else if (ratio < CIRCLE_REFIT_LOWER_RATIO) targetRatio = CIRCLE_ZOOM_IN_TARGET_RATIO;
+      else return null;
+      const zoom = Math.min(Math.max(effectiveZoom + Math.log2(targetRatio / ratio), CIRCLE_FIT_MIN_ZOOM), 22);
+      // 最低ズーム8.5に張り付いていて、もう動く余地が無いときは動かさない
+      // （¥2000付近で＋を押すたびに同じ場所へ飛び直す空の動きを出さない）。
+      if (Math.abs(zoom - effectiveZoom) < 0.02) return null;
+      // ここではcameraForBounds()を使わないため、下の通常経路のような事前の
+      // setPadding(CLEAR_PADDING)は不要（easeTo()自体にpadding:CLEAR_PADDINGを渡す）。
+      // 事前に呼ぶと、それ自体が瞬時のカメラ操作として余分なmoveendを出してしまう。
+      this._easeToCircle(dep, zoom, this.map.getPitch(), bearingNow, (prefersReducedMotion() || !animate) ? 0 : durationMs);
+      return zoom;
+    }
+
     const north = destinationPoint(dep.stop_lat, dep.stop_lon, 0, radiusKm);
     const east = destinationPoint(dep.stop_lat, dep.stop_lon, 90, radiusKm);
     const south = destinationPoint(dep.stop_lat, dep.stop_lon, 180, radiusKm);
@@ -1002,7 +1160,6 @@ export class TerrainMapView {
       [east.lon, north.lat],
     ];
 
-    const shortSide = Math.max(1, Math.min(container.clientWidth, container.clientHeight));
     // 【2026-10-20、35本目、Minami決定：A、不具合修正】「地図を合わせたあと、
     // 円の直径が見えている範囲の短い辺の7〜8割になるように」という目標から
     // 直接、余白の比率を逆算する（以前の「短辺の8%」と「固定90px」をmax()で
@@ -1033,20 +1190,33 @@ export class TerrainMapView {
     // 小さい画面で合計がコンテナの辺を超えてしまっていた。cameraForBounds()を
     // 呼ぶ前に地図のpaddingを明示的に0へ戻し、引数のpaddingだけで判定させる。
     this.map.setPadding(CLEAR_PADDING);
-    const pitch = this.map.getPitch();
+    const pitch = pitchOverride ?? this.map.getPitch();
     const bearing = this.map.getBearing();
     const camera = this.map.cameraForBounds(bounds, { padding, pitch, bearing });
-    if (!camera) return;
+    if (!camera) return null;
     const zoom = Math.max(camera.zoom, CIRCLE_FIT_MIN_ZOOM);
+    this._easeToCircle(dep, zoom, pitch, bearing, (prefersReducedMotion() || !animate) ? 0 : durationMs);
+    return zoom;
+  }
 
+  /** fitCircleToView()の実際のカメラ移動。動いている間は行き先のズームを
+   * _circleFitAnimに覚えておき（37本目、途中で次の判断をするときに使う）、止まったら消す。 */
+  _easeToCircle(dep, zoom, pitch, bearing, duration) {
+    const anim = duration > 0 ? { zoom } : null;
+    this._circleFitAnim = anim;
     this.map.easeTo({
       center: [dep.stop_lon, dep.stop_lat],
       zoom,
       pitch,
       bearing,
-      duration: (prefersReducedMotion() || !animate) ? 0 : CIRCLE_FIT_DURATION_MS,
+      duration,
       padding: CLEAR_PADDING,
     });
+    if (anim) {
+      this.map.once('moveend', () => {
+        if (this._circleFitAnim === anim) this._circleFitAnim = null;
+      });
+    }
     this._focusedOnSpot = false;
     this._flyFocusedSpotId = null;
     if (this.onFocusChange) this.onFocusChange(false);
@@ -1126,7 +1296,18 @@ export class TerrainMapView {
    */
   returnToOverview() {
     if (!this._focusedOnSpot || this._lastBudget == null) return;
-    this.fitToBudget(this._lastBudget, { durationMs: RETURN_TO_OVERVIEW_DURATION_MS });
+    // 【2026-10-20、37本目、Minami決定】以前は昔の全体表示の計算（fitToBudget()、
+    // スポット座標基準・最低ズーム9.5）で戻していたため、検索直後（36本目から
+    // fitCircleToView()、最低ズーム8.5）と見え方が違っていた。「全体を見る」は
+    // 「最初の見え方に戻る」ボタンなので、検索直後と同じfitCircleToView()（いつも
+    // 0.75に合わせる）で、最後に検索した金額の円に合わせる。傾きは従来の
+    // fitToBudget()と同じく既定（DEFAULT_PITCH）へ戻し、向きは変えない。
+    this._cancelFitCircleToView();
+    this.fitCircleToView({
+      radiusKm: this.computeReachRadiusKm(this._lastBudget),
+      pitch: DEFAULT_PITCH,
+      durationMs: RETURN_TO_OVERVIEW_DURATION_MS,
+    });
   }
 
   /**
