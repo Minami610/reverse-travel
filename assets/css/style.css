@@ -1361,63 +1361,118 @@ header p {
   transition: transform 0.3s ease, opacity 0.3s ease;
 }
 
-/* スポットのピン：小さめの点にして密集時の重なりを軽減 */
+/* 【2026-10-21、43本目、Minami決定：B-1】ピンの色と大きさ（2D・3D共通。3Dは
+   terrain-map-view.jsのPIN_COLOR_*と同じ値）。今のぼやけたオレンジの丸が密集して探しにくい
+   （Minami実機確認）ため、くっきりした小さな丸にし、光のにじみ（box-shadowのぼかし）はやめた。
+   - 青（.map-pin-blue）：検索した金額帯で行ける場所。円の青（#2F6FB2）より濃い紺に近い青＋白いふち、直径13px
+   - オレンジ（.map-pin-orange）：金額を変えて、新しく金額帯に入った場所（検索すると青になる）
+   - 灰色（.map-pin-gray）：金額帯より安く行ける場所。小さな点
+   - 選んだピン（.map-pin-selected）：ひと回り大きく（20px）、白い太いふちと影
+   ピンは入れ物（.map-pin-wrapper-spot、22px四方）の真ん中に置き、大きさが変わっても位置がずれない
+   ようにする。予算をこえる場所・まとめた丸に入った場所はJS側でdisplay:noneにする。 */
+.map-pin-wrapper-spot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .map-pin-spot {
-  width: 14px;
-  height: 14px;
-  background-color: var(--color-main);
-  border: 1.5px solid white;
+  width: 13px;
+  height: 13px;
+  background-color: #1f3c88;
+  border: 2px solid white;
   border-radius: 50%;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
-/* 予算スライダーの塗り分け（2026-10-10、4本目③。4本目④でMinami指摘：
-   見分けづらかったため色・形とも区別を強めた）。帯に入る点＝明るいオレンジ・
-   白い縁・少し大きく・光の輪（box-shadowの二重glow）。それより安い点＝
-   緑がかった灰色の小さい点（3D側のCOLOR_CHEAPER #8a9a86と同系色に揃える）。
-   予算を超える点はJS側でel.style.display='none'にするため、ここではCSSを
-   用意しない。hover/selectedは後ろに置いて優先させる（下のコメント参照）。 */
-.map-pin-spot-in-band {
-  width: 18px;
-  height: 18px;
-  margin: -2px 0 0 -2px;
-  background-color: var(--color-accent);
-  border-color: white;
-  border-width: 2px;
-  box-shadow: 0 0 0 3px rgba(255, 107, 43, 0.35), 0 0 8px 3px rgba(255, 107, 43, 0.8), 0 1px 3px rgba(0, 0, 0, 0.5);
+.map-pin-spot.map-pin-blue {
+  background-color: #1f3c88;
 }
 
-.map-pin-spot-cheaper {
-  width: 9px;
-  height: 9px;
-  margin: 2px 0 0 2px;
-  background-color: #8a9a86;
-  opacity: 0.75;
+.map-pin-spot.map-pin-orange {
+  background-color: #ff6b2b;
 }
 
-/* ホバーと選択は独立した状態として扱う（色・サイズ両方で段階を付け、
-   色覚特性のある方にも区別しやすくする）。選択中は最も目立たせたいため、
-   両方同時に付く場合に備えて選択のルールをホバーより後ろに置き、
-   選択の見た目が優先されるようにしている。 */
+.map-pin-spot.map-pin-gray {
+  width: 7px;
+  height: 7px;
+  background-color: #8e959e;
+  border-width: 1px;
+  box-shadow: none;
+}
+
+/* ホバーと選択は独立した状態として扱う（選択を後ろに置き、両方付いたときは選択の見た目を優先）。 */
 .map-pin-spot.map-pin-hover {
-  width: 18px;
-  height: 18px;
-  margin: -2px 0 0 -2px;
-  background-color: var(--color-hover);
+  width: 16px;
+  height: 16px;
   border-width: 2px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
 }
 
-/* 【2026-10-15、11本目①】選んだピンを目立たせる：一回り大きく＋白い縁取り＋
-   光の輪（Minami指示）。白い縁取りは.map-pin-spotの基本スタイル（border:白）を
-   そのまま引き継ぐため、ここではサイズと光の輪（box-shadowの二重glow）だけ
-   足す。 */
 .map-pin-spot.map-pin-selected {
-  width: 24px;
-  height: 24px;
-  margin: -5px 0 0 -5px;
-  background-color: var(--color-selected);
-  border-width: 2.5px;
-  box-shadow: 0 0 0 4px rgba(27, 94, 158, 0.35), 0 0 10px 4px rgba(27, 94, 158, 0.75), 0 1px 3px rgba(0, 0, 0, 0.5);
+  width: 20px;
+  height: 20px;
+  background-color: #1f3c88;
+  border: 3.5px solid white;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.55);
+}
+
+/* 【43本目A-1】3Dの選んだピン（HTMLの印、地形の裏でも隠れない）。2Dの.map-pin-selectedと
+   同じ見た目。押す操作は下の円のレイヤーで受けるため、この印自体は操作を受けない。 */
+.map-pin-selected-3d {
+  width: 20px;
+  height: 20px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background-color: #1f3c88;
+  border: 3.5px solid white;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* 【43本目、Minami決定：B-2】近いピンをまとめた丸（数字入りの青い丸）。オレンジ（金額を
+   変えて新しく入った場所）を含むときは、右上に小さなオレンジの点（.map-cluster-orange-dot）。
+   大きさ（28〜38px）はJSが中の件数に応じてstyleで指定する。 */
+.map-cluster-wrapper {
+  background: none;
+  border: none;
+}
+
+.map-cluster {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background-color: #1f3c88;
+  border: 2px solid white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  color: white;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 0.3s ease, opacity 0.3s ease;
+}
+
+.map-cluster-orange-dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: #ff6b2b;
+  border: 1.5px solid white;
+  box-sizing: border-box;
+}
+
+/* 検索直後の波の演出（下の.pin-wave-hidden）を、まとめた丸にも同じように効かせる。 */
+.map-cluster-wrapper.pin-wave-hidden .map-cluster {
+  opacity: 0;
+  transform: scale(0.3);
 }
 
 /* 出発駅のピン：大きめのダイヤ形＋常時ラベルで一目で分かるように */

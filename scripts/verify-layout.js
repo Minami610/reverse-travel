@@ -119,13 +119,54 @@ async function searchAt(page, stationText, budget) {
  * 【2026-10-15、11本目②】checkDescendTiltChoreography専用のローカル関数
  * だったものを、checkReturnToOverviewからも使うためモジュール直下へ移した。 */
 async function findSpotAndStation(page, spotName) {
+  // 【43本目】点のソースは近い点をまとめる（cluster）ようになり、querySourceFeatures()では
+  // まとめた丸に入った点が返らないため、全件（_lastSpots）から探す。
   return page.evaluate((name) => {
-    const feats = window.__terrainMapForDebug.querySourceFeatures('spots');
-    const f = feats.find((x) => x.properties.name === name);
-    const spot = f ? { latitude: f.geometry.coordinates[1], longitude: f.geometry.coordinates[0] } : null;
+    const s = (window.__terrainViewForDebug._lastSpots || []).find((x) => x.name === name);
+    const spot = s ? { latitude: s.latitude, longitude: s.longitude } : null;
     const station = window.__terrainViewForDebug._lastDepartureStation;
     return { spot, station };
   }, spotName);
+}
+
+/**
+ * 【43本目】3Dで、条件に合うピンを押せる画面上の位置（#map-area基準）を返す。
+ * 近い点はまとめた丸（数字入り）になるため、まずは今1つずつ見えている点（まとめた丸に
+ * 入っていない点）から探す。名前・IDの指定があり、その点がまとめた丸に入っているときは、
+ * その点を中心にまとめなくなるズーム（14）へ瞬時に寄ってから位置を求める。
+ * @param {{name?: string, id?: string, maxFare?: number, maxFareExclusiveBand?: number}} q
+ * @returns {Promise<{x:number, y:number, name:string, id:string}|null>}
+ */
+async function spotScreenPos3d(page, q) {
+  const find = () => page.evaluate((q) => {
+    const map = window.__terrainMapForDebug;
+    const match = (props) => (q.name === undefined || props.name === q.name)
+      && (q.id === undefined || props.id === q.id)
+      && (q.maxFare === undefined || props.fare <= q.maxFare);
+    const f = map.querySourceFeatures('spots').find((x) => !x.properties.cluster && match(x.properties));
+    if (!f) return null;
+    const pt = map.project(f.geometry.coordinates);
+    return { x: pt.x, y: pt.y, name: f.properties.name, id: f.properties.id };
+  }, q);
+  let pos = await find();
+  if (pos || (q.name === undefined && q.id === undefined)) return pos;
+  const zoomed = await page.evaluate((q) => {
+    const tv = window.__terrainViewForDebug;
+    const s = (tv._lastSpots || []).find((x) => (q.name === undefined || x.name === q.name) && (q.id === undefined || x.id === q.id));
+    if (!s) return false;
+    // 中心の高さも点の標高にそろえる（43本目A-1と同じ理由：そろえないと点が中心より上に
+    // 描かれ、山の上の点は尾根の向こうに隠れることがある）。
+    const map = window.__terrainMapForDebug;
+    const elevation = map.queryTerrainElevation([s.longitude, s.latitude]);
+    map.jumpTo({ center: [s.longitude, s.latitude], zoom: 14, ...(Number.isFinite(elevation) ? { elevation } : {}) });
+    return true;
+  }, q);
+  if (!zoomed) return null;
+  await page.waitForTimeout(300);
+  await waitForTerrainCameraIdle(page);
+  await page.waitForTimeout(300);
+  pos = await find();
+  return pos;
 }
 
 /** 2つの矩形が重なっているか（null=非表示要素は重なり判定の対象外） */
@@ -1252,11 +1293,18 @@ async function checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths)
         `_pendingPaintReveal=${pendingRevealRequested}`
       );
       await page.waitForTimeout(1500);
-      const filterAfterWait = await page.evaluate(() => window.__terrainMapForDebug.getFilter('spots-circle'));
+      // 【43本目】点のソースは近い点をまとめる（cluster）ため、波の演出は絞り込み（setFilter）では
+      // なく、出す点のデータを作り直して行う。波が終わったら、予算内の点（選んだピンを除く）が
+      // すべてデータに入っていること（_spotDataCount）を見る。
+      const afterWait = await page.evaluate(() => {
+        const tv = window.__terrainViewForDebug;
+        const expected = (tv._lastSpots || []).filter((s) => s.source_round_trip_fare <= tv._lastBudget && s.id !== tv.selectedSpotId && Number.isFinite(s.latitude)).length;
+        return { waveFrame: tv._waveFrame, dataCount: tv._spotDataCount, expected };
+      });
       record(
-        '[波の演出/3D] 1.5秒待つと距離条件が外れる（予算の条件だけになる＝波が終わる）',
-        Array.isArray(filterAfterWait) && filterAfterWait[0] === '<=',
-        JSON.stringify(filterAfterWait)
+        '[波の演出/3D] 1.5秒待つと波が終わり、予算内の点がすべて出ている',
+        afterWait.waveFrame == null && afterWait.dataCount === afterWait.expected,
+        JSON.stringify(afterWait)
       );
     } else {
       record('[波の演出/3D] 3D化（検証の前提）', false);
@@ -1739,14 +1787,7 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
         // 平面投影上の中心（flyToの中心）とピンの実際の描画位置がずれて
         // タップが外れることがあった。ここではピンの正確な画面座標を
         // 得るためにMapLibreのproject()で位置を計算してからクリックする。
-        const pinScreenPos = await page.evaluate(() => {
-          const map = window.__terrainMapForDebug;
-          const feats = map.querySourceFeatures('spots');
-          const f = feats.find((x) => x.properties.name === '城生城');
-          if (!f) return null;
-          const p = map.project(f.geometry.coordinates);
-          return { x: p.x, y: p.y };
-        });
+        const pinScreenPos = await spotScreenPos3d(page, { name: '城生城' });
         let detailBtnVisible = false;
         if (pinScreenPos) {
           const box = await page.locator('#map-area').boundingBox();
@@ -1881,11 +1922,7 @@ async function checkDefaultStyleD(browser, baseUrl, savedPaths) {
     JSON.stringify(layerInfo.aerialOpacityExpr)
   );
 
-  const coords = await page.evaluate((name) => {
-    const feats = window.__terrainMapForDebug.querySourceFeatures('spots');
-    const f = feats.find((x) => x.properties.name === name);
-    return f ? { latitude: f.geometry.coordinates[1], longitude: f.geometry.coordinates[0] } : null;
-  }, '城生城');
+  const coords = (await findSpotAndStation(page, '城生城')).spot;
   record('[D既定] 検証用スポット「城生城」が見つかる', !!coords);
   const station = await page.evaluate(() => window.__terrainViewForDebug._lastDepartureStation);
 
@@ -2333,14 +2370,7 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
 
     // 円（circle-layer）は実DOM要素を持たないため、project()で実際の画面座標を
     // 求めてからmouse.click()で押す（このファイルの他のピン検証箇所と同じ方式）。
-    const pinScreenPos = await page.evaluate((budget) => {
-      const map = window.__terrainMapForDebug;
-      const feats = map.querySourceFeatures('spots').filter((f) => f.properties.fare <= budget);
-      if (feats.length === 0) return null;
-      const f = feats[0];
-      const p = map.project(f.geometry.coordinates);
-      return { x: p.x, y: p.y, name: f.properties.name };
-    }, 1000);
+    const pinScreenPos = await spotScreenPos3d(page, { maxFare: 1000 });
     record(`[3D/${label}] 検証対象のピンが見つかる`, !!pinScreenPos);
 
     if (pinScreenPos) {
@@ -3392,14 +3422,7 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       savedPaths.push(mapTab3dPath);
 
       // 普通のピン（帯内）を選ぶ：名前の帯が予算操作帯・「全体を見る」と重ならない
-      const pinScreenPos = await page.evaluate((budget) => {
-        const map = window.__terrainMapForDebug;
-        const feats = map.querySourceFeatures('spots').filter((f) => f.properties.fare <= budget);
-        if (feats.length === 0) return null;
-        const f = feats[0];
-        const p = map.project(f.geometry.coordinates);
-        return { x: p.x, y: p.y };
-      }, 800);
+      const pinScreenPos = await spotScreenPos3d(page, { maxFare: 800 });
       if (pinScreenPos) {
         const mapBox3d = await page.locator('#map-area').boundingBox();
         // 【24本目②、不具合修正】checkCrossDimensionSelectionScroll()と同じ、
@@ -3486,14 +3509,14 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       }
 
       // ＋を2回：円だけ変わり、点のフィルタ（帯の判定）は変わらない
-      const filterBefore = await page.evaluate(() => JSON.stringify(window.__terrainMapForDebug.getFilter('spots-circle')));
+      const filterBefore = await page.evaluate(() => window.__terrainViewForDebug._spotDataSignature);
       const circleBefore3d = await page.evaluate(() => window.__terrainViewForDebug._reachCircleRadiusKm);
       const summaryBefore3d = await page.locator('#search-summary-text').textContent();
       const headingBefore3d = await page.locator('#results-band-heading').textContent();
       await page.click('#mobile-budget-increment');
       await page.click('#mobile-budget-increment');
       await page.waitForTimeout(300);
-      const filterAfter = await page.evaluate(() => JSON.stringify(window.__terrainMapForDebug.getFilter('spots-circle')));
+      const filterAfter = await page.evaluate(() => window.__terrainViewForDebug._spotDataSignature);
       const circleAfter3d = await page.evaluate(() => window.__terrainViewForDebug._reachCircleRadiusKm);
       record(`[${label}/3D] 予算操作帯の＋を2回押しても点の絞り込み（帯フィルタ）は変わらない`, filterBefore === filterAfter, JSON.stringify({ filterBefore, filterAfter }));
       record(`[${label}/3D] 予算操作帯の＋を2回押すと円の半径は大きくなる`, circleAfter3d > circleBefore3d, JSON.stringify({ circleBefore3d, circleAfter3d }));
@@ -3529,17 +3552,22 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       // （33本目で人の操作速度を模した10回の実機相当検証で確認：
       // 修正後の条件は10/10成功、修正前の条件は10/10「クリックしても
       // 情報枠が開かない」で失敗し続けた）。
-      const paleScreenPos = await page.evaluate((budget) => {
+      // 【43本目】薄い（灰色の）点：金額帯より安い点（cat==='gray'）。まとめた丸に入っていれば寄ってから。
+      let paleScreenPos = await page.evaluate(() => {
         const map = window.__terrainMapForDebug;
-        const bandWidth = 200; // main.js/terrain-map-view.jsのBAND_WIDTHと同じ値
-        const feats = map.querySourceFeatures('spots').filter(
-          (f) => f.properties.fare <= budget && f.properties.fare <= budget - bandWidth
-        );
-        if (feats.length === 0) return null;
-        const f = feats[0];
+        const f = map.querySourceFeatures('spots').find((x) => !x.properties.cluster && x.properties.cat === 'gray');
+        if (!f) return null;
         const p = map.project(f.geometry.coordinates);
         return { x: p.x, y: p.y };
-      }, 1000);
+      });
+      if (!paleScreenPos) {
+        const grayId = await page.evaluate(() => {
+          const tv = window.__terrainViewForDebug;
+          const s = (tv._lastSpots || []).find((x) => x.source_round_trip_fare <= tv._lastBudget - 200);
+          return s ? s.id : null;
+        });
+        if (grayId) paleScreenPos = await spotScreenPos3d(page, { id: grayId });
+      }
       if (paleScreenPos) {
         const mapBox3dPale = await page.locator('#map-area').boundingBox();
         await page.mouse.click(mapBox3dPale.x + paleScreenPos.x, mapBox3dPale.y + paleScreenPos.y);
@@ -3657,13 +3685,7 @@ async function checkCrossDimensionSelectionScroll(browser, baseUrl, savedPaths) 
     await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
     await page.waitForTimeout(500);
     const scrollTopBefore3d = await page.evaluate(() => document.getElementById('results-list').scrollTop);
-    const pinPos = await page.evaluate((id) => {
-      const map = window.__terrainMapForDebug;
-      const f = map.querySourceFeatures('spots').find((x) => x.properties.id === id);
-      if (!f) return null;
-      const p = map.project(f.geometry.coordinates);
-      return { x: p.x, y: p.y };
-    }, lastCardSpotId);
+    const pinPos = await spotScreenPos3d(page, { id: lastCardSpotId });
     record('[PC/3D] 最後のカードに対応するピンが見つかる', !!pinPos);
     if (pinPos) {
       const mapBox = await page.locator('#map-area').boundingBox();
@@ -3771,13 +3793,7 @@ async function checkCrossDimensionSelectionScroll(browser, baseUrl, savedPaths) 
       );
 
       // 3Dで別のピン（lastCardSpotId）を選び、一覧がそちらへスクロールし直すこと
-      const pinPos2 = await page.evaluate((id) => {
-        const map = window.__terrainMapForDebug;
-        const f = map.querySourceFeatures('spots').find((x) => x.properties.id === id);
-        if (!f) return null;
-        const p = map.project(f.geometry.coordinates);
-        return { x: p.x, y: p.y };
-      }, lastCardSpotId);
+      const pinPos2 = await spotScreenPos3d(page, { id: lastCardSpotId });
       record('[2D→3D切替] 切替後の検証用ピンが見つかる', !!pinPos2);
       if (pinPos2) {
         const mapBox2 = await page.locator('#map-area').boundingBox();
@@ -6148,7 +6164,7 @@ async function readPixelsAt(page, x, y, r = 2) {
 }
 
 // 【43本目】3Dの選んだピンの色（terrain-map-view.jsのCOLOR_SELECTED）。
-const TEST_SELECTED_PIN_RGB = [27, 94, 158];
+const TEST_SELECTED_PIN_RGB = [31, 60, 136]; // 【43本目B-1】#1F3C88（紺に近い青）
 const isNearRgb = ([r, g, b], [er, eg, eb], tol = 30) => Math.abs(r - er) <= tol && Math.abs(g - eg) <= tol && Math.abs(b - eb) <= tol;
 
 /**
@@ -6211,6 +6227,8 @@ async function checkSelectedPinVisibleAfterFocus3d(browser, baseUrl, savedPaths)
             const x = Math.sin(toRad(c - a) / 2) ** 2 + Math.cos(toRad(a)) * Math.cos(toRad(c)) * Math.sin(toRad(d - b) / 2) ** 2;
             return 2 * 6371 * Math.asin(Math.sqrt(x));
           };
+          // 【43本目B】近い点はまとめた丸になるため、押すときはspotScreenPos3d()（まとめた丸に
+          // 入っていれば、その点に寄ってから位置を求める）を使う。ここでは種類ごとに1つ選ぶだけ。
           const cands = (tv._lastSpots || [])
             .filter((s) => s.source_round_trip_fare <= tv._lastBudget && Number.isFinite(s.latitude))
             .map((s) => ({ s, elev: map.queryTerrainElevation([s.longitude, s.latitude]) ?? 0, km: hav(dep.stop_lat, dep.stop_lon, s.latitude, s.longitude) }));
@@ -6218,25 +6236,42 @@ async function checkSelectedPinVisibleAfterFocus3d(browser, baseUrl, savedPaths)
             const p = map.project([s.longitude, s.latitude]);
             return p.x > 30 && p.x < rect.width - 110 && p.y > 40 && p.y < rect.height - 60;
           });
-          const mountain = pick([...cands].sort((a, b) => b.elev - a.elev));
-          const sea = pick([...cands].sort((a, b) => a.elev - b.elev));
-          const town = pick([...cands].filter((c) => c.km > 0.3).sort((a, b) => a.km - b.km));
-          return [['山の上', mountain], ['海の近く', sea], ['街中', town]]
-            .filter(([, c]) => c)
-            .map(([kind, c]) => ({ kind, id: c.s.id, name: c.s.name, elev: Math.round(c.elev), latitude: c.s.latitude, longitude: c.s.longitude }));
+          // 種類ごとに候補を8件まで並べる（尾根の裏で地形に隠れて押せない点があるため、
+          // 実際に押せる点が見つかるまで順に試す）。
+          const toT = (kind, c) => ({ kind, id: c.s.id, name: c.s.name, elev: Math.round(c.elev), latitude: c.s.latitude, longitude: c.s.longitude });
+          const inView = (arr) => arr.filter(({ s }) => {
+            const p = map.project([s.longitude, s.latitude]);
+            return p.x > 30 && p.x < rect.width - 110 && p.y > 40 && p.y < rect.height - 60;
+          });
+          return [
+            ['山の上', inView([...cands].sort((a, b) => b.elev - a.elev))],
+            ['海の近く', inView([...cands].sort((a, b) => a.elev - b.elev))],
+            ['街中', inView([...cands].filter((c) => c.km > 0.3).sort((a, b) => a.km - b.km))],
+          ].filter(([, list]) => list.length > 0).map(([kind, list]) => ({ kind, list: list.slice(0, 8).map((c) => toT(kind, c)) }));
         });
-        record(`${label} 山の上・海の近く・街中の3つのピンが選べる（検証の前提）`, targets.length === 3, JSON.stringify(targets.map((t) => `${t.kind}:${t.name}(${t.elev}m)`)));
-        for (const t of targets) {
-          // 前のピンに寄ったままだと押せる位置が変わるため、毎回最初の見え方に戻してから押す。
-          await page.evaluate(() => window.__terrainViewForDebug.returnToSearchView({ durationMs: 0 }));
-          await page.waitForTimeout(200);
-          await waitForTerrainTilesLoaded(page);
-          const pos = await page.evaluate((t) => {
-            const map = window.__terrainMapForDebug;
-            const rect = map.getContainer().getBoundingClientRect();
-            const p = map.project([t.longitude, t.latitude]);
-            return { x: rect.left + p.x, y: rect.top + p.y };
-          }, t);
+        record(`${label} 山の上・海の近く・街中の3種類のピンの候補がある（検証の前提）`, targets.length === 3, JSON.stringify(targets.map((t) => `${t.kind}:${t.list.length}件`)));
+        for (const group of targets) {
+          // 候補を順に試し、実際に描かれていて（地形に隠れていない）押せる点を使う。
+          let t = null;
+          let pos = null;
+          for (const cand of group.list) {
+            // 前のピンに寄ったままだと押せる位置が変わるため、毎回最初の見え方に戻してから探す。
+            await page.evaluate(() => window.__terrainViewForDebug.returnToSearchView({ durationMs: 0 }));
+            await page.waitForTimeout(200);
+            await waitForTerrainTilesLoaded(page);
+            const rel = await spotScreenPos3d(page, { id: cand.id });
+            if (!rel) continue;
+            const mapRect = await page.locator('#spots-map-3d').boundingBox();
+            const p = { x: mapRect.x + rel.x, y: mapRect.y + rel.y };
+            const ok = await page.evaluate(({ p, rel, id }) => {
+              const map = window.__terrainMapForDebug;
+              const drawn = map.queryRenderedFeatures([[rel.x - 4, rel.y - 4], [rel.x + 4, rel.y + 4]], { layers: ['spots-circle'] })
+                .some((f) => f.properties.id === id);
+              return drawn && document.elementFromPoint(p.x, p.y)?.tagName === 'CANVAS';
+            }, { p, rel, id: cand.id });
+            if (ok) { t = cand; pos = p; break; }
+          }
+          if (!t) { record(`${label} ${group.kind}のピンで、地形に隠れず押せるものがある（検証の前提）`, false); continue; }
           await page.evaluate(() => {
             window.__tiltDone = false;
             window.__terrainViewForDebug.onTiltComplete = () => { window.__tiltDone = true; };
@@ -6275,6 +6310,270 @@ async function checkSelectedPinVisibleAfterFocus3d(browser, baseUrl, savedPaths)
         record(`${label} 検証中にクラッシュしない`, false, e.message);
       } finally {
         await context.close();
+      }
+    }
+  } finally {
+    await gpuBrowser.close();
+  }
+}
+
+// 【43本目B-1】ピンの色（2Dのstyle.css・3Dのterrain-map-view.jsのPIN_COLOR_*と同じ値）
+const TEST_PIN_RGB = { blue: [31, 60, 136], orange: [255, 107, 43], gray: [142, 149, 158] };
+
+/** 【43本目】ページ内で、要素の矩形どうしが重なっているか（8px未満の近さも含めない、重なりだけ）。 */
+function overlapsAny(rect, others) {
+  return others.filter((o) => o && rectsOverlap(rect, o));
+}
+
+/**
+ * 【2026-10-21、43本目、Minami決定：B】ピンの色と大きさ・近いピンをまとめる。
+ * - 2D：青（検索した金額帯）＝紺に近い青・直径13px・白いふち、灰色（安い）＝小さな点、
+ *   選んだピン＝20px・白い太いふち・影。光のにじみ（ぼかしの大きい影）が無い。
+ * - 3D：点のレイヤーの色・大きさの式、選んだピンの大きさ・ふち、実際の画素の色（青い点）。
+ * - 引いているとき（検索した直後）は近いピンがまとめた丸（数字入り）になり、数字は中の件数と
+ *   一致する。押すと寄って分かれる。選んだピンはまとめない。
+ * - 375×667・390×844・400×464・PCで、検索した直後のピン・まとめた丸が地図の上の部品
+ *   （戻るボタン・方位磁針・ハンドル・2D/3D切替・ズーム・出典・予算操作帯）と重ならない。
+ * 大池・往復¥600。あわせて、検索した直後（まとめた丸が見える状態）のスクリーンショットを撮る。
+ */
+async function checkPinColorsAndClusters(browser, baseUrl, savedPaths) {
+  console.log('\n=== 43本目B：ピンの色と大きさ・近いピンをまとめる ===');
+  const gpuBrowser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
+  const controlRects = (page) => page.evaluate(() => {
+    const rectOf = (el) => {
+      if (!el) return null;
+      const cs = getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || el.hidden) return null;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 ? { x: r.x, y: r.y, width: r.width, height: r.height } : null;
+    };
+    return [
+      '#map-reset-view-btn', '#map-compass-btn', '#map-rotate-handle', '#map-dimension-toggle',
+      '#map-area .leaflet-control-zoom', '#map-area .leaflet-control-attribution', '#map-area .maplibregl-ctrl-attrib',
+      '#mobile-budget-overlay',
+    ].map((sel) => ({ sel, rect: rectOf(document.querySelector(sel)) })).filter((x) => x.rect);
+  });
+  try {
+    const viewports = { pc: VIEWPORTS.pc, own: { width: 400, height: 464 }, sp375: { width: 375, height: 667 }, sp390: { width: 390, height: 844 } };
+    for (const [vLabel, viewport] of Object.entries(viewports)) {
+      const isMobile = vLabel !== 'pc';
+      for (const dim of ['2d', '3d']) {
+        const label = `[43/B/${vLabel}/${dim}]`;
+        const context = await (dim === '3d' ? gpuBrowser : browser).newContext({ viewport });
+        const page = await context.newPage();
+        const errors = [];
+        page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+        page.on('console', (msg) => {
+          if (msg.type() === 'error' && !isKnownAcceptableConsoleMessage(msg.text())) errors.push(msg.text());
+        });
+        try {
+          await page.goto(baseUrl, { waitUntil: 'load' });
+          await page.waitForSelector('#departure-input');
+          await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+          await searchAtAndWaitPrefetch(page, '大池', 600);
+          if (isMobile) {
+            await page.click('.tab-btn[data-tab="map"]');
+            await page.waitForTimeout(400);
+          }
+          if (dim === '3d') {
+            await page.click('#map-dimension-toggle');
+            const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+            record(`${label} 3D化（検証の前提）`, ok);
+            if (!ok) continue;
+            await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+            await page.evaluate(() => document.getElementById('map-rotate-hint')?.click());
+            await waitForTerrainTilesLoaded(page);
+            await page.waitForTimeout(600);
+          } else {
+            await waitForWaveRevealSettled(page);
+            await page.waitForTimeout(300);
+          }
+
+          // --- まとめた丸がある・数字が中の件数と一致 ---
+          const clusters = await page.evaluate((dim) => {
+            if (dim === '3d') {
+              const tv = window.__terrainViewForDebug;
+              return [...(tv._clusterMarkers || new Map()).values()].map((e) => {
+                const r = e.el.getBoundingClientRect();
+                return { count: e.count, text: e.el.querySelector('.map-cluster-count')?.textContent, rect: { x: r.x, y: r.y, width: r.width, height: r.height } };
+              });
+            }
+            const mv = window.__mapViewForDebug;
+            return mv._clusters.map((c) => {
+              const el = c.marker.getElement();
+              const r = el.getBoundingClientRect();
+              return { count: c.members.length, text: el.querySelector('.map-cluster-count')?.textContent, rect: { x: r.x, y: r.y, width: r.width, height: r.height } };
+            });
+          }, dim);
+          record(
+            `${label} 引いているとき（検索した直後）は、近いピンが数字の入った丸にまとまり、数字が中の件数と一致する`,
+            clusters.length > 0 && clusters.every((c) => String(c.count) === c.text),
+            JSON.stringify(clusters.map((c) => `${c.text}/${c.count}`))
+          );
+          if (dim === '2d') {
+            // --- 2Dの色と大きさ（実際に計算されたCSS） ---
+            const styles = await page.evaluate(() => {
+              const out = {};
+              for (const cat of ['blue', 'gray']) {
+                const pin = [...document.querySelectorAll(`.map-pin-spot.map-pin-${cat}`)].find((el) => el.closest('.leaflet-marker-icon').style.display !== 'none');
+                if (!pin) continue;
+                const cs = getComputedStyle(pin);
+                out[cat] = { bg: cs.backgroundColor, w: pin.getBoundingClientRect().width, border: cs.borderTopWidth, borderColor: cs.borderTopColor, shadow: cs.boxShadow };
+              }
+              return out;
+            });
+            record(
+              `${label} 青のピン：紺に近い青・直径13px前後・白いふち・光のにじみなし`,
+              !!styles.blue && styles.blue.bg === 'rgb(31, 60, 136)' && Math.abs(styles.blue.w - 13) <= 1 && styles.blue.borderColor === 'rgb(255, 255, 255)'
+                && !/\d+px \d+px (?:[5-9]|\d{2,})px/.test(styles.blue.shadow),
+              JSON.stringify(styles.blue)
+            );
+            if (styles.gray) {
+              record(`${label} 灰色のピン：小さな点（直径8px以下）・灰色`, styles.gray.bg === 'rgb(142, 149, 158)' && styles.gray.w <= 8, JSON.stringify(styles.gray));
+            }
+          } else {
+            const paint = await page.evaluate(() => {
+              const m = window.__terrainMapForDebug;
+              return {
+                color: m.getPaintProperty('spots-circle', 'circle-color'),
+                radius: m.getPaintProperty('spots-circle', 'circle-radius'),
+                blur: m.getPaintProperty('spots-circle', 'circle-blur'),
+                selRadius: m.getPaintProperty('selected-spot-circle', 'circle-radius'),
+                selStroke: m.getPaintProperty('selected-spot-circle', 'circle-stroke-width'),
+              };
+            });
+            const colorStr = JSON.stringify(paint.color);
+            record(
+              `${label} 点の色は、青＝#1F3C88・オレンジ＝#FF6B2B・灰色＝#8E959E、直径は青・オレンジ13px・灰色7px、ぼかしなし`,
+              colorStr.includes('#1F3C88') && colorStr.includes('#FF6B2B') && colorStr.includes('#8E959E')
+                && JSON.stringify(paint.radius) === JSON.stringify(['match', ['get', 'cat'], 'gray', 3.5, 6.5]) && paint.blur === 0,
+              JSON.stringify(paint)
+            );
+            record(`${label} 選んだピンはひと回り大きく（直径20px）、白い太いふち`, paint.selRadius === 10 && paint.selStroke >= 3, JSON.stringify(paint));
+            // 実際の画素：1つずつ見えている青い点のどれかの真ん中が、青の色
+            const bluePts = await page.evaluate(() => {
+              const map = window.__terrainMapForDebug;
+              const rect = map.getContainer().getBoundingClientRect();
+              return map.queryRenderedFeatures({ layers: ['spots-circle'] })
+                .filter((f) => f.properties.cat === 'blue')
+                .map((f) => { const p = map.project(f.geometry.coordinates); return { x: rect.left + p.x, y: rect.top + p.y }; })
+                .slice(0, 5);
+            });
+            let blueSeen = false;
+            for (const pt of bluePts) {
+              const px = await readPixelsAt(page, pt.x, pt.y, 1);
+              if (px.filter((c) => isNearRgb(c, TEST_PIN_RGB.blue)).length >= 5) { blueSeen = true; break; }
+            }
+            record(`${label} 青い点の真ん中が実際に紺に近い青で描かれている`, blueSeen || bluePts.length === 0, JSON.stringify({ checked: bluePts.length }));
+          }
+
+          // --- ほかの部品と重ならない（検索した直後） ---
+          const controls = await controlRects(page);
+          const pinRects = await page.evaluate((dim) => {
+            if (dim === '3d') {
+              const map = window.__terrainMapForDebug;
+              const rect = map.getContainer().getBoundingClientRect();
+              return map.queryRenderedFeatures({ layers: ['spots-circle'] }).map((f) => {
+                const p = map.project(f.geometry.coordinates);
+                const r = f.properties.cat === 'gray' ? 3.5 : 8.5;
+                return { x: rect.left + p.x - r, y: rect.top + p.y - r, width: 2 * r, height: 2 * r };
+              });
+            }
+            return [...document.querySelectorAll('#spots-map .map-pin-spot')]
+              .filter((el) => el.closest('.leaflet-marker-icon').style.display !== 'none')
+              .map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; });
+          }, dim);
+          const hits = [];
+          [...pinRects, ...clusters.map((c) => c.rect)].forEach((r) => {
+            overlapsAny(r, controls.map((c) => c.rect)).forEach((o) => hits.push({ pin: r, control: controls.find((c) => c.rect === o).sel }));
+          });
+          record(`${label} 検索した直後、ピン・まとめた丸が地図の上の部品と重ならない`, hits.length === 0, JSON.stringify(hits.slice(0, 5)));
+
+          if (vLabel === 'pc' || vLabel === 'own') {
+            const shotPath = path.join(screenshotDir, `round43-clusters-${dim}-${vLabel}.png`);
+            await page.screenshot({ path: shotPath, clip: await page.locator('#map-area').boundingBox() });
+            savedPaths.push(shotPath);
+          }
+
+          // --- まとめた丸を押すと寄って分かれる（PCと400×464だけ） ---
+          if (vLabel === 'pc' || vLabel === 'own') {
+            const before = await page.evaluate((dim) => {
+              if (dim === '3d') {
+                const tv = window.__terrainViewForDebug;
+                const entries = [...(tv._clusterMarkers || new Map()).entries()].sort((a, b) => b[1].count - a[1].count);
+                if (entries.length === 0) return null;
+                const [id, e] = entries[0];
+                const r = e.el.getBoundingClientRect();
+                return { id, count: e.count, x: r.x + r.width / 2, y: r.y + r.height / 2, zoom: window.__terrainMapForDebug.getZoom() };
+              }
+              const mv = window.__mapViewForDebug;
+              const c = [...mv._clusters].sort((a, b) => b.members.length - a.members.length)[0];
+              if (!c) return null;
+              const r = c.marker.getElement().getBoundingClientRect();
+              return { members: c.members, count: c.members.length, x: r.x + r.width / 2, y: r.y + r.height / 2, zoom: mv.map.getZoom() };
+            }, dim);
+            if (before) {
+              const top = await page.evaluate(({ x, y }) => {
+                const el = document.elementFromPoint(x, y);
+                return !!el && !!el.closest('.map-cluster-wrapper');
+              }, before);
+              record(`${label} まとめた丸の押す位置が他の部品に隠れていない`, top);
+              await page.mouse.click(before.x, before.y);
+              await page.waitForTimeout(900);
+              if (dim === '3d') await waitForTerrainCameraIdle(page);
+              await page.waitForTimeout(400);
+              const after = await page.evaluate(({ dim, before }) => {
+                if (dim === '3d') {
+                  const tv = window.__terrainViewForDebug;
+                  return { zoom: window.__terrainMapForDebug.getZoom(), sameClusterStill: (tv._clusterMarkers || new Map()).has(before.id) };
+                }
+                const mv = window.__mapViewForDebug;
+                const key = before.members.join(',');
+                const same = mv._clusters.some((c) => c.members.join(',') === key);
+                const visibleMembers = before.members.filter((id) => {
+                  const el = mv.markersBySpotId.get(id)?.getElement();
+                  return el && el.style.display !== 'none';
+                }).length;
+                return { zoom: mv.map.getZoom(), sameClusterStill: same, visibleMembers };
+              }, { dim, before });
+              record(
+                `${label} まとめた丸を押すと、その場所に寄って分かれる`,
+                after.zoom > before.zoom + 0.5 && !after.sameClusterStill && (dim === '3d' || after.visibleMembers > 0),
+                JSON.stringify({ beforeZoom: before.zoom, count: before.count, ...after })
+              );
+            } else {
+              record(`${label} 押せるまとめた丸がある（検証の前提）`, false);
+            }
+          }
+
+          // --- 選んだピンはまとめない（2D、PC：まとめた丸に入っていたピンを一覧から選ぶ） ---
+          if (dim === '2d' && vLabel === 'pc') {
+            // まとめた丸を押して寄ったあとなので、検索した直後の見え方へ瞬時に戻してから選ぶ。
+            await page.evaluate(() => window.__mapViewForDebug.refitBounds());
+            await page.waitForTimeout(500);
+            const res = await page.evaluate(() => {
+              const mv = window.__mapViewForDebug;
+              const c = mv._clusters[0];
+              if (!c) return null;
+              const id = c.members[0];
+              mv.setSelected(id);
+              const el = mv.markersBySpotId.get(id).getElement();
+              const pin = el.querySelector('.map-pin');
+              const cs = getComputedStyle(pin);
+              return { id, visible: el.style.display !== 'none', inCluster: mv._clusters.some((k) => k.members.includes(id)), w: pin.getBoundingClientRect().width, border: cs.borderTopWidth, shadow: cs.boxShadow };
+            });
+            record(
+              `${label} まとめた丸に入っていたピンを選ぶと、そのピンだけはまとめずに見える（20px・白い太いふち・影）`,
+              !!res && res.visible && !res.inCluster && Math.abs(res.w - 20) <= 1 && parseFloat(res.border) >= 3 && res.shadow !== 'none',
+              JSON.stringify(res)
+            );
+          }
+          record(`${label} コンソールにエラーが出ていない（標高タイルの404を除く）`, errors.length === 0, errors.join(' / '));
+        } catch (e) {
+          record(`${label} 検証中にクラッシュしない`, false, e.message);
+        } finally {
+          await context.close();
+        }
       }
     }
   } finally {
@@ -7139,6 +7438,7 @@ async function main() {
     await checkTwoDSearchViewAfterModeSwitch(browser, baseUrl, savedPaths);
     await checkResetViewButton(browser, baseUrl, savedPaths);
     await checkSelectedPinVisibleAfterFocus3d(browser, baseUrl, savedPaths);
+    await checkPinColorsAndClusters(browser, baseUrl, savedPaths);
     await checkBreadcrumbTrail(browser, baseUrl, savedPaths);
     await checkBudgetSlider(browser, baseUrl, savedPaths);
     await checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths);

@@ -105,6 +105,32 @@ const MAP_REACH_CIRCLE_COLOR = '#2F6FB2';
 /** 到達円の半径表記（例: 0.8km, 12km）。10km未満は小数第1位まで、以上は整数に丸める。
  * 【2026-10-14、25本目】地図上のラベルを廃止し、main.jsのスマホ予算操作帯・PCの
  * 帯件数プレビューで距離を出すため、main.jsからimportして使えるようexportする。 */
+// 【2026-10-21、43本目、Minami決定：B】近いピンを数字の入った丸にまとめる。画面上で
+// この距離（px）以内のピン同士を1つの丸にする（ピンの直径13px＋まとめた丸の大きさを見込んだ値）。
+// このズーム以上ではまとめない（同じ場所に重なっている場所がいつまでも分かれないのを防ぐ）。
+const MAP_PIN_CLUSTER_RADIUS_PX = 36;
+const MAP_PIN_CLUSTER_MAX_ZOOM = 16;
+
+/**
+ * 【2026-10-21、43本目、Minami決定：B-1／C】ピンの色の決まり（2D・3D共通、3Dは
+ * terrain-map-view.jsのpinCategory()と同じ規則）。
+ * - 'blue'  ：今の金額帯（budget−¥200より高く、budget以下）に入り、検索した金額帯にも入っていた場所
+ * - 'orange'：今の金額帯に入るが、検索した金額帯には入っていなかった場所（金額を変えて新しく入った）
+ * - 'gray'  ：今の金額帯より安く行ける場所
+ * - 'hidden'：今の金額をこえる場所（出さない）
+ * 検索した直後は今の金額＝検索した金額のため、金額帯の場所はすべて青になる。
+ * @param {number} fare 往復運賃
+ * @param {number} liveBudget 今の金額（＋−・スライダーで変えた値）
+ * @param {number} searchedBudget 最後に検索した金額
+ */
+export function pinCategory(fare, liveBudget, searchedBudget) {
+  if (!(fare <= liveBudget)) return 'hidden';
+  if (fare > liveBudget - MAP_BAND_WIDTH) {
+    return (fare <= searchedBudget && fare > searchedBudget - MAP_BAND_WIDTH) ? 'blue' : 'orange';
+  }
+  return 'gray';
+}
+
 export function formatReachRadiusKm(km) {
   if (!(km > 0)) return '0km';
   return km < 10 ? `${Math.round(km * 10) / 10}km` : `${Math.round(km)}km`;
@@ -140,6 +166,9 @@ export class MapView {
     this._waveTimers = [];
     this._pendingWaveReveal = false; // 【2026-10-13、10本目②】layout-controller.jsのinvalidateMapSize()参照
     this._needsSearchFit = false; // 【40本目】見えていない間に検索があり、見えたときに検索直後の見え方へ合わせ直す必要がある
+    this._liveBudget = null; // 【43本目】今の金額（C：＋−・スライダーで変えた値。検索した直後はlastBudgetと同じ）
+    this._clusterLayer = null; // 【43本目B-2】まとめた丸（数字入り）を置くレイヤー
+    this._clusters = []; // 【43本目B-2】今出しているまとめた丸：{marker, members:[spotId], latlng, hasOrange}（検証用にも使う）
 
     this.onSelectionChange = null; // (spotId) => void … ピン選択と一覧パネルの連動用
   }
@@ -165,6 +194,9 @@ export class MapView {
       maxZoom: 18,
     }).addTo(this.map);
     this.markersLayer = L.layerGroup().addTo(this.map);
+    this._clusterLayer = L.layerGroup().addTo(this.map);
+    // 【43本目B-2】画面上の距離でまとめるため、ズームが変わったらまとめ直す。
+    this.map.on('zoomend', () => this._recluster());
 
     // 検証用の参照（terrain-map-view.jsのwindow.__terrainViewForDebugと同じ考え方）。
     // アプリ自体はこれを使わない。本番でも害はないため条件分岐は入れていない。
@@ -187,6 +219,8 @@ export class MapView {
     this._cancelWaveReveal();
     this._cancelFitCircleToView(); // 新しい検索で、前の予算操作から保留中の地図合わせは無効化する
     this.markersLayer.clearLayers();
+    this._clusterLayer.clearLayers();
+    this._clusters = [];
     this.markersBySpotId.clear();
     this.fareBySpotId.clear();
     this.spotsLatLngById.clear();
@@ -335,6 +369,8 @@ export class MapView {
    */
   applyBudget(budget) {
     this.lastBudget = budget;
+    // 【43本目】検索したときは、今の金額＝検索した金額（オレンジは青になる）。
+    this._liveBudget = budget;
     let bandCount = 0;
     this.fareBySpotId.forEach((fare) => {
       if (fare <= budget && fare > budget - MAP_BAND_WIDTH) bandCount++;
@@ -358,18 +394,112 @@ export class MapView {
       return bandCount;
     }
 
+    this._restyleMarkers();
+    this._recluster();
+    return bandCount;
+  }
+
+  /**
+   * 【2026-10-21、43本目、Minami決定：B-1】ピンの色と大きさを、今の金額（_liveBudget）と
+   * 検索した金額（lastBudget）から塗り分ける（pinCategory()参照）。青・オレンジは直径13pxの
+   * くっきりした丸に白いふち、灰色は小さな点。以前の光のにじみ（box-shadowのぼかし）はやめた。
+   * 予算をこえる場所は出さない。見た目はCSSのクラス（map-pin-blue／-orange／-gray）で決める。
+   */
+  _restyleMarkers() {
+    const live = this._liveBudget ?? this.lastBudget;
+    const searched = this.lastBudget;
     this.markersBySpotId.forEach((marker, spotId) => {
-      const fare = this.fareBySpotId.get(spotId);
       const el = marker.getElement();
       const pin = el && el.querySelector('.map-pin');
       if (!pin) return;
-      const overBudget = fare > budget;
-      const inBand = !overBudget && fare > budget - MAP_BAND_WIDTH;
-      el.style.display = overBudget ? 'none' : '';
-      pin.classList.toggle('map-pin-spot-in-band', inBand);
-      pin.classList.toggle('map-pin-spot-cheaper', !overBudget && !inBand);
+      const cat = pinCategory(this.fareBySpotId.get(spotId), live, searched);
+      el.dataset.cat = cat;
+      pin.classList.toggle('map-pin-blue', cat === 'blue');
+      pin.classList.toggle('map-pin-orange', cat === 'orange');
+      pin.classList.toggle('map-pin-gray', cat === 'gray');
+      this._applyMarkerDisplay(el);
     });
-    return bandCount;
+  }
+
+  /** 予算をこえる場所・まとめた丸に入った場所は出さない（選んだピンはいつも出す）。 */
+  _applyMarkerDisplay(el) {
+    el.style.display = (el.dataset.cat === 'hidden' || el.dataset.clustered === '1') ? 'none' : '';
+  }
+
+  /**
+   * 【2026-10-21、43本目、Minami決定：B-2】引いているときは、画面上で近いピン（青・オレンジ・
+   * 灰色）を数字の入った青い丸にまとめ、寄ると1つずつに分かれる。外の部品
+   * （Leaflet.markercluster等）は使わず、ピン（最大で数百件）の画面上の位置から毎回まとめ直す
+   * （ピンのDOMは消さずにdisplayだけ切り替えるため、選択・ホバー・一覧との連動・検索直後の
+   * 波の演出をそのまま使える）。まとめ方：IDの順に1つずつ見て、まだどこにも入っていないピンから
+   * MAP_PIN_CLUSTER_RADIUS_PX以内のピンを集める（毎回同じ結果になる決まった順序）。
+   * 選んだピンはまとめない（いつも見える）。オレンジを含む丸には右上に小さなオレンジの点を付ける。
+   */
+  _recluster() {
+    if (!this.map || !this._clusterLayer) return;
+    this._clusterLayer.clearLayers();
+    this._clusters = [];
+    const points = [];
+    this.markersBySpotId.forEach((marker, spotId) => {
+      const el = marker.getElement();
+      if (!el) return;
+      el.dataset.clustered = '0';
+      this._applyMarkerDisplay(el);
+      if (el.dataset.cat === undefined || el.dataset.cat === 'hidden' || spotId === this.selectedSpotId) return;
+      points.push({ spotId, el, latlng: marker.getLatLng() });
+    });
+    if (!this.isContainerVisible() || this.map.getZoom() >= MAP_PIN_CLUSTER_MAX_ZOOM) return;
+    points.sort((a, b) => (a.spotId < b.spotId ? -1 : a.spotId > b.spotId ? 1 : 0));
+    points.forEach((pt) => { pt.px = this.map.latLngToLayerPoint(pt.latlng); });
+    const used = new Set();
+    for (let i = 0; i < points.length; i++) {
+      if (used.has(i)) continue;
+      const group = [i];
+      for (let j = i + 1; j < points.length; j++) {
+        if (used.has(j)) continue;
+        if (points[i].px.distanceTo(points[j].px) <= MAP_PIN_CLUSTER_RADIUS_PX) group.push(j);
+      }
+      if (group.length < 2) continue;
+      group.forEach((k) => used.add(k));
+      const members = group.map((k) => points[k]);
+      members.forEach((m) => { m.el.dataset.clustered = '1'; this._applyMarkerDisplay(m.el); });
+      const lat = members.reduce((sum, m) => sum + m.latlng.lat, 0) / members.length;
+      const lng = members.reduce((sum, m) => sum + m.latlng.lng, 0) / members.length;
+      const hasOrange = members.some((m) => m.el.dataset.cat === 'orange');
+      const marker = L.marker([lat, lng], { icon: createClusterIcon(members.length, hasOrange), zIndexOffset: 500 })
+        .addTo(this._clusterLayer);
+      const memberIds = members.map((m) => m.spotId);
+      marker.on('click', () => this._zoomIntoCluster(memberIds));
+      this._clusters.push({ marker, members: memberIds, latlng: [lat, lng], hasOrange });
+    }
+  }
+
+  /**
+   * 【43本目B-2】まとめた丸を押したとき、その場所に寄って分かれる。中の場所どうしの画面上の
+   * いちばん近い距離が、まとめる距離（MAP_PIN_CLUSTER_RADIUS_PX）をこえるズームまで寄る
+   * （ズームが1上がると画面上の距離は2倍）。まとめなくなるズーム（MAP_PIN_CLUSTER_MAX_ZOOM）が上限。
+   */
+  _zoomIntoCluster(memberIds) {
+    if (!this.map) return;
+    const latlngs = memberIds.map((id) => this.spotsLatLngById.get(id)).filter(Boolean);
+    if (latlngs.length === 0) return;
+    const zoom = this.map.getZoom();
+    const pts = latlngs.map((ll) => this.map.latLngToLayerPoint(ll));
+    let dmin = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      for (let j = i + 1; j < pts.length; j++) dmin = Math.min(dmin, pts[i].distanceTo(pts[j]));
+    }
+    const needed = dmin > 0 ? zoom + Math.log2((MAP_PIN_CLUSTER_RADIUS_PX * 1.2) / dmin) : MAP_PIN_CLUSTER_MAX_ZOOM;
+    const target = Math.min(MAP_PIN_CLUSTER_MAX_ZOOM, Math.max(zoom + 1, needed));
+    const center = [
+      latlngs.reduce((sum, ll) => sum + ll[0], 0) / latlngs.length,
+      latlngs.reduce((sum, ll) => sum + ll[1], 0) / latlngs.length,
+    ];
+    if (reachPrefersReducedMotion()) {
+      this.map.setView(center, target, { animate: false });
+    } else {
+      this.map.flyTo(center, target, { duration: 0.6 });
+    }
   }
 
   /**
@@ -448,7 +578,10 @@ export class MapView {
       this._needsSearchFit = false;
     }
     this.forceMarkerReposition();
-    if (this.lastBudget != null) this.applyBudget(this.lastBudget);
+    if (this.lastBudget != null) {
+      this._restyleMarkers();
+      this._recluster();
+    }
     if (this._reachCircleRadiusKm > 0) this._paintReachCircle(this._reachCircleRadiusKm, this._pendingCircleStyle);
     if (this._pendingWaveReveal) {
       this._pendingWaveReveal = false;
@@ -845,6 +978,14 @@ export class MapView {
       maxKm = Math.max(maxKm, km);
       entries.push({ el, km });
     });
+    // 【43本目B-2】まとめた丸も、ピンと同じように出発駅から近い順に出す。
+    this._clusters.forEach(({ marker, latlng }) => {
+      const el = marker.getElement();
+      if (!el) return;
+      const km = reachHaversineKm(depLat, depLon, latlng[0], latlng[1]);
+      maxKm = Math.max(maxKm, km);
+      entries.push({ el, km });
+    });
     if (entries.length === 0) {
       // コンテナが未準備（サイズ0）で要素が拾えなかった可能性がある場合だけ、
       // 後で地図タブが開かれたときにやり直せるよう保留する（スポット自体が
@@ -887,6 +1028,7 @@ export class MapView {
     }
     this.selectedSpotId = spotId;
     this.setMarkerState(spotId, 'selected', true);
+    this._recluster(); // 【43本目】選んだピンはまとめない（いつも見える）
     if (this.onSelectionChange) this.onSelectionChange(spotId);
   }
 
@@ -898,7 +1040,9 @@ export class MapView {
     if (this.selectedSpotId) {
       this.setMarkerState(this.selectedSpotId, 'selected', false);
     }
+    const hadSelection = this.selectedSpotId != null;
     this.selectedSpotId = null;
+    if (hadSelection) this._recluster();
   }
 
   /** ホバー時の一時ハイライト。選択状態（map-pin-selected）とは
@@ -939,12 +1083,28 @@ function createPinIcon(kind) {
       popupAnchor: [0, -13],
     });
   }
+  // 【43本目】ピンの大きさ（灰色の小さな点〜選んだピン20px）はCSSのクラスで変えるため、
+  // 入れ物（.map-pin-wrapper-spot、22px四方）の真ん中に置く（大きさが変わっても位置がずれない）。
   return L.divIcon({
-    className: 'map-pin-wrapper',
+    className: 'map-pin-wrapper map-pin-wrapper-spot',
     html: '<span class="map-pin map-pin-spot"></span>',
-    iconSize: [14, 14],
-    iconAnchor: [7, 7],
-    popupAnchor: [0, -7],
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+    popupAnchor: [0, -11],
+  });
+}
+
+/**
+ * 【43本目B-2】まとめた丸のアイコン（数字入りの青い丸）。中の場所が多いほど少し大きくする。
+ * オレンジ（金額を変えて新しく入った場所）を含むときは、右上に小さなオレンジの点を付ける。
+ */
+function createClusterIcon(count, hasOrange) {
+  const size = count < 10 ? 28 : count < 50 ? 32 : 38;
+  return L.divIcon({
+    className: 'map-cluster-wrapper',
+    html: `<span class="map-cluster" style="width:${size}px;height:${size}px"><span class="map-cluster-count">${count}</span>${hasOrange ? '<span class="map-cluster-orange-dot"></span>' : ''}</span>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
   });
 }
 

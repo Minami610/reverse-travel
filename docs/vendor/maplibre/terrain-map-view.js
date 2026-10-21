@@ -198,12 +198,20 @@ const CIRCLE_REFIT_UPPER_RATIO = 0.9;
 const CIRCLE_REFIT_LOWER_RATIO = 0.35;
 const CIRCLE_ZOOM_IN_TARGET_RATIO = 0.6;
 
-// 帯に入る点＝明るいオレンジ＋光の輪、それより安い点＝緑がかった灰色の小さい点
-// （2026-10-10、Minami指摘：スクリーンショットで見分けづらかったため色を変更。
-// 2D(map-view.js)と揃える）。
-const COLOR_IN_BAND = '#FF6B2B';
-const COLOR_CHEAPER = '#8a9a86';
-const COLOR_SELECTED = '#1B5E9E'; // 2D(map-view.js)の--color-selectedと揃える
+// 【2026-10-21、43本目、Minami決定：B-1】ピンの色（2Dのassets/css/style.cssの.map-pin-blue等と
+// 同じ値）。青＝検索した金額帯で行ける場所（円の青#2F6FB2より濃い紺に近い青）、オレンジ＝金額を
+// 変えて新しく金額帯に入った場所、灰色＝金額帯より安く行ける場所（小さな点）。選んだピンは青で
+// ひと回り大きく、白い太いふちと影。以前の光のにじみ（circle-blur）はやめた。
+const PIN_COLOR_BLUE = '#1F3C88';
+const PIN_COLOR_ORANGE = '#FF6B2B';
+const PIN_COLOR_GRAY = '#8E959E';
+const COLOR_SELECTED = PIN_COLOR_BLUE;
+// 【43本目、Minami決定：B-2】近いピンを数字の入った丸にまとめる（MapLibreのGeoJSONソースの
+// cluster機能）。このズームより寄るとまとめない（場所に寄ったとき＝ズーム14では1つずつ見える）。
+const PIN_CLUSTER_RADIUS = 40;
+const PIN_CLUSTER_MAX_ZOOM = 13;
+// まとめた丸（数字入り、HTMLの印）の位置・数字を更新する間隔の下限（描画のたびに作り直さない）。
+const PIN_CLUSTER_UPDATE_INTERVAL_MS = 100;
 
 let protocolRegistered = false; // addProtocolは多重登録を避ける（2回目以降は上書きになるだけだが、意図を明示するためフラグで一度だけに絞る）
 
@@ -211,9 +219,18 @@ function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-/** 現在の予算に応じた塗り分け式（circle-radius等）。予算を超える点はfilter側で出さない。 */
-function inBandExpr(budget) {
-  return ['>', ['get', 'fare'], budget - BAND_WIDTH];
+/**
+ * 【2026-10-21、43本目、Minami決定：B-1／C】ピンの色の決まり（2Dのmap-view.jsのpinCategory()と
+ * 同じ規則）。'blue'：今の金額帯に入り、検索した金額帯にも入っていた／'orange'：今の金額帯に
+ * 入るが、検索した金額帯には入っていなかった（金額を変えて新しく入った）／'gray'：今の金額帯より
+ * 安い／'hidden'：今の金額をこえる（出さない）。
+ */
+function pinCategory(fare, liveBudget, searchedBudget) {
+  if (!(fare <= liveBudget)) return 'hidden';
+  if (fare > liveBudget - BAND_WIDTH) {
+    return (fare <= searchedBudget && fare > searchedBudget - BAND_WIDTH) ? 'blue' : 'orange';
+  }
+  return 'gray';
 }
 
 const EARTH_RADIUS_KM = 6371;
@@ -433,6 +450,13 @@ export class TerrainMapView {
           [SPOTS_SOURCE_ID]: {
             type: 'geojson',
             data: { type: 'FeatureCollection', features: [] },
+            // 【43本目B-2】近いピンをまとめる。まとめた丸に入ったオレンジの数（orange）も数える。
+            cluster: true,
+            clusterRadius: PIN_CLUSTER_RADIUS,
+            clusterMaxZoom: PIN_CLUSTER_MAX_ZOOM,
+            clusterProperties: {
+              orange: ['+', ['case', ['==', ['get', 'cat'], 'orange'], 1, 0]],
+            },
           },
           [REACH_CIRCLE_SOURCE_ID]: {
             type: 'geojson',
@@ -502,11 +526,14 @@ export class TerrainMapView {
             id: SPOTS_LAYER_ID,
             type: 'circle',
             source: SPOTS_SOURCE_ID,
+            // 【43本目】まとめた丸（point_countを持つ点）はHTMLの印で描くため、ここでは描かない。
+            filter: ['!', ['has', 'point_count']],
             paint: {
-              'circle-radius': 5,
-              'circle-color': '#ffffff',
-              'circle-opacity': 0.35,
-              'circle-stroke-width': 0,
+              // 青・オレンジは直径13px（半径6.5）＋白いふち2px、灰色は小さな点（半径3.5、ふち1px）。
+              'circle-radius': ['match', ['get', 'cat'], 'gray', 3.5, 6.5],
+              'circle-color': ['match', ['get', 'cat'], 'orange', PIN_COLOR_ORANGE, 'gray', PIN_COLOR_GRAY, PIN_COLOR_BLUE],
+              'circle-opacity': 1,
+              'circle-stroke-width': ['match', ['get', 'cat'], 'gray', 1, 2],
               'circle-stroke-color': '#ffffff',
               'circle-blur': 0,
             },
@@ -519,11 +546,13 @@ export class TerrainMapView {
             id: SELECTED_GLOW_LAYER_ID,
             type: 'circle',
             source: SELECTED_SOURCE_ID,
+            // 【43本目B-1】光の輪はやめ、少し下にずらした影にする。
             paint: {
-              'circle-radius': 18,
-              'circle-color': COLOR_SELECTED,
-              'circle-opacity': 0.45,
-              'circle-blur': 1,
+              'circle-radius': 11.5,
+              'circle-color': '#000000',
+              'circle-opacity': 0.3,
+              'circle-blur': 0.5,
+              'circle-translate': [0, 2],
             },
           },
           {
@@ -534,7 +563,7 @@ export class TerrainMapView {
               'circle-radius': 10,
               'circle-color': COLOR_SELECTED,
               'circle-opacity': 1,
-              'circle-stroke-width': 2.5,
+              'circle-stroke-width': 3.5,
               'circle-stroke-color': '#ffffff',
             },
           },
@@ -648,6 +677,9 @@ export class TerrainMapView {
       // 早期returnする、map-view.jsと同じ仕組み）。
       if (this.onSelectionChange) this.onSelectionChange(feature.properties.id);
     });
+    // 【43本目B-2】まとめた丸（HTMLの印）は、ズーム・データが変わるたびに作り直す（間引きあり）。
+    this.map.on('render', () => this._scheduleClusterMarkerUpdate());
+    this.map.on('sourcedata', (e) => { if (e.sourceId === SPOTS_SOURCE_ID) this._scheduleClusterMarkerUpdate(); });
     this.map.on('mouseenter', SPOTS_LAYER_ID, () => { this.map.getCanvas().style.cursor = 'pointer'; });
     this.map.on('mouseleave', SPOTS_LAYER_ID, () => { this.map.getCanvas().style.cursor = ''; });
 
@@ -745,8 +777,10 @@ export class TerrainMapView {
             : 0,
         },
       }));
-    const source = this.map.getSource(SPOTS_SOURCE_ID);
-    if (source) source.setData({ type: 'FeatureCollection', features });
+    // 【43本目】まとめる機能（cluster）は「ソースのデータ」をまとめるため、レイヤーの絞り込み
+    // （setFilter）では、出さない点もまとめた丸の数に入ってしまう。全件はここで覚えておき、
+    // 出す点・色の決まり（cat）を付けたデータを_rebuildSpotData()で毎回作り直して渡す。
+    this._spotFeatures = features;
 
     this.applyBudget(budget ?? 2000, { reveal });
     this.updateReachCircle(budget ?? 2000, { style: 'settled' });
@@ -768,13 +802,30 @@ export class TerrainMapView {
         features: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [spot.longitude, spot.latitude] }, properties: {} }],
       });
     }
+    this._rebuildSpotData(); // 【43本目】選んだピンはまとめない（いつも見える）
+    // 【2026-10-21、43本目、不具合修正A-1】選んだピンは、地形に隠れないHTMLの印でも描く。
+    // MapLibre（5.6.1）の円のレイヤーは、カメラから見て尾根の向こう側にあると地形に隠れて
+    // 描かれない（実測：400×464で大池からドングリランドへ寄ると、点が尾根の裏になり
+    // queryRenderedFeatures()にも出てこない）。印（maplibregl.Marker）は既定では地形に隠れると
+    // うすく（opacityWhenCovered:'0.2'）なるため、'1'にしていつも同じ濃さで見せる。
+    // 見た目は円のレイヤーの選んだピンと同じ（紺に近い青・20px・白い太いふち・影）。
+    const lngLat = [spot.longitude, spot.latitude];
+    if (!this._selectedMarker) {
+      const el = document.createElement('div');
+      el.className = 'map-pin-selected-3d';
+      this._selectedMarker = new maplibregl.Marker({ element: el, opacityWhenCovered: '1' });
+    }
+    this._selectedMarker.setLngLat(lngLat).addTo(this.map);
   }
 
   /** 情報枠を閉じたとき・検索し直したとき・予算を触ったときに、ピンの強調だけを外す。 */
   clearSelected() {
+    const hadSelection = this.selectedSpotId != null;
     this.selectedSpotId = null;
     const source = this.map && this.map.getSource(SELECTED_SOURCE_ID);
     if (source) source.setData({ type: 'FeatureCollection', features: [] });
+    if (this._selectedMarker) this._selectedMarker.remove();
+    if (hadSelection) this._rebuildSpotData();
   }
 
   /**
@@ -796,6 +847,7 @@ export class TerrainMapView {
    */
   applyBudget(budget, { reveal = false } = {}) {
     this._lastBudget = budget;
+    this._liveBudget = budget; // 【43本目】検索したときは、今の金額＝検索した金額（オレンジは青になる）
     const count = (this._lastSpots || []).filter(
       (s) => s.source_round_trip_fare <= budget && s.source_round_trip_fare > budget - BAND_WIDTH
     ).length;
@@ -814,22 +866,111 @@ export class TerrainMapView {
 
   _paintBudget(budget, reveal) {
     if (!this.map || !this.map.getLayer(SPOTS_LAYER_ID)) return;
-    const inBand = inBandExpr(budget);
-    // 帯に入る点＝大きめ＋光の輪（ぼかし+白縁）、それより安い点＝緑がかった灰色の
-    // 小さい点（Minami指摘：見分けづらかったため色・形とも区別を強めた）。
-    this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-radius', ['case', inBand, 10, 4]);
-    this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-color', ['case', inBand, COLOR_IN_BAND, COLOR_CHEAPER]);
-    this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-opacity', ['case', inBand, 0.95, 0.55]);
-    this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-stroke-width', ['case', inBand, 3, 0]);
-    this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-stroke-color', '#ffffff');
-    this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-blur', ['case', inBand, 0.5, 0]);
-
+    // 【43本目B-1】色と大きさはレイヤーの式（cat）で決まるため、ここではデータを作り直すだけ。
     if (reveal && !prefersReducedMotion()) {
       this._startWaveReveal(budget);
     } else {
       this._cancelWaveReveal();
-      this.map.setFilter(SPOTS_LAYER_ID, ['<=', ['get', 'fare'], budget]);
+      this._rebuildSpotData();
     }
+  }
+
+  /**
+   * 【2026-10-21、43本目、Minami決定：B／C】点のソースに渡すデータを作り直す。今の金額
+   * （_liveBudget）をこえる点は入れない・選んだピンは入れない（別のレイヤーでいつも見える）・
+   * 検索直後の波の途中なら出発駅から revealKm 以内の点だけ入れる。各点には色の決まり（cat、
+   * pinCategory()）を付ける。まとめる機能（cluster）はこのデータだけをまとめる。
+   * @param {{revealKm?: number}} [opts]
+   */
+  _rebuildSpotData({ revealKm } = {}) {
+    if (!this.map) return;
+    const source = this.map.getSource(SPOTS_SOURCE_ID);
+    if (!source) return;
+    const searched = this._lastBudget;
+    const live = this._liveBudget ?? searched;
+    const features = [];
+    (this._spotFeatures || []).forEach((f) => {
+      if (f.properties.id === this.selectedSpotId) return;
+      if (revealKm !== undefined && !(f.properties.distance_km <= revealKm)) return;
+      const cat = pinCategory(f.properties.fare, live, searched);
+      if (cat === 'hidden') return;
+      features.push({ type: 'Feature', geometry: f.geometry, properties: { ...f.properties, cat } });
+    });
+    source.setData({ type: 'FeatureCollection', features });
+    // 検証用（verify-layout.js）：出している点の数と、点ごとの色の決まりの一覧
+    this._spotDataCount = features.length;
+    this._spotDataSignature = features.map((f) => `${f.properties.id}:${f.properties.cat}`).sort().join(',');
+    this._scheduleClusterMarkerUpdate();
+  }
+
+  /** 【43本目B-2】まとめた丸（HTMLの印）の更新を、描画が落ち着くタイミングへまとめて予約する。 */
+  _scheduleClusterMarkerUpdate() {
+    if (this._clusterUpdateTimer) return;
+    this._clusterUpdateTimer = setTimeout(() => {
+      this._clusterUpdateTimer = null;
+      this._updateClusterMarkers();
+    }, PIN_CLUSTER_UPDATE_INTERVAL_MS);
+  }
+
+  /**
+   * 【2026-10-21、43本目、Minami決定：B-2】まとめた丸を、数字の入った青い丸（HTMLの印、
+   * maplibregl.Marker）で描く。このスタイルは文字の形（glyphs）を持たない（地図は画像タイルのみ）
+   * ため、MapLibreのsymbolレイヤーでは数字を描けない。2Dと同じ見た目のDOM（.map-cluster）を使い、
+   * オレンジを含む丸には右上に小さなオレンジの点を付ける。押すと、その丸が分かれるズームまで寄る。
+   */
+  _updateClusterMarkers() {
+    if (!this.map) return;
+    if (!this._clusterMarkers) this._clusterMarkers = new Map();
+    const source = this.map.getSource(SPOTS_SOURCE_ID);
+    const seen = new Set();
+    if (source && this.map.isSourceLoaded(SPOTS_SOURCE_ID)) {
+      this.map.querySourceFeatures(SPOTS_SOURCE_ID, { filter: ['has', 'point_count'] }).forEach((f) => {
+        const id = f.properties.cluster_id;
+        if (seen.has(id)) return; // タイルの境目で同じ丸が2回返ることがある
+        seen.add(id);
+        const count = f.properties.point_count;
+        const hasOrange = f.properties.orange > 0;
+        const lngLat = f.geometry.coordinates;
+        const size = count < 10 ? 28 : count < 50 ? 32 : 38;
+        const key = `${count}|${hasOrange ? 1 : 0}`;
+        let entry = this._clusterMarkers.get(id);
+        if (!entry) {
+          const el = document.createElement('div');
+          el.className = 'map-cluster-wrapper map-cluster-3d';
+          el.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._zoomIntoCluster(id, entry.lngLat);
+          });
+          entry = { marker: new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(this.map), el, key: null, lngLat };
+          this._clusterMarkers.set(id, entry);
+        }
+        entry.lngLat = lngLat;
+        entry.count = count;
+        entry.hasOrange = hasOrange;
+        entry.marker.setLngLat(lngLat);
+        if (entry.key !== key) {
+          entry.key = key;
+          entry.el.innerHTML = `<span class="map-cluster" style="width:${size}px;height:${size}px"><span class="map-cluster-count">${count}</span>${hasOrange ? '<span class="map-cluster-orange-dot"></span>' : ''}</span>`;
+        }
+      });
+    }
+    this._clusterMarkers.forEach((entry, id) => {
+      if (seen.has(id)) return;
+      entry.marker.remove();
+      this._clusterMarkers.delete(id);
+    });
+  }
+
+  /** 【43本目B-2】まとめた丸を押したとき、その丸が分かれるズームまで寄る（向き・傾きはそのまま）。 */
+  _zoomIntoCluster(clusterId, lngLat) {
+    const source = this.map && this.map.getSource(SPOTS_SOURCE_ID);
+    if (!source) return;
+    Promise.resolve(source.getClusterExpansionZoom(clusterId)).then((zoom) => {
+      if (!this.map) return;
+      const target = Math.max(zoom + 0.1, this.map.getZoom() + 1);
+      this.map.setPadding(CLEAR_PADDING);
+      this.map.easeTo({ center: lngLat, zoom: target, duration: prefersReducedMotion() ? 0 : 600, padding: CLEAR_PADDING });
+    }).catch(() => {});
   }
 
   /**
@@ -851,27 +992,30 @@ export class TerrainMapView {
       return Math.max(max, haversineKm(dep.stop_lat, dep.stop_lon, s.latitude, s.longitude));
     }, 0);
     if (maxKm <= 0) {
-      this.map.setFilter(SPOTS_LAYER_ID, ['<=', ['get', 'fare'], budget]);
+      this._rebuildSpotData();
       return;
     }
     const token = ++this._waveToken;
     const startTime = performance.now();
+    let lastStage = -1;
     const step = (now) => {
       if (token !== this._waveToken || !this.map) return;
       const elapsed = now - startTime;
       const progress = Math.min(1, elapsed / WAVE_DURATION_MS);
       const revealedKm = maxKm * progress;
-      this.map.setFilter(SPOTS_LAYER_ID, [
-        'all',
-        ['<=', ['get', 'fare'], budget],
-        ['<=', ['get', 'distance_km'], revealedKm],
-      ]);
+      // 【43本目】まとめる機能はデータをまとめるため、絞り込み（setFilter）ではなくデータを
+      // 作り直す。毎コマ作り直すと重いため、全体を12段階に分けて広げる（1秒で12回）。
+      const stage = Math.floor(progress * 12);
+      if (stage !== lastStage) {
+        lastStage = stage;
+        this._rebuildSpotData({ revealKm: revealedKm });
+      }
       if (progress < 1) {
         this._waveFrame = requestAnimationFrame(step);
       } else {
         this._waveFrame = null;
         // 浮動小数点の端数で最遠点が漏れないよう、仕上げに距離条件を外す。
-        this.map.setFilter(SPOTS_LAYER_ID, ['<=', ['get', 'fare'], budget]);
+        this._rebuildSpotData();
       }
     };
     this._waveFrame = requestAnimationFrame(step);
@@ -1829,6 +1973,18 @@ export class TerrainMapView {
     if (this._circleAnimFrame) {
       cancelAnimationFrame(this._circleAnimFrame);
       this._circleAnimFrame = null;
+    }
+    if (this._clusterUpdateTimer) {
+      clearTimeout(this._clusterUpdateTimer);
+      this._clusterUpdateTimer = null;
+    }
+    if (this._clusterMarkers) {
+      this._clusterMarkers.forEach((entry) => entry.marker.remove());
+      this._clusterMarkers.clear();
+    }
+    if (this._selectedMarker) {
+      this._selectedMarker.remove();
+      this._selectedMarker = null;
     }
     if (this.map) {
       this.map.remove();
