@@ -163,6 +163,8 @@ const ROTATE_HINT_AUTO_HIDE_MS = 3000; // Minami指示：3秒ほど
 const BAND_WIDTH = 200; // 予算の帯の幅（既存の2D検索・一覧と同じ定義）
 const SPOTS_SOURCE_ID = 'spots';
 const SPOTS_LAYER_ID = 'spots-circle';
+// 【45本目】まとめた丸の位置を「今描いているズームの段」から拾うための、見えない円のレイヤー。
+const SPOTS_CLUSTER_HIT_LAYER_ID = 'spots-cluster-hit';
 const DEM_SOURCE_ID = 'gsi-dem';
 const HILLSHADE_LAYER_ID = 'hillshade-layer';
 // 【2026-10-13、10本目②】予算の到達範囲の円（出発駅中心）。
@@ -242,16 +244,15 @@ function isFiniteNumber(value) {
 }
 
 /**
- * 【2026-10-21、43本目、Minami決定：B-1／C】ピンの色の決まり（2Dのmap-view.jsのpinCategory()と
- * 同じ規則）。'blue'：今の金額帯に入り、検索した金額帯にも入っていた／'orange'：今の金額帯に
- * 入るが、検索した金額帯には入っていなかった（金額を変えて新しく入った）／'gray'：今の金額帯より
- * 安い／'hidden'：今の金額をこえる（出さない）。
+ * 【2026-10-21、43本目B-1／C、45本目で見直し、Minami決定】ピンの色の決まり（2Dのmap-view.jsの
+ * pinCategory()と同じ規則）。'blue'：最後に検索した金額帯の場所／'orange'：最後に検索した金額を
+ * こえて、今の金額までに届く場所（＋を何回押しても積み重なる）／'gray'：最後に検索した金額帯より
+ * 安い場所／'hidden'：今の金額をこえる場所（出さない）。
  */
 function pinCategory(fare, liveBudget, searchedBudget) {
   if (!(fare <= liveBudget)) return 'hidden';
-  if (fare > liveBudget - BAND_WIDTH) {
-    return (fare <= searchedBudget && fare > searchedBudget - BAND_WIDTH) ? 'blue' : 'orange';
-  }
+  if (fare > searchedBudget) return 'orange';
+  if (fare > searchedBudget - BAND_WIDTH) return 'blue';
   return 'gray';
 }
 
@@ -564,6 +565,14 @@ export class TerrainMapView {
               'circle-blur': 0,
             },
           },
+          // 【45本目】まとめた丸（point_countを持つ点）の位置を拾うための見えない円（描くのはHTMLの印）。
+          {
+            id: SPOTS_CLUSTER_HIT_LAYER_ID,
+            type: 'circle',
+            source: SPOTS_SOURCE_ID,
+            filter: ['has', 'point_count'],
+            paint: { 'circle-radius': 14, 'circle-opacity': 0, 'circle-stroke-width': 0 },
+          },
           // 【2026-10-15、11本目①】選んだピンの強調（吹き出し廃止の代わり、
           // Minami指示：一回り大きく＋白い縁取り＋光の輪）。spotsレイヤーより
           // 後ろ（＝画面上は上）に描くことで、帯の塗り分けより目立たせる。
@@ -709,6 +718,11 @@ export class TerrainMapView {
     // （実機相当の確認で発覚：地形の読み込み待ちの検証が終わらなくなった）。
     this.map.on('move', () => this._scheduleClusterMarkerUpdate());
     this.map.on('moveend', () => this._scheduleClusterMarkerUpdate());
+    // 【45本目、不具合修正】寄った・引いた直後は、新しいズームの段のタイルが届くまで前の段のタイル
+    // （まとめた丸も前の段のまま）が仮に描かれる。move/moveend/sourcedataの時点で拾うと、前の段の丸が
+    // 残ったままになることがあった。描画が落ち着いたとき（idle）にもう一度拾い直す（印が変わらなければ
+    // 何も書き換えないため、idle→描き直し→idleの繰り返しにはならない）。
+    this.map.on('idle', () => this._updateClusterMarkers());
     this.map.on('sourcedata', (e) => { if (e.sourceId === SPOTS_SOURCE_ID) this._scheduleClusterMarkerUpdate(); });
     this.map.on('mouseenter', SPOTS_LAYER_ID, () => { this.map.getCanvas().style.cursor = 'pointer'; });
     this.map.on('mouseleave', SPOTS_LAYER_ID, () => { this.map.getCanvas().style.cursor = ''; });
@@ -771,7 +785,15 @@ export class TerrainMapView {
   render(departureStation, spots, budget, { reveal = false } = {}) {
     this._cancelFitCircleToView(); // 新しい検索で、前の予算操作から保留中の地図合わせは無効化する
     this._cancelCircleWave();
-    this._pendingReturnToSearchView = false; // 新しい検索の見え方が優先
+    // 【45本目、不具合修正】以前はここで「見えたら検索した直後の見え方に合わせる」保留
+    // （_pendingReturnToSearchView）を消していた。しかしrender()は新しい検索のときだけでなく、
+    // 検索の約1.5秒後に¥2000分の点を裏で取得して反映するとき（main.jsのscheduleMaxBudgetPrefetch()）
+    // や、3Dへ切り替えたとき（activateTerrainMap()）にも呼ばれる。2D表示中に検索すると、
+    // 3D側は見えていないため合わせるのを保留する→裏の反映のrender()がその保留を消す→3Dへ
+    // 切り替えても前の検索の位置のまま、という順で、3Dにしたとき遠すぎる（香川・山下・往復¥500で
+    // ¥2000の検索のあとだと、円が短辺の0.155）不具合になっていた。新しい検索では、呼び出し元
+    // （main.jsのrenderSearchResults()）がrender()の直後に必ずreturnToSearchView()を呼び、
+    // 保留を立て直すか、その場で合わせるため、ここで消す必要は無い。
     this._lastDepartureStation = departureStation;
     this._lastSpots = spots;
     this._lastBudget = budget;
@@ -972,7 +994,12 @@ export class TerrainMapView {
     const source = this.map.getSource(SPOTS_SOURCE_ID);
     const seen = new Set();
     if (source && this.map.isSourceLoaded(SPOTS_SOURCE_ID)) {
-      this.map.querySourceFeatures(SPOTS_SOURCE_ID, { filter: ['has', 'point_count'] }).forEach((f) => {
+      // 【45本目、不具合修正】以前はquerySourceFeatures()で拾っていたが、これは地図が覚えている
+      // ほかのズームの段のタイル（縮小・拡大の直後に、なめらかに切り替えるため残しているもの）の
+      // まとめた丸も返す。そのため、拡大して分かれたあとも前の段の丸（例：7件の丸）が、ばらの
+      // ピンと一緒に残ることがあった（香川・山下・往復¥500、PCで実測）。今描いている段の丸だけを
+      // 返すqueryRenderedFeatures()（見えない円のレイヤー）で拾う。
+      this.map.queryRenderedFeatures({ layers: [SPOTS_CLUSTER_HIT_LAYER_ID] }).forEach((f) => {
         const id = f.properties.cluster_id;
         if (seen.has(id)) return; // タイルの境目で同じ丸が2回返ることがある
         seen.add(id);
@@ -1706,8 +1733,90 @@ export class TerrainMapView {
     if (!hint || hasSeenRotateHint()) return;
     markRotateHintSeen();
     hint.hidden = false;
+    this._placeRotateHint(hint);
     hint.addEventListener('click', () => { hint.hidden = true; }, { once: true });
     setTimeout(() => { hint.hidden = true; }, ROTATE_HINT_AUTO_HIDE_MS);
+  }
+
+  /**
+   * 【45本目、不具合修正】吹き出しを、ピン・まとめた丸・出発駅の印・地図の部品に重ならない場所に出す。
+   * 以前はいつもハンドルの左（CSSの固定位置）に出していたため、地図の縦が短い画面（400×464では
+   * 地図が376×240）では地図の真ん中にかかり、ピンやまとめた丸を隠していた。
+   * 候補を順に試し（1. ハンドルの左〔矢印でハンドルを指す〕 2. 部品の列の下 3. 左上 4. 左下
+   * 5. 右下）、どれも何かに重なるときは地図の外（地図の上の端のすぐ上、上に余地がなければ下）に出す。
+   */
+  _placeRotateHint(hint) {
+    const area = document.getElementById('map-area');
+    if (!area || !this.map) return;
+    hint.classList.remove('map-rotate-hint-free', 'map-rotate-hint-outside');
+    hint.style.position = '';
+    hint.style.top = '';
+    hint.style.left = '';
+    hint.style.right = '';
+    hint.style.bottom = '';
+    const a = area.getBoundingClientRect();
+    const w = hint.offsetWidth;
+    const h = hint.offsetHeight;
+    const MARGIN = 8; // 予算操作帯などとのすき間（27本目の吹き出しと同じ8px）
+    const obstacles = [];
+    const addRect = (r) => { if (r && r.width > 0 && r.height > 0) obstacles.push(r); };
+    // ピン（円のレイヤー）。画面上の位置から、白いふちを含めた大きさの四角にする。
+    const mapRect = this.map.getContainer().getBoundingClientRect();
+    try {
+      this.map.queryRenderedFeatures({ layers: [SPOTS_LAYER_ID] }).forEach((f) => {
+        const p = this.map.project(f.geometry.coordinates);
+        const x = mapRect.left + p.x;
+        const y = mapRect.top + p.y;
+        addRect({ left: x - 10, top: y - 10, right: x + 10, bottom: y + 10, width: 20, height: 20 });
+      });
+    } catch {
+      // レイヤーがまだ無いときは、ピンは無いものとして扱う
+    }
+    // まとめた丸・選んだピン・出発駅の印（HTMLの印）と、地図の部品
+    this.map.getContainer().querySelectorAll('.maplibregl-marker').forEach((el) => addRect(el.getBoundingClientRect()));
+    document.querySelectorAll('#map-controls-cluster, #map-dimension-toggle, #mobile-budget-overlay, #spot-info-panel, #map-area .maplibregl-ctrl-attrib, #map-area .maplibregl-ctrl')
+      .forEach((el) => { if (el.offsetParent !== null) addRect(el.getBoundingClientRect()); });
+    const hits = (r) => obstacles.some((o) => r.left < o.right + MARGIN && r.right > o.left - MARGIN
+      && r.top < o.bottom + MARGIN && r.bottom > o.top - MARGIN);
+    const inside = (r) => r.left >= a.left + 4 && r.right <= a.right - 4 && r.top >= a.top + 4 && r.bottom <= a.bottom - 4;
+
+    const cluster = document.getElementById('map-controls-cluster')?.getBoundingClientRect();
+    const handle = document.getElementById('map-rotate-handle')?.getBoundingClientRect();
+    const toggle = document.getElementById('map-dimension-toggle')?.getBoundingClientRect();
+    const candidates = [];
+    if (handle && handle.width > 0) {
+      // CSSの矢印（::after）は上から16pxの位置にある。矢印の先がハンドルの中心を指す高さ。
+      const top = handle.top + handle.height / 2 - 22;
+      candidates.push({ left: handle.left - 14 - w, top, arrow: true });
+    }
+    if (cluster && cluster.width > 0) candidates.push({ left: cluster.right - w, top: cluster.bottom + 8 });
+    candidates.push({ left: a.left + 8, top: (toggle && toggle.width > 0 ? toggle.bottom : a.top) + 8 });
+    candidates.push({ left: a.left + 8, top: a.bottom - 8 - h });
+    candidates.push({ left: a.right - 8 - w, top: a.bottom - 8 - h });
+    // 決まった候補がどれもふさがっているときは、地図の中を8pxきざみで探し、空いている場所のうち
+    // ハンドルにいちばん近いところに出す（400×464のように地図が小さい画面向け）。
+    const hx = handle && handle.width > 0 ? handle.left + handle.width / 2 : a.right;
+    const hy = handle && handle.width > 0 ? handle.top + handle.height / 2 : a.top;
+    const grid = [];
+    for (let top = a.top + 4; top + h <= a.bottom - 4; top += 8) {
+      for (let left = a.left + 4; left + w <= a.right - 4; left += 8) grid.push({ left, top, d: Math.hypot(left + w / 2 - hx, top + h / 2 - hy) });
+    }
+    grid.sort((p, q) => p.d - q.d);
+    for (const c of [...candidates, ...grid]) {
+      const r = { left: c.left, top: c.top, right: c.left + w, bottom: c.top + h };
+      if (!inside(r) || hits(r)) continue;
+      if (!c.arrow) hint.classList.add('map-rotate-hint-free');
+      hint.style.left = `${Math.round(c.left - a.left)}px`;
+      hint.style.top = `${Math.round(c.top - a.top)}px`;
+      hint.style.right = 'auto';
+      return;
+    }
+    // どこに置いても何かに重なる：地図の外に出す（画面に対して固定。3秒で消える）。
+    hint.classList.add('map-rotate-hint-free', 'map-rotate-hint-outside');
+    hint.style.position = 'fixed';
+    hint.style.right = 'auto';
+    hint.style.left = `${Math.round(Math.max(4, a.right - w))}px`;
+    hint.style.top = `${Math.round(a.top - h - 6 >= 0 ? a.top - h - 6 : a.bottom + 6)}px`;
   }
 
   /**

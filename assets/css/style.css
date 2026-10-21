@@ -1338,6 +1338,54 @@ header p {
   cursor: pointer;
 }
 
+/* 【45本目】2Dの出典は、3D（MapLibreのcompact）と同じく閉じているときは右下の小さな「i」の丸。
+   押すと開いて全文（国土地理院ベクトルタイル提供実験など）を出す。 */
+#spots-map .leaflet-control-attribution.map-attrib-compact:not(.is-open) {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  margin: 0 10px 10px 0;
+  border-radius: 50%;
+  background-color: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+  font-size: 0;
+  cursor: pointer;
+  position: relative;
+}
+
+#spots-map .leaflet-control-attribution.map-attrib-compact:not(.is-open) > * {
+  display: none;
+}
+
+#spots-map .leaflet-control-attribution.map-attrib-compact:not(.is-open)::before {
+  content: 'i';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: bold 15px/1 Georgia, 'Times New Roman', serif;
+  color: #333;
+}
+
+#spots-map .leaflet-control-attribution.map-attrib-compact.is-open {
+  margin: 0 10px 10px 0;
+  border-radius: 12px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+/* 【45本目】ハンドルの左以外に出したとき（ピン等に重ならない場所を選んだとき）は矢印を出さない。
+   2Dに戻したら（3秒たつ前でも）出さない。 */
+.map-rotate-hint-free::after {
+  display: none;
+}
+
+#map-area:not(.mode-3d) .map-rotate-hint {
+  display: none;
+}
+
 .map-rotate-hint::after {
   content: '';
   position: absolute;

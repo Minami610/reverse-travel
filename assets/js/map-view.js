@@ -21,12 +21,15 @@ import { loadVectorBaseMapForLeaflet } from './terrain-loader.js';
 // 【43本目D】ベクトル地図を読み込むまで・WebGLが使えない環境で出す、淡色地図の画像タイル
 // （以前は標準地図std）。
 const GSI_TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png';
+// 【45本目】画像タイル（地理院タイル）の出典は、地理院タイル一覧のページが求める「国土地理院」＋一覧への
+// リンク。ベクトル地図が描けたら画像タイルは外すため、ふつうはベクトル地図の出典だけが出る。
 const GSI_ATTRIBUTION =
-  '<a href="https://maps.gsi.go.jp/vector/" target="_blank" rel="noopener">国土地理院</a>'; // 【43本目】ベクトル地図の出典と同じ短い表記（同じ文字列ならLeafletは1つにまとめて出す）
+  '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院</a>';
 // 【43本目】地図の上の出典は短くする（scripts/build-map-style.jsのsources.attributionと同じ。
 // 長いとPCの地図の下の情報枠が狭まり、場所の名前が見えなくなるため）。
+// 【45本目】国土地理院が求める書き方「国土地理院ベクトルタイル提供実験」（提供実験の説明へのリンク）。
 const GSI_VECTOR_ATTRIBUTION =
-  '<a href="https://maps.gsi.go.jp/vector/" target="_blank" rel="noopener">国土地理院</a>';
+  '<a href="https://github.com/gsi-cyberjapan/gsimaps-vector-experiment" target="_blank" rel="noopener">国土地理院ベクトルタイル提供実験</a>';
 // 予算の帯の幅（既存の検索・一覧と同じ定義）。main.jsにも同名の定数があるが、
 // バンドル後は同じスクリプトスコープに連結されるため、名前が衝突しないよう
 // このファイルだけMAP_BAND_WIDTHという別名にしている。
@@ -127,20 +130,25 @@ const MAP_PIN_CLUSTER_MAX_ZOOM = 16;
 /**
  * 【2026-10-21、43本目、Minami決定：B-1／C】ピンの色の決まり（2D・3D共通、3Dは
  * terrain-map-view.jsのpinCategory()と同じ規則）。
- * - 'blue'  ：今の金額帯（budget−¥200より高く、budget以下）に入り、検索した金額帯にも入っていた場所
- * - 'orange'：今の金額帯に入るが、検索した金額帯には入っていなかった場所（金額を変えて新しく入った）
- * - 'gray'  ：今の金額帯より安く行ける場所
- * - 'hidden'：今の金額をこえる場所（出さない）
- * 検索した直後は今の金額＝検索した金額のため、金額帯の場所はすべて青になる。
+ * - 'blue'  ：最後に検索した金額帯（検索した金額−¥200より高く、検索した金額以下）の場所
+ * - 'orange'：最後に検索した金額をこえて、今の金額までに届く場所。＋を何回押しても、増えた分は
+ *             すべてオレンジのまま積み重なる
+ * - 'gray'  ：最後に検索した金額帯より安い場所（小さな点）
+ * - 'hidden'：今の金額をこえる場所（出さない。−で検索した金額より下げたときは、紺の場所も
+ *             届かなくなったものは消える）
+ * 「¥◯で探す」「この条件で検索」で検索し直すと、検索した金額が今の金額になり、オレンジはなくなる。
+ * 【45本目、Minami決定】43本目Cでは「今の金額帯（今の金額−¥200〜今の金額）に新しく入った場所」を
+ * オレンジ、それより安い場所を灰色にしていたため、＋を続けて押すと前のオレンジが灰色に戻った
+ * （Coworkの指示の書き方の誤り。Minamiの意図は「検索した金額の場所だけが紺、増えたものはすべて
+ * オレンジ」）。今の金額帯ではなく、最後に検索した金額を基準に塗り分ける。
  * @param {number} fare 往復運賃
  * @param {number} liveBudget 今の金額（＋−・スライダーで変えた値）
  * @param {number} searchedBudget 最後に検索した金額
  */
 export function pinCategory(fare, liveBudget, searchedBudget) {
   if (!(fare <= liveBudget)) return 'hidden';
-  if (fare > liveBudget - MAP_BAND_WIDTH) {
-    return (fare <= searchedBudget && fare > searchedBudget - MAP_BAND_WIDTH) ? 'blue' : 'orange';
-  }
+  if (fare > searchedBudget) return 'orange';
+  if (fare > searchedBudget - MAP_BAND_WIDTH) return 'blue';
   return 'gray';
 }
 
@@ -207,10 +215,13 @@ export class MapView {
       maxZoom: 18,
     }).addTo(this.map);
     this._loadVectorBaseMap();
+    this._setupCompactAttribution();
     this.markersLayer = L.layerGroup().addTo(this.map);
     this._clusterLayer = L.layerGroup().addTo(this.map);
     // 【43本目B-2】画面上の距離でまとめるため、ズームが変わったらまとめ直す。
     this.map.on('zoomend', () => this._recluster());
+    // 【45本目】大きさが変わったとき（画面の回転・一覧との幅の変化）も画面上の距離が変わるため、まとめ直す。
+    this.map.on('resize viewreset', () => this._recluster());
 
     // 検証用の参照（terrain-map-view.jsのwindow.__terrainViewForDebugと同じ考え方）。
     // アプリ自体はこれを使わない。本番でも害はないため条件分岐は入れていない。
@@ -489,6 +500,31 @@ export class MapView {
   }
 
   /**
+   * 【45本目】2Dの出典も、3D（MapLibreのcompact）と同じく右下の小さな「i」の丸にし、押すと開く。
+   * 国土地理院が求める書き方「国土地理院ベクトルタイル提供実験」にしたところ、出典がそのまま
+   * 地図の右下に長く出て、PCでは地図の下の情報枠と、スマホ（地図376×240）ではピン・まとめた丸と
+   * 重なった。出典の全文は、開いたとき・フッター・出典画面で読める。Leafletは出典が変わるたびに
+   * 入れ物の中身（innerHTML）を書き直すため、入れ物そのものに開閉の印（is-open）を付け、
+   * 中のリンクを押したときは閉じずにそのまま開く。
+   */
+  _setupCompactAttribution() {
+    const el = this.map.attributionControl && this.map.attributionControl.getContainer();
+    if (!el) return;
+    el.classList.add('map-attrib-compact');
+    el.setAttribute('role', 'button');
+    el.setAttribute('tabindex', '0');
+    el.setAttribute('aria-label', '地図の出典を表示');
+    const toggle = (e) => {
+      if (e.target.closest && e.target.closest('a')) return; // リンクはそのまま開く
+      el.classList.toggle('is-open');
+      el.setAttribute('aria-expanded', String(el.classList.contains('is-open')));
+    };
+    L.DomEvent.disableClickPropagation(el);
+    el.addEventListener('click', toggle);
+    el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(e); } });
+  }
+
+  /**
    * 【2026-10-21、43本目、Minami決定：B-1】ピンの色と大きさを、今の金額（_liveBudget）と
    * 検索した金額（lastBudget）から塗り分ける（pinCategory()参照）。青・オレンジは直径13pxの
    * くっきりした丸に白いふち、灰色は小さな点。以前の光のにじみ（box-shadowのぼかし）はやめた。
@@ -555,7 +591,10 @@ export class MapView {
       const lat = members.reduce((sum, m) => sum + m.latlng.lat, 0) / members.length;
       const lng = members.reduce((sum, m) => sum + m.latlng.lng, 0) / members.length;
       const hasOrange = members.some((m) => m.el.dataset.cat === 'orange');
-      const marker = L.marker([lat, lng], { icon: createClusterIcon(members.length, hasOrange), zIndexOffset: 500 })
+      // 【45本目】まとめた丸は出発駅の印（zIndexOffset 2000）より上に出す。まとめた丸の位置は中の場所の
+      // 平均のため、出発駅のすぐ近くに場所が集まる駅（香川・山下・往復¥500）では、縮小してできた丸が
+      // 出発駅の印の下に隠れ、まとまったことが見えなかった（3Dはあとから足した印が上になるため、もともと上）。
+      const marker = L.marker([lat, lng], { icon: createClusterIcon(members.length, hasOrange), zIndexOffset: 2100 })
         .addTo(this._clusterLayer);
       const memberIds = members.map((m) => m.spotId);
       marker.on('click', () => this._zoomIntoCluster(memberIds));

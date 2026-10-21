@@ -137,11 +137,13 @@ function main() {
     name: 'reverse-travel GSI vector (no map symbols, app colors)',
     // 文字の形（字形）は国土地理院が配信しているもの（元のスタイルと同じ）。
     glyphs: src.glyphs,
-    // 地図の上の出典は短く「国土地理院」（地理院地図Vectorのページへのリンク）にする。元のスタイルの
+    // 【45本目】出典は、国土地理院が提供実験の説明（GitHubのgsimaps-vector-experiment）で求めている
+    // 「国土地理院ベクトルタイル提供実験」とし、その説明へリンクする（43本目は「国土地理院」だけだった）。
+    // 以前の説明：地図の上の出典は短く「国土地理院」（地理院地図Vectorのページへのリンク）にする。元のスタイルの
     // 「地理院地図Vector（仮称）」のままだと、PCの地図の下の情報枠（2D/3D切替ボタンと出典ボタンの間に
     // 収める作り、main.jsのupdateSpotInfoPanelMaxWidth()）が狭まり、場所の名前が押しつぶされて
     // 見えなくなった（実機相当の確認で発覚）。詳しい名前は出典画面（index.html）に書いている。
-    sources: { [sourceId]: { ...src.sources[sourceId], attribution: '<a href="https://maps.gsi.go.jp/vector/" target="_blank" rel="noopener">国土地理院</a>' } },
+    sources: { [sourceId]: { ...src.sources[sourceId], attribution: '<a href="https://github.com/gsi-cyberjapan/gsimaps-vector-experiment" target="_blank" rel="noopener">国土地理院ベクトルタイル提供実験</a>' } },
     layers: [
       { id: 'app-background', type: 'background', paint: { 'background-color': APP.background } },
       ...layers,
