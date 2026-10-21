@@ -19,6 +19,10 @@ const MAPLIBRE_CSS_URL = 'vendor/maplibre/maplibre-gl.css';
 // 無いと解決できない）として扱い、"Failed to resolve module specifier"で
 // 失敗する。"./"を付けて明示的な相対URLにすること（実機で発覚・修正済み）。
 const TERRAIN_MODULE_URL = './vendor/maplibre/terrain-map-view.js';
+// 【2026-10-21、43本目D】2DでもMapLibreで国土地理院のベクトル地図（地図記号なし・アプリの色）を
+// 描くための、Leaflet用の橋渡し（@maplibre/maplibre-gl-leaflet、ISCライセンス）と、地図のスタイル。
+const MAPLIBRE_LEAFLET_URL = 'vendor/maplibre/leaflet-maplibre-gl.js';
+const APP_MAP_STYLE_URL = './vendor/gsi-vector/app-style.json';
 
 /**
  * 重いライブラリを読み込む前の軽いWebGL対応チェック。
@@ -70,6 +74,36 @@ let loadPromise = null;
  * {TerrainMapView}を返す。多重呼び出しは同じPromiseに合流する。
  * 失敗時はキャッシュを捨てて次回また最初から試せるようにする。
  */
+let vectorBaseMapPromise = null;
+
+/**
+ * 【2026-10-21、43本目D（44本目で差し替え）、Minami決定】2Dの下地を国土地理院のベクトル地図に
+ * するための読み込み（MapLibre本体・Leaflet用の橋渡し・地図のスタイル）。Leafletはベクトル地図を
+ * 描けないため、MapLibreをLeafletの層の1枚として使う（L.maplibreGL）。以前は「2Dの人には
+ * MapLibreを読み込まない」方針だったが、2D・3Dとも同じベクトル地図にする（Minami決定）には
+ * 2DでもMapLibreが要る。ページ自体は先に出し、地図の下地だけ後から差し替える（map-view.js参照）。
+ * WebGLが使えない環境では読み込まない（呼び出し元は淡色の画像タイルのまま続ける）。
+ * @returns {Promise<object>} 地図のスタイル（JSON）
+ */
+export function loadVectorBaseMapForLeaflet() {
+  if (vectorBaseMapPromise) return vectorBaseMapPromise;
+  vectorBaseMapPromise = (async () => {
+    if (!isWebglLikelySupported()) {
+      throw new Error('WebGLが利用できない環境のため、2Dの下地は画像タイル（淡色地図）のまま表示します');
+    }
+    loadStylesheetOnce(MAPLIBRE_CSS_URL);
+    await loadScriptOnce(MAPLIBRE_JS_URL);
+    if (typeof maplibregl === 'undefined') throw new Error('MapLibre GL JSの読み込みに失敗しました');
+    await loadScriptOnce(MAPLIBRE_LEAFLET_URL);
+    if (typeof L === 'undefined' || typeof L.maplibreGL !== 'function') throw new Error('maplibre-gl-leafletの読み込みに失敗しました');
+    const res = await fetch(APP_MAP_STYLE_URL);
+    if (!res.ok) throw new Error(`地図のスタイルの読み込みに失敗しました（${res.status}）`);
+    return res.json();
+  })();
+  vectorBaseMapPromise.catch(() => { vectorBaseMapPromise = null; });
+  return vectorBaseMapPromise;
+}
+
 export function loadTerrainModule() {
   if (loadPromise) return loadPromise;
   loadPromise = (async () => {

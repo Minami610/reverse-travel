@@ -3554,7 +3554,7 @@ header p {
   <footer id="app-footer">
     <p class="footer-summary">
       データ出典：<span id="footer-data-sources">読み込み中…</span>、
-      地図：<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院</a>、
+      地図：<a href="https://maps.gsi.go.jp/vector/" target="_blank" rel="noopener">国土地理院（地理院地図Vector）</a>、
       観光情報：Wikipedia／Wikidata。
       表示内容の正確性・完全性は保証されません。
       <button type="button" id="howto-btn">使い方</button>
@@ -3628,7 +3628,9 @@ header p {
         <ul id="about-excluded-feed-list"></ul>
       </div>
       <p>
-        地図には<strong>国土地理院</strong>の地理院タイル（標準地図）を使用しています。
+        地図には<strong>国土地理院</strong>の<a href="https://maps.gsi.go.jp/vector/" target="_blank" rel="noopener">地理院地図Vector</a>（ベクトルタイル）を使用し、
+        地図記号を外して色をこのアプリに合わせて<strong>加工して表示</strong>しています
+        （地図を読み込む前と、WebGLが使えない端末では、地理院タイルの淡色地図を表示します）。
         3D表示では、地理院タイル（標高タイル）を<strong>加工して立体の地形として表示</strong>しています。<br>
         観光地の説明・画像・座標は <strong>Wikipedia 日本語版</strong>および <strong>Wikidata</strong>
         （<a href="https://creativecommons.org/licenses/by-sa/4.0/deed.ja" target="_blank" rel="noopener">CC BY-SA 4.0</a>）に基づきます。
@@ -4962,7 +4964,13 @@ class RouteFormatter {
 
 // ----- map-view.js -----
 /**
- * map-view.js - 検索結果を俯瞰する地図（Leaflet + 国土地理院タイル）
+ * map-view.js - 検索結果を俯瞰する地図（Leaflet + 国土地理院のベクトル地図）
+ *
+ * 【2026-10-21、43本目D（44本目で差し替え）、Minami決定】下地の地図は、国土地理院のベクトル地図
+ * （地理院地図Vector）を地図記号なし・アプリの色にしたもの（3Dと共通。scripts/build-map-style.js）。
+ * Leafletはベクトル地図を描けないため、MapLibreをLeafletの層の1枚として重ねる（L.maplibreGL）。
+ * MapLibreの読み込みが終わるまでと、WebGLが使えない環境では、淡色地図の画像タイルを出す
+ * （以前の標準地図は情報が多くごちゃごちゃしていた、Minami実機確認）。
  *
  * Google Maps 等の商用APIは使わず、地理院タイル（無料・出典明示のみで利用可）を
  * 採用している。Leaflet本体はバンドル時にインライン化されるため、地図の
@@ -4974,9 +4982,15 @@ class RouteFormatter {
  * 申請不要（大量一括ダウンロード等は対象外）。
  */
 
-const GSI_TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png';
+// 【43本目D】ベクトル地図を読み込むまで・WebGLが使えない環境で出す、淡色地図の画像タイル
+// （以前は標準地図std）。
+const GSI_TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png';
 const GSI_ATTRIBUTION =
-  '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院</a>';
+  '<a href="https://maps.gsi.go.jp/vector/" target="_blank" rel="noopener">国土地理院</a>'; // 【43本目】ベクトル地図の出典と同じ短い表記（同じ文字列ならLeafletは1つにまとめて出す）
+// 【43本目】地図の上の出典は短くする（scripts/build-map-style.jsのsources.attributionと同じ。
+// 長いとPCの地図の下の情報枠が狭まり、場所の名前が見えなくなるため）。
+const GSI_VECTOR_ATTRIBUTION =
+  '<a href="https://maps.gsi.go.jp/vector/" target="_blank" rel="noopener">国土地理院</a>';
 // 予算の帯の幅（既存の検索・一覧と同じ定義）。main.jsにも同名の定数があるが、
 // バンドル後は同じスクリプトスコープに連結されるため、名前が衝突しないよう
 // このファイルだけMAP_BAND_WIDTHという別名にしている。
@@ -5152,10 +5166,11 @@ class MapView {
       // 計算どおりの比率になるようにする。
       zoomSnap: 0,
     });
-    L.tileLayer(GSI_TILE_URL, {
+    this._rasterBaseLayer = L.tileLayer(GSI_TILE_URL, {
       attribution: GSI_ATTRIBUTION,
       maxZoom: 18,
     }).addTo(this.map);
+    this._loadVectorBaseMap();
     this.markersLayer = L.layerGroup().addTo(this.map);
     this._clusterLayer = L.layerGroup().addTo(this.map);
     // 【43本目B-2】画面上の距離でまとめるため、ズームが変わったらまとめ直す。
@@ -5167,6 +5182,60 @@ class MapView {
     // 【41本目】以前はここでzoomendを見て「全体を見る」ボタン（寄っているときだけ出る）の
     // 表示を切り替えていたが、ボタンをいつでも出ている「最初の見え方に戻るボタン」に
     // 置き換えたため不要になった。
+  }
+
+  /**
+   * 【2026-10-21、43本目D】下地を国土地理院のベクトル地図（地図記号なし・アプリの色）に差し替える。
+   * 読み込み（MapLibre・橋渡し・スタイル）が終わり、ベクトル地図の最初の描画が済んだら、
+   * 淡色地図の画像タイルを外す（それまでは画像タイルを出しておき、地図が白く抜けない）。
+   * WebGLが使えない・読み込みに失敗したときは、画像タイルのまま続ける（エラーは出さない）。
+   */
+  _loadVectorBaseMap() {
+    loadVectorBaseMapForLeaflet().then((style) => {
+      if (!this.map || this._vectorBaseLayer) return;
+      const layer = L.maplibreGL({ style, interactive: false, attribution: GSI_VECTOR_ATTRIBUTION });
+      this._vectorBaseLayer = layer;
+      // 【不具合修正】Leafletは、地図がまだ最初の表示位置を持たない（_loadedがfalseの）うちに
+      // 加えた層の準備（onAdd）を後回しにする。そのため加えた直後はGLの地図がまだ無く
+      // （getMaplibreMap()がundefined）、差し替えの準備が例外で止まり、淡色地図の画像タイルが
+      // 裏に残り続けた（実機相当の確認で発覚）。層の準備ができた合図（'add'）を待ってから行う。
+      layer.once('add', () => this._watchVectorBaseLayerReady(layer));
+      layer.addTo(this.map);
+    }).catch(() => {});
+  }
+
+  /** 【43本目D】ベクトル地図の層の準備ができたら、描けたところで淡色地図の画像タイルを外す。 */
+  _watchVectorBaseLayerReady(layer) {
+    const glMap = layer.getMaplibreMap();
+    if (!glMap) return;
+    const swap = () => {
+      if (this._rasterBaseLayer && this.map) {
+        this.map.removeLayer(this._rasterBaseLayer);
+        this._rasterBaseLayer = null;
+      }
+    };
+    // 'load'だけを待つと、橋渡し（maplibre-gl-leaflet）の内部で地図が作られる順番によっては
+    // 合図を取り逃し、淡色地図の画像タイルが裏に残り続けた（実機相当の確認で発覚：GLの地図は
+    // loaded()がtrueなのに差し替わっていなかった）。描画が落ち着いた合図（'idle'）でも確かめる。
+    const trySwap = () => {
+      if (!glMap.loaded()) return;
+      glMap.off('idle', trySwap);
+      glMap.off('load', trySwap);
+      swap();
+    };
+    glMap.on('idle', trySwap);
+    glMap.on('load', trySwap);
+    trySwap();
+    // 予備：通信が混んでいてタイルを読み終わる（loaded()）まで時間がかかるときも、スタイルが
+    // 読めて描き始めていれば数秒後に差し替える（そうしないと画像タイルがいつまでも裏に残り、
+    // 不要な通信を続けた。実機相当の長時間の確認で発覚）。
+    setTimeout(() => {
+      if (this._rasterBaseLayer && glMap.isStyleLoaded()) {
+        glMap.off('idle', trySwap);
+        glMap.off('load', trySwap);
+        swap();
+      }
+    }, 6000);
   }
 
   /**
@@ -5259,6 +5328,14 @@ class MapView {
       if (!this.isContainerVisible()) return;
       this.forceMarkerReposition();
       this.refitBounds();
+      // 【43本目、不具合修正】最初の検索では、地図がまだ表示前（検索結果の画面に切り替わる前）に
+      // render()が呼ばれ、applyBudget()の塗り分け・まとめが保留されたままになっていた（裏取得の
+      // 再描画まで約1.2秒、ピンが色分けされず、まとめた丸も出なかった。実機相当の確認で発覚）。
+      // 見えるようになったこのコマでやり直す。
+      if (this.lastBudget != null) {
+        this._restyleMarkers();
+        this._recluster();
+      }
     });
   }
 
@@ -6108,6 +6185,10 @@ const MAPLIBRE_CSS_URL = 'vendor/maplibre/maplibre-gl.css';
 // 無いと解決できない）として扱い、"Failed to resolve module specifier"で
 // 失敗する。"./"を付けて明示的な相対URLにすること（実機で発覚・修正済み）。
 const TERRAIN_MODULE_URL = './vendor/maplibre/terrain-map-view.js';
+// 【2026-10-21、43本目D】2DでもMapLibreで国土地理院のベクトル地図（地図記号なし・アプリの色）を
+// 描くための、Leaflet用の橋渡し（@maplibre/maplibre-gl-leaflet、ISCライセンス）と、地図のスタイル。
+const MAPLIBRE_LEAFLET_URL = 'vendor/maplibre/leaflet-maplibre-gl.js';
+const APP_MAP_STYLE_URL = './vendor/gsi-vector/app-style.json';
 
 /**
  * 重いライブラリを読み込む前の軽いWebGL対応チェック。
@@ -6159,6 +6240,36 @@ let loadPromise = null;
  * {TerrainMapView}を返す。多重呼び出しは同じPromiseに合流する。
  * 失敗時はキャッシュを捨てて次回また最初から試せるようにする。
  */
+let vectorBaseMapPromise = null;
+
+/**
+ * 【2026-10-21、43本目D（44本目で差し替え）、Minami決定】2Dの下地を国土地理院のベクトル地図に
+ * するための読み込み（MapLibre本体・Leaflet用の橋渡し・地図のスタイル）。Leafletはベクトル地図を
+ * 描けないため、MapLibreをLeafletの層の1枚として使う（L.maplibreGL）。以前は「2Dの人には
+ * MapLibreを読み込まない」方針だったが、2D・3Dとも同じベクトル地図にする（Minami決定）には
+ * 2DでもMapLibreが要る。ページ自体は先に出し、地図の下地だけ後から差し替える（map-view.js参照）。
+ * WebGLが使えない環境では読み込まない（呼び出し元は淡色の画像タイルのまま続ける）。
+ * @returns {Promise<object>} 地図のスタイル（JSON）
+ */
+function loadVectorBaseMapForLeaflet() {
+  if (vectorBaseMapPromise) return vectorBaseMapPromise;
+  vectorBaseMapPromise = (async () => {
+    if (!isWebglLikelySupported()) {
+      throw new Error('WebGLが利用できない環境のため、2Dの下地は画像タイル（淡色地図）のまま表示します');
+    }
+    loadStylesheetOnce(MAPLIBRE_CSS_URL);
+    await loadScriptOnce(MAPLIBRE_JS_URL);
+    if (typeof maplibregl === 'undefined') throw new Error('MapLibre GL JSの読み込みに失敗しました');
+    await loadScriptOnce(MAPLIBRE_LEAFLET_URL);
+    if (typeof L === 'undefined' || typeof L.maplibreGL !== 'function') throw new Error('maplibre-gl-leafletの読み込みに失敗しました');
+    const res = await fetch(APP_MAP_STYLE_URL);
+    if (!res.ok) throw new Error(`地図のスタイルの読み込みに失敗しました（${res.status}）`);
+    return res.json();
+  })();
+  vectorBaseMapPromise.catch(() => { vectorBaseMapPromise = null; });
+  return vectorBaseMapPromise;
+}
+
 function loadTerrainModule() {
   if (loadPromise) return loadPromise;
   loadPromise = (async () => {
@@ -7920,7 +8031,13 @@ class ReverseTravel {
    * タイミングに後回しにする。
    */
   scheduleMaxBudgetPrefetch(stationId) {
-    const schedule = window.requestIdleCallback || ((cb) => setTimeout(cb, 50));
+    // 【43本目、不具合修正】requestIdleCallbackは、ページが暇になるまで後回しにする。期限を付けないと、
+    // 地図の描画が重い間（下地がベクトル地図になり、3Dでは特に）いつまでも実行されず、地図の点が
+    // 検索した金額の分だけのまま「¥2000分」に差し替わらないことがあった（金額を上げても円が
+    // 広がらない。実機相当の長時間の確認で発覚）。遅くとも1.5秒後には実行する。
+    const schedule = window.requestIdleCallback
+      ? (cb) => window.requestIdleCallback(cb, { timeout: 1500 })
+      : (cb) => setTimeout(cb, 50);
     schedule(async () => {
       // 裏の計算が終わるまでの間に別の駅で検索し直されていたら、
       // 今の表示とは無関係なデータのため何もしない。
@@ -7946,6 +8063,10 @@ class ReverseTravel {
           // 使っていたが、それは「点がすぐ変わる」挙動そのものだった）。
           this.mapView.render(departureStation, allSpots, this.currentBudget);
           if (this.terrainMapView) this.terrainMapView.render(departureStation, allSpots, this.currentBudget);
+          // 【43本目、不具合修正】render()は地図のピンを作り直して選択を外すため、検索直後にピンを
+          // 選んでいた（情報枠を開いていた）場合、この裏取得の反映で選択だけが外れ、情報枠は開いた
+          // まま選んだピンの強調が消えていた。選んでいたピンを、情報枠などはそのままに地図側だけ選び直す。
+          this.restoreMapSelectionAfterRerender();
           // 円・帯の件数プレビューはスライダーの今の値で出してよい（動かしながら
           // 変えてよい表示のため）。allSpotsが揃ったことで、半径・件数とも
           // より正確になる。
@@ -8255,6 +8376,20 @@ class ReverseTravel {
    * あるため選択自体は引き継げる。検索し直し直後等でcurrentAllSpotsに見つから
    * ない場合は選択を諦める（エラーにしない。Minami指示）。
    */
+  /**
+   * 【2026-10-21、43本目、不具合修正】地図を作り直したあと（裏取得の反映）、選んでいたピンを
+   * 2D・3Dの地図の上だけで選び直す（一覧のハイライト・情報枠は変えない＝コールバックを呼ばない）。
+   */
+  restoreMapSelectionAfterRerender() {
+    if (!this.selectedSpotId) return;
+    const spot = this.currentAllSpots?.find((s) => s.id === this.selectedSpotId);
+    if (!spot) return;
+    this.mapView.selectedSpotId = spot.id;
+    this.mapView.setMarkerState(spot.id, 'selected', true);
+    this.mapView._recluster();
+    this.terrainMapView?.setSelectedSpot(spot);
+  }
+
   reapplySelectionAfterModeSwitch() {
     if (!this.selectedSpotId) return;
     const spot = this.currentAllSpots?.find((s) => s.id === this.selectedSpotId);
@@ -8992,8 +9127,11 @@ class ReverseTravel {
     const mapArea = document.getElementById('map-area');
     const toggle = this.elements.mapDimensionToggle;
     if (!mapArea || !toggle) return;
+    // 【43本目、不具合修正】2Dの下地もMapLibreの層（maplibre-gl-leaflet）で描くようになり、
+    // #map-area全体から'.maplibregl-ctrl-bottom-right'を探すと、3D表示中に裏で隠れている2D側の
+    // 部品（幅0）を先に見つけて、情報枠の幅が最小（100px）まで縮んでいた。表示中の地図の中だけを探す。
     const attrib = mapArea.querySelector(
-      mapArea.classList.contains('mode-3d') ? '.maplibregl-ctrl-bottom-right' : '.leaflet-control-attribution'
+      mapArea.classList.contains('mode-3d') ? '#spots-map-3d .maplibregl-ctrl-bottom-right' : '#spots-map .leaflet-control-attribution'
     );
     const mapRect = mapArea.getBoundingClientRect();
     const toggleRect = toggle.getBoundingClientRect();

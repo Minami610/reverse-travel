@@ -109,6 +109,7 @@ export function assertMaplibreVendorFresh(callerLabel) {
   const groups = [
     [maplibreSrcDir, ['maplibre-gl.js', 'maplibre-gl.css']],
     [jsSrcDir, ['gsi-dem-protocol.js', 'terrain-map-view.js', 'gsi-dem-worker.js']],
+    [path.join(rootDir, 'assets/vendor/maplibre-gl-leaflet'), ['leaflet-maplibre-gl.js']], // 【43本目D】
   ];
 
   for (const outRoot of ['dist', 'docs']) {
@@ -127,6 +128,13 @@ export function assertMaplibreVendorFresh(callerLabel) {
           process.exit(1);
         }
       }
+    }
+    // 【43本目D】下地の地図のスタイル
+    const styleSrc = path.join(rootDir, 'assets/vendor/gsi-vector/app-style.json');
+    const styleOut = path.join(rootDir, outRoot, 'vendor/gsi-vector/app-style.json');
+    if (fs.existsSync(styleSrc) && (!fs.existsSync(styleOut) || fs.statSync(styleOut).mtimeMs < fs.statSync(styleSrc).mtimeMs)) {
+      console.error(`❌ ${callerLabel}: ${outRoot}/vendor/gsi-vector/app-style.json が無いか古い可能性があります。先に npm run bundle を実行してください。`);
+      process.exit(1);
     }
   }
 }

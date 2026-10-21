@@ -25,12 +25,35 @@
  * 更新だけで済み、スライダー1コマごとにDOM/オブジェクトを作り直さない）。
  */
 
-const GSI_PALE_TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png';
-const GSI_SEAMLESSPHOTO_TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg';
+// 【2026-10-21、43本目D（44本目で差し替え）、Minami決定】下地の地図は、どの縮尺でも
+// 国土地理院のベクトル地図（地理院地図Vector）を、地図記号なし・アプリの色にしたもの
+// （scripts/build-map-style.jsが作るvendor/gsi-vector/app-style.json、2Dと共通）。
+// 以前の「全体は淡色地図の画像タイル、寄ると航空写真」（7本目のスタイルD）はやめた
+// （Minami：2Dの標準地図は情報が多くごちゃごちゃ、3Dで寄ると航空写真に変わるのもスマートで
+// ない。Googleマップのように、情報の少ない同じ地図をどの縮尺でも使いたい）。
+// ページ（index.html）からの相対URL（このモジュール自体はvendor/maplibre/に置かれるが、
+// fetch()はページの場所を基準に解決する）。
+const APP_MAP_STYLE_URL = './vendor/gsi-vector/app-style.json';
 const GSI_DEM_PROTOCOL_TILE_URL = 'gsidem://https://cyberjapandata.gsi.go.jp/xyz/dem_png/{z}/{x}/{y}.png';
-const GSI_STD_ATTRIBUTION =
-  '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院</a>';
 const GSI_DEM_ATTRIBUTION = '国土地理院の標高タイルを加工して3D地形として表示';
+
+// 【43本目D】地形に貼り付ける層の表示範囲を下へずらす段数（_createMap()のshiftZoomRange参照）。
+const TERRAIN_DRAPE_ZOOM_SHIFT = 1;
+
+let appMapStylePromise = null;
+/** 下地の地図のスタイル（JSON）を読み込む（1回だけ）。 */
+function loadAppMapStyle() {
+  if (!appMapStylePromise) {
+    appMapStylePromise = fetch(APP_MAP_STYLE_URL).then((res) => {
+      if (!res.ok) throw new Error(`地図のスタイルの読み込みに失敗しました（${res.status}）`);
+      return res.json();
+    }).catch((e) => {
+      appMapStylePromise = null; // 次の3D切替でやり直せるようにする
+      throw e;
+    });
+  }
+  return appMapStylePromise;
+}
 
 const DEFAULT_PITCH = 57; // Minami指示：55〜60の中間
 // 【2026-10-21、41本目、Minami決定：案1】全体の見え方（検索した直後・最初の見え方に戻る
@@ -44,6 +67,8 @@ const DEFAULT_ZOOM = 9;
 const DEFAULT_EXAGGERATION = 2; // Minami指示：2〜2.5倍から開始
 const DEM_MAXZOOM = 12; // Minami指示：DEM10Bの範囲に抑え、それ以上は自動オーバーズーム
 
+// 【43本目D】以下の7本目の「淡色地図→航空写真」の切り替え（BG_*）は廃止した。陰影の強さ・色を
+// ズームで変える式（全体は強め・寄ったら弱め）だけは、地形の立体感のために残している。
 // 【2026-10-12、7本目、Minami決定】3Dの既定の見た目を「D」にする
 // （6本目Cで比較したa/b/d/bdのうち、全体=淡色地図＋強め陰影、寄り=航空写真＋
 // 弱い陰影、のbd相当のもの。理由：航空写真だけだと重く、高低差も読めない
@@ -65,12 +90,9 @@ const DEM_MAXZOOM = 12; // Minami指示：DEM10Bの範囲に抑え、それ以�
 // 採用値）。
 const BG_CROSSFADE_ZOOM_START = 12.5;
 const BG_CROSSFADE_ZOOM_END = 13.5;
-const AERIAL_OPACITY_EXPR = ['interpolate', ['linear'], ['zoom'], BG_CROSSFADE_ZOOM_START, 0, BG_CROSSFADE_ZOOM_END, 1];
 const HILLSHADE_EXAGGERATION_EXPR = ['interpolate', ['linear'], ['zoom'], BG_CROSSFADE_ZOOM_START, 0.7, BG_CROSSFADE_ZOOM_END, 0.15];
 const HILLSHADE_SHADOW_COLOR_EXPR = ['interpolate', ['linear'], ['zoom'], BG_CROSSFADE_ZOOM_START, '#2a2a1a', BG_CROSSFADE_ZOOM_END, '#6b6b5f'];
 const HILLSHADE_HIGHLIGHT_COLOR_EXPR = ['interpolate', ['linear'], ['zoom'], BG_CROSSFADE_ZOOM_START, '#fff8e0', BG_CROSSFADE_ZOOM_END, '#fffdf5'];
-const BG_PALE_LAYER_ID = 'gsi-bg-pale';
-const BG_AERIAL_LAYER_ID = 'gsi-bg-aerial';
 
 // 【2026-10-19、34本目、Minami決定：B】円を合わせるとき（fitCircleToView()）の最低ズーム。
 // 小さいスマホ（400×464）の3Dで円が枠からはみ出したまま戻らないことがあったため、
@@ -413,6 +435,29 @@ export class TerrainMapView {
       protocolRegistered = true;
     }
 
+    // 【43本目D】下地の地図（ベクトル）のスタイル。読み込めないときは3D化自体を失敗させ、
+    // 呼び出し元（main.jsのactivateTerrainMap()）が2Dのまま続ける（従来のWebGL失敗時と同じ）。
+    const baseStyle = await loadAppMapStyle();
+    this._baseSourceId = Object.keys(baseStyle.sources)[0];
+    // 地・水面・建物の塗り → 地形の陰影 → 道路・鉄道・川などの線 → 地名などの文字 → 到達円・ピン、
+    // の順に重ねる。陰影を線より上に置くと、白い道路や細い線路が陰影に薄められてほとんど
+    // 見えなくなった（実機相当の確認で発覚）ため、陰影は塗りの直後に置く。文字はピンより下
+    // （ピンが文字に隠れない）。
+    // 【43本目D】地形に貼り付ける層（塗り・線）は、表示するズームの範囲（minzoom/maxzoom）を
+    // 1段下へずらす。MapLibreは地形に貼り付けるとき、地図より1段粗いズーム（地形のタイル、
+    // TerrainSourceCacheのdeltaZoom=1）でレイヤーの表示範囲を判定するため、国土地理院のスタイル
+    // のようにズームごとに細かく表示範囲が決まっている道路・鉄道のレイヤーが、傾き45°の全体の
+    // 見え方でほとんど描かれなかった（地形を外すと出る・表示範囲を下げると出ることを確かめた）。
+    // 文字（symbol）は地形に貼り付けないため、ずらさない。
+    const shiftZoomRange = (l) => ({
+      ...l,
+      ...(l.minzoom !== undefined ? { minzoom: Math.max(0, l.minzoom - TERRAIN_DRAPE_ZOOM_SHIFT) } : {}),
+      ...(l.maxzoom !== undefined ? { maxzoom: Math.max(0, l.maxzoom - TERRAIN_DRAPE_ZOOM_SHIFT) } : {}),
+    });
+    const baseFillLayers = baseStyle.layers.filter((l) => l.type === 'background' || l.type === 'fill').map(shiftZoomRange);
+    const baseLineLayers = baseStyle.layers.filter((l) => l.type === 'line').map(shiftZoomRange);
+    const baseSymbolLayers = baseStyle.layers.filter((l) => l.type === 'symbol');
+
     this.map = new maplibregl.Map({
       container: this.containerId,
       // 出典はMapLibre標準の右下attributionではなく、compact（iボタンで開く）に
@@ -422,23 +467,10 @@ export class TerrainMapView {
       attributionControl: false,
       style: {
         version: 8,
+        // 地名などの文字の形（字形）は国土地理院が配信しているもの（app-style.jsonと同じ）。
+        glyphs: baseStyle.glyphs,
         sources: {
-          // 【2026-10-12、7本目】既定の見た目「D」（Minami決定）：淡色地図を
-          // 常に敷き、航空写真をズームで重ねる。どちらも地理院タイル。
-          [BG_PALE_LAYER_ID]: {
-            type: 'raster',
-            tiles: [GSI_PALE_TILE_URL],
-            tileSize: 256,
-            maxzoom: 18,
-            attribution: GSI_STD_ATTRIBUTION,
-          },
-          [BG_AERIAL_LAYER_ID]: {
-            type: 'raster',
-            tiles: [GSI_SEAMLESSPHOTO_TILE_URL],
-            tileSize: 256,
-            maxzoom: 18,
-            attribution: GSI_STD_ATTRIBUTION,
-          },
+          ...baseStyle.sources,
           [DEM_SOURCE_ID]: {
             type: 'raster-dem',
             tiles: [GSI_DEM_PROTOCOL_TILE_URL],
@@ -472,17 +504,8 @@ export class TerrainMapView {
           },
         },
         layers: [
-          // 淡色地図は常に不透明で下に敷く（航空写真の未読込部分はここが
-          // そのまま透けて見える＝白く抜けない）。
-          { id: BG_PALE_LAYER_ID, type: 'raster', source: BG_PALE_LAYER_ID },
-          // 航空写真はraster-opacityをズームで0→1に補間し、パッと切り替わらず
-          // 重なっていく（Minami指示）。
-          {
-            id: BG_AERIAL_LAYER_ID,
-            type: 'raster',
-            source: BG_AERIAL_LAYER_ID,
-            paint: { 'raster-opacity': AERIAL_OPACITY_EXPR },
-          },
+          // 【43本目D】下地の地図（国土地理院のベクトル地図、地図記号なし・アプリの色）の塗り
+          ...baseFillLayers,
           // 起伏を見えやすくする陰影（Minami指示）。同じ標高データから計算するため
           // 標高タイルの変換自体は1回で済む（追加のネットワーク取得は発生しない）。
           // 【2026-10-12、7本目】濃さ・色も同じズーム区間で補間し、背景の
@@ -498,6 +521,9 @@ export class TerrainMapView {
               'hillshade-highlight-color': HILLSHADE_HIGHLIGHT_COLOR_EXPR,
             },
           },
+          // 【43本目D】道路・鉄道・川などの線（陰影より上）と、地名・駅名などの文字（到達円・ピンより下）
+          ...baseLineLayers,
+          ...baseSymbolLayers,
           // 【2026-10-13、10本目②】予算の到達範囲の円。地形の上に塗る通常のfill/line
           // レイヤーのため、特別な指定なしに地形の起伏へ自然に貼り付く（MapLibreは
           // fill/lineレイヤーを既定で地形にドレープする）。スポットの点より目立たない
@@ -677,8 +703,12 @@ export class TerrainMapView {
       // 早期returnする、map-view.jsと同じ仕組み）。
       if (this.onSelectionChange) this.onSelectionChange(feature.properties.id);
     });
-    // 【43本目B-2】まとめた丸（HTMLの印）は、ズーム・データが変わるたびに作り直す（間引きあり）。
-    this.map.on('render', () => this._scheduleClusterMarkerUpdate());
+    // 【43本目B-2】まとめた丸（HTMLの印）は、地図が動いたとき・データが変わったときに作り直す
+    // （間引きあり）。【不具合修正】当初は'render'のたびに作り直していたが、印の位置を設定し直す
+    // と次の描画が呼ばれ、地図が止まっていても描画が毎秒約18回続いて'idle'にならない輪になった
+    // （実機相当の確認で発覚：地形の読み込み待ちの検証が終わらなくなった）。
+    this.map.on('move', () => this._scheduleClusterMarkerUpdate());
+    this.map.on('moveend', () => this._scheduleClusterMarkerUpdate());
     this.map.on('sourcedata', (e) => { if (e.sourceId === SPOTS_SOURCE_ID) this._scheduleClusterMarkerUpdate(); });
     this.map.on('mouseenter', SPOTS_LAYER_ID, () => { this.map.getCanvas().style.cursor = 'pointer'; });
     this.map.on('mouseleave', SPOTS_LAYER_ID, () => { this.map.getCanvas().style.cursor = ''; });
@@ -962,10 +992,11 @@ export class TerrainMapView {
           entry = { marker: new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(this.map), el, key: null, lngLat };
           this._clusterMarkers.set(id, entry);
         }
+        const moved = !entry.lngLat || entry.lngLat[0] !== lngLat[0] || entry.lngLat[1] !== lngLat[1];
         entry.lngLat = lngLat;
         entry.count = count;
         entry.hasOrange = hasOrange;
-        entry.marker.setLngLat(lngLat);
+        if (moved) entry.marker.setLngLat(lngLat); // 同じ位置なら設定し直さない（余計な描画を呼ばない）
         if (entry.key !== key) {
           entry.key = key;
           entry.el.innerHTML = `<span class="map-cluster" style="width:${size}px;height:${size}px"><span class="map-cluster-count">${count}</span>${hasOrange ? '<span class="map-cluster-orange-dot"></span>' : ''}</span>`;
@@ -1738,6 +1769,10 @@ export class TerrainMapView {
   flyToSpot(spot, departureStation) {
     if (!this.map || !isFiniteNumber(spot?.latitude) || !isFiniteNumber(spot?.longitude)) return;
     this._cancelFitCircleToView(); // スポットへ寄る操作を、保留中の円合わせに邪魔されないようにする
+    // 【43本目、不具合修正】3Dが見えるまで保留している「全体の見え方へ合わせる」（A-2の初めての
+    // 3D切替・見えていない間の検索）が、寄ったあとに実行されて寄った位置を上書きしないようにする
+    // （実機相当の確認で発覚：動きを減らす設定で寄ったあと、傾きが45°に戻っていた）。
+    this._pendingReturnToSearchView = false;
     // 【2026-10-15、26本目、不具合修正】既にこの場所へ寄っている最中・寄り終えた
     // 状態で同じピンをもう一度押すと(読み込み待ちで画面が止まって見える間の
     // 連打等)、傾ける前の「降りる」flyTo()が「中心・ズームが現在と同じ＝移動
@@ -1942,12 +1977,8 @@ export class TerrainMapView {
   waitForSceneSettled(timeoutMs = 15000) {
     if (!this.map) return Promise.resolve(false);
     const map = this.map;
-    const backgroundIdsToCheck = () => {
-      const zoom = map.getZoom();
-      if (zoom <= BG_CROSSFADE_ZOOM_START) return [BG_PALE_LAYER_ID];
-      if (zoom >= BG_CROSSFADE_ZOOM_END) return [BG_AERIAL_LAYER_ID];
-      return [BG_PALE_LAYER_ID, BG_AERIAL_LAYER_ID];
-    };
+    // 【43本目D】背景は、どのズームでもベクトル地図のタイル1種類だけになった。
+    const backgroundIdsToCheck = () => [this._baseSourceId];
     const isSettled = () => {
       if (map.isMoving()) return false; // カメラアニメーション中は到着地点が確定していない
       const center = map.getCenter();

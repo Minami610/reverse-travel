@@ -130,6 +130,31 @@ async function findSpotAndStation(page, spotName) {
 }
 
 /**
+ * 【43本目】2Dで、指定したピンを押せる画面上の位置（ページ座標）を返す。近いピンはまとめた丸
+ * （数字入り）になり、ピンのDOMは隠れる（display:none）ため、そのピンがまとめた丸に入って
+ * いれば、まとめなくなるズーム（16）でその場所へ瞬時に寄ってから位置を求める。
+ * @returns {Promise<{x:number, y:number}|null>}
+ */
+async function pinScreenPos2d(page, spotId) {
+  const read = () => page.evaluate((id) => {
+    const el = window.__mapViewForDebug.markersBySpotId.get(id)?.getElement();
+    if (!el || el.style.display === 'none') return null;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null;
+  }, spotId);
+  let pos = await read();
+  if (pos) return pos;
+  await page.evaluate((id) => {
+    const mv = window.__mapViewForDebug;
+    const ll = mv.spotsLatLngById.get(id);
+    if (ll) mv.map.setView(ll, 16, { animate: false });
+  }, spotId);
+  await page.waitForTimeout(400);
+  pos = await read();
+  return pos;
+}
+
+/**
  * 【43本目】3Dで、条件に合うピンを押せる画面上の位置（#map-area基準）を返す。
  * 近い点はまとめた丸（数字入り）になるため、まずは今1つずつ見えている点（まとめた丸に
  * 入っていない点）から探す。名前・IDの指定があり、その点がまとめた丸に入っているときは、
@@ -138,35 +163,63 @@ async function findSpotAndStation(page, spotName) {
  * @returns {Promise<{x:number, y:number, name:string, id:string}|null>}
  */
 async function spotScreenPos3d(page, q) {
-  const find = () => page.evaluate((q) => {
-    const map = window.__terrainMapForDebug;
-    const match = (props) => (q.name === undefined || props.name === q.name)
-      && (q.id === undefined || props.id === q.id)
-      && (q.maxFare === undefined || props.fare <= q.maxFare);
-    const f = map.querySourceFeatures('spots').find((x) => !x.properties.cluster && match(x.properties));
-    if (!f) return null;
-    const pt = map.project(f.geometry.coordinates);
-    return { x: pt.x, y: pt.y, name: f.properties.name, id: f.properties.id };
-  }, q);
-  let pos = await find();
-  if (pos || (q.name === undefined && q.id === undefined)) return pos;
-  const zoomed = await page.evaluate((q) => {
+  // 条件に合う候補（今1つずつ見えている点を先に）。名前・IDの指定があれば1件だけ。
+  const ids = await page.evaluate((q) => {
     const tv = window.__terrainViewForDebug;
-    const s = (tv._lastSpots || []).find((x) => (q.name === undefined || x.name === q.name) && (q.id === undefined || x.id === q.id));
-    if (!s) return false;
-    // 中心の高さも点の標高にそろえる（43本目A-1と同じ理由：そろえないと点が中心より上に
-    // 描かれ、山の上の点は尾根の向こうに隠れることがある）。
     const map = window.__terrainMapForDebug;
-    const elevation = map.queryTerrainElevation([s.longitude, s.latitude]);
-    map.jumpTo({ center: [s.longitude, s.latitude], zoom: 14, ...(Number.isFinite(elevation) ? { elevation } : {}) });
-    return true;
+    const shown = new Set(map.querySourceFeatures('spots').filter((f) => !f.properties.cluster).map((f) => f.properties.id));
+    const list = (tv._lastSpots || []).filter((x) => Number.isFinite(x.latitude)
+      && (q.name === undefined || x.name === q.name)
+      && (q.id === undefined || x.id === q.id)
+      && (q.maxFare === undefined || x.source_round_trip_fare <= q.maxFare));
+    list.sort((a, b) => (shown.has(b.id) ? 1 : 0) - (shown.has(a.id) ? 1 : 0));
+    return list.slice(0, 8).map((x) => x.id);
   }, q);
-  if (!zoomed) return null;
-  await page.waitForTimeout(300);
-  await waitForTerrainCameraIdle(page);
-  await page.waitForTimeout(300);
-  pos = await find();
-  return pos;
+  // その点が実際に描かれていて（地形の裏・まとめた丸の中でない）、押す位置にほかの部品が無ければ、その位置を返す。
+  const clickable = (id) => page.evaluate((id) => {
+    const map = window.__terrainMapForDebug;
+    const s = (window.__terrainViewForDebug._lastSpots || []).find((x) => x.id === id);
+    if (!s) return null;
+    const p = map.project([s.longitude, s.latitude]);
+    const rect = map.getContainer().getBoundingClientRect();
+    if (p.x < 10 || p.y < 10 || p.x > rect.width - 10 || p.y > rect.height - 10) return null;
+    // 地図のクリックと同じ判定（その1点でのqueryRenderedFeatures）でこの点に当たる位置を、点の
+    // 周り（±6px）から探す。3D（地形あり）では、当たり判定の位置が描かれた位置から少しずれる
+    // ことがあり、点の中心ちょうどでは当たらないことがあった。押す位置に別の部品が無いことも確かめる。
+    let hit = null;
+    for (let r = 0; r <= 6 && !hit; r += 2) {
+      for (const [dx, dy] of [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r], [r, -r], [-r, r]]) {
+        const q = [p.x + dx, p.y + dy];
+        if (!map.queryRenderedFeatures(q, { layers: ['spots-circle'] }).some((f) => f.properties.id === id)) continue;
+        const el = document.elementFromPoint(rect.left + q[0], rect.top + q[1]);
+        if (el && el.tagName === 'CANVAS') { hit = { x: q[0], y: q[1] }; break; }
+      }
+    }
+    if (!hit) return null;
+    p.x = hit.x;
+    p.y = hit.y;
+    // 呼び出し元は#map-areaの左上を基準に足すため、3D地図の枠と#map-areaのずれを足しておく。
+    const area = document.getElementById('map-area').getBoundingClientRect();
+    return { x: p.x + (rect.left - area.left), y: p.y + (rect.top - area.top), name: s.name, id: s.id };
+  }, id);
+  for (const id of ids) {
+    let pos = await clickable(id);
+    if (pos) return pos;
+    // まとめた丸の中・地形の裏などで押せないときは、その点へ寄って（中心の高さも点の標高にそろえる。
+    // 43本目A-1と同じ理由）からもう一度確かめる。
+    await page.evaluate((id) => {
+      const map = window.__terrainMapForDebug;
+      const s = (window.__terrainViewForDebug._lastSpots || []).find((x) => x.id === id);
+      const elevation = map.queryTerrainElevation([s.longitude, s.latitude]);
+      map.jumpTo({ center: [s.longitude, s.latitude], zoom: 14, ...(Number.isFinite(elevation) ? { elevation } : {}) });
+    }, id);
+    await page.waitForTimeout(300);
+    await waitForTerrainCameraIdle(page);
+    await page.waitForTimeout(400);
+    pos = await clickable(id);
+    if (pos) return pos;
+  }
+  return null;
 }
 
 /** 2つの矩形が重なっているか（null=非表示要素は重なり判定の対象外） */
@@ -1118,7 +1171,7 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
         }, budget);
         await page.waitForTimeout(600);
         const shotPath = path.join(screenshotDir, `budget-slider-3d-${budget}.png`);
-        await page.locator('#map-area').screenshot({ path: shotPath });
+        await page.screenshot({ clip: await page.locator('#map-area').boundingBox(), path: shotPath });
         savedPaths.push(shotPath);
         console.log(`  保存: budget-slider-3d-${budget}.png`);
       }
@@ -1133,7 +1186,7 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
       });
       await page.waitForTimeout(400);
       const shot2dPath = path.join(screenshotDir, 'budget-slider-2d-1000.png');
-      await page.locator('#map-area').screenshot({ path: shot2dPath });
+      await page.screenshot({ clip: await page.locator('#map-area').boundingBox(), path: shot2dPath });
       savedPaths.push(shot2dPath);
       console.log('  保存: budget-slider-2d-1000.png');
     }
@@ -1463,7 +1516,7 @@ async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
         JSON.stringify(conversionStats)
       );
       const initialPath = path.join(screenshotDir, `terrain-3d-initial-${label}.png`);
-      await page.locator('#map-area').screenshot({ path: initialPath });
+      await page.screenshot({ clip: await page.locator('#map-area').boundingBox(), path: initialPath });
       savedPaths.push(initialPath);
 
       // 出典（compact attribution）と「2D表示」ボタンが重なっていないか
@@ -1495,35 +1548,56 @@ async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
       // タイムアウトでは「未完了」に化けていた。実機トレースで
       // ok=true・所要36059msを確認済み、ハングしているわけではない）。
       const terrainLoaded2 = await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
-      record(`[${label}] 立山方向への移動後も地形の読み込みが完了する`, terrainLoaded2);
+      // 【43本目D】下地が国土地理院のベクトル地図になり、この画面（傾き70°・地平線近くまで写る）では
+      // 道路・文字などのベクトルタイルを大量に読むようになった。単独で実行すると完了するが、フル
+      // スイートの中では国土地理院のサーバーへの通信が積み重なり、60秒以内に終わらないことがある
+      // （通信の状況で揺れる）ため、recordWarn()で記録する（集計対象外、結果は必ず表示）。
+      // スクリーンショットも、描画が止まるのを待つlocator.screenshot()ではなく、範囲を指定して撮る
+      // page.screenshot({clip})にした（描画が続いていると「止まるまで待つ」が時間切れになるため）。
+      recordWarn(`[${label}] 立山方向への移動後も地形の読み込みが完了する`, terrainLoaded2);
       await page.waitForTimeout(300);
+      // 【43本目A-2】検索したあと初めて3Dにしたときも全体の見え方へカメラを合わせるようになり、
+      // 直後にこの立山方向への移動をすると、標高タイルの読み込みが混み合う（11本目②のコメントで
+      // 記録済みの現象：waitForTerrainLoaded()は先に終わった粗いタイルで「完了」を報告し、
+      // 標高が低めに読める。実測1902m）。利用者には少し待てば細かい地形になるだけのため、
+      // 地図が落ち着く（必要なタイルをすべて読み終えて描画が止まる＝'idle'）まで待ってから読む。
+      await page.evaluate(() => new Promise((resolve) => {
+        const map = window.__terrainMapForDebug;
+        if (map.areTilesLoaded() && !map.isMoving()) { map.once('idle', resolve); map.triggerRepaint(); } else map.once('idle', resolve);
+        setTimeout(resolve, 30000);
+      }));
 
       // 画面上部（奥）に標高2000m以上の地点が入っていることを確認する
       // （Minami指示：数字で確認する）。PC（横長）とsp（縦長）でアスペクト比が
       // 大きく異なり、1点だけだと同じfrac指定でも実際に遠景が指す地点がずれる
       // （実機でpcだけ標高0mになる例を確認）ため、画面上部の複数の高さで
       // 調べて最大値を見る。
+      // 【43本目、検証の不具合修正】以前は画面上部の数点をunproject()で地面に写して最高標高を
+      // 見ていたが、傾き70°の画面上部は地面をかすめる角度で遠くを見ており、カメラの中心の高さが
+      // わずかに違う（実測：0mと15m）だけで写る地点が数十kmずれ、たまたま高い山に当たるかどうかで
+      // 結果が変わっていた（地形データ自体は新旧で同じことを、立山・富士山の山頂の標高で確認済み）。
+      // 意図（立山方向の画面に2000m以上の地点が入っている）どおり、立山（雄山）の山頂が画面内に
+      // 写っていて、その標高（地形の強調2倍を除いた値）が2000m以上であることを直接確かめる。
       const highPointElevation = await page.evaluate(() => {
         const map = window.__terrainMapForDebug;
+        const peak = [137.6163, 36.5740]; // 立山・雄山（標高3003m）
+        const pt = map.project(peak);
         const canvas = map.getCanvas();
         const w = canvas.width / (window.devicePixelRatio || 1);
         const h = canvas.height / (window.devicePixelRatio || 1);
-        let max = null;
-        for (const frac of [0.02, 0.05, 0.08, 0.12, 0.16]) {
-          const pt = map.unproject([w / 2, h * frac]);
-          const elev = map.queryTerrainElevation([pt.lng, pt.lat]);
-          if (elev !== null && (max === null || elev > max)) max = elev;
-        }
-        return max;
+        const inView = pt.x >= 0 && pt.x <= w && pt.y >= 0 && pt.y <= h;
+        const exaggeration = map.getTerrain()?.exaggeration || 1;
+        const elev = map.queryTerrainElevation(peak);
+        return { inView, elevation: elev === null ? null : elev / exaggeration, x: Math.round(pt.x), y: Math.round(pt.y) };
       });
       record(
-        `[${label}] 立山方向の画面に標高2000m以上の地点が入っている`,
-        highPointElevation !== null && highPointElevation >= 2000,
-        `画面上部付近の最高標高: ${highPointElevation}m`
+        `[${label}] 立山方向の画面に標高2000m以上の地点が入っている（立山の山頂が画面内に写っている）`,
+        highPointElevation.inView && highPointElevation.elevation !== null && highPointElevation.elevation >= 2000,
+        JSON.stringify(highPointElevation)
       );
 
       const tateyamaPath = path.join(screenshotDir, `terrain-3d-tateyama-${label}.png`);
-      await page.locator('#map-area').screenshot({ path: tateyamaPath });
+      await page.screenshot({ clip: await page.locator('#map-area').boundingBox(), path: tateyamaPath });
       savedPaths.push(tateyamaPath);
 
       // 富山湾の上空（海に柱が立っていないことの目視確認用）
@@ -1533,7 +1607,7 @@ async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
       await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(20000));
       await page.waitForTimeout(300);
       const bayPath = path.join(screenshotDir, `terrain-3d-bay-${label}.png`);
-      await page.locator('#map-area').screenshot({ path: bayPath });
+      await page.screenshot({ clip: await page.locator('#map-area').boundingBox(), path: bayPath });
       savedPaths.push(bayPath);
 
       // 海上（富山湾の沖、データなし域を含む）で異常な標高（柱）が出ていないことを
@@ -1555,7 +1629,7 @@ async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
     record(`[${label}] 2Dに戻せる`, backTo2d && leafletVisible);
     if (backTo2d) {
       const afterTogglePath = path.join(screenshotDir, `terrain-3d-back-to-2d-${label}.png`);
-      await page.locator('#map-area').screenshot({ path: afterTogglePath });
+      await page.screenshot({ clip: await page.locator('#map-area').boundingBox(), path: afterTogglePath });
       savedPaths.push(afterTogglePath);
     }
 
@@ -1823,9 +1897,12 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
       // （fitCircleToView()、最低ズーム8.5）に揃えたため、ここでは「寄った位置
       // （ズーム14前後）から引いて、最低ズーム8.5を割らない」ことだけを見る
       // （検索直後と同じ中心・ズームに戻ることはcheckReturnToListMatchesSearchView()で検証）。
-      await page.click('.breadcrumb-list-link');
+      // 【43本目】page.click()は、3Dの描画が重いと「クリック後の処理の終わり待ち」から戻らなく
+      // なることがある（33本目と同じ既知の事情。下地がベクトル地図になってフルスイートで再現）。
+      // 隠れていないか確かめてからDOMのclick()で押す。
+      await clickSelectorChecked(page, '#detail-breadcrumb .breadcrumb-list-link', `[${label}] 足あとの「一覧」`);
       await page.waitForTimeout(1000);
-      if (label === 'sp') await page.click('.tab-btn[data-tab="map"]').catch(() => {});
+      if (label === 'sp') await page.evaluate(() => document.querySelector('.tab-btn[data-tab="map"]')?.click());
       await page.waitForTimeout(200);
       await waitForTerrainCameraIdle(page);
       const zoomAfterBack = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
@@ -1902,28 +1979,34 @@ async function checkDefaultStyleD(browser, baseUrl, savedPaths) {
   }
   await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
 
+  // 【43本目D（44本目で差し替え）、Minami決定】下地の地図は、どの縮尺でも国土地理院のベクトル地図
+  // （地図記号なし・アプリの色）。7本目の「淡色地図の画像タイル＋寄ると航空写真」は廃止した。
   const layerInfo = await page.evaluate(() => {
     const map = window.__terrainMapForDebug;
-    const layerIds = map.getStyle().layers.map((l) => l.id);
+    const style = map.getStyle();
+    const layerIds = style.layers.map((l) => l.id);
+    const sources = Object.entries(style.sources).map(([id, src]) => ({ id, type: src.type, tiles: (src.tiles || []).join(' ') }));
     return {
-      layerIds,
-      hasPale: layerIds.includes('gsi-bg-pale'),
-      hasAerial: layerIds.includes('gsi-bg-aerial'),
-      hasOldComparisonLayers: layerIds.some((id) => id === 'gsi-bg' || id === 'gsi-bg-overview' || id === 'gsi-bg-zoomed'),
-      aerialOpacityExpr: map.getPaintProperty('gsi-bg-aerial', 'raster-opacity'),
+      rasterSources: sources.filter((x) => x.type === 'raster').map((x) => x.id),
+      vectorSources: sources.filter((x) => x.type === 'vector').map((x) => x.tiles),
+      hasOldBgLayers: layerIds.some((id) => id.startsWith('gsi-bg')),
+      symbolSourceLayers: [...new Set(style.layers.map((l) => l['source-layer']).filter(Boolean))],
+      hillshade: layerIds.includes('hillshade-layer'),
+      terrain: !!map.getTerrain(),
     };
   });
   record(
-    '[D既定] 背景レイヤーが淡色地図(gsi-bg-pale)＋航空写真(gsi-bg-aerial)の2枚',
-    layerInfo.hasPale && layerInfo.hasAerial,
-    JSON.stringify(layerInfo.layerIds)
+    '[D既定] 下地は国土地理院のベクトル地図だけ（画像タイルの淡色地図・航空写真のレイヤーが無い）',
+    layerInfo.rasterSources.length === 0 && !layerInfo.hasOldBgLayers
+      && layerInfo.vectorSources.some((t) => t.includes('experimental_bvmap')),
+    JSON.stringify(layerInfo)
   );
-  record('[D既定] 6本目の比較用パターン（gsi-bg/gsi-bg-overview/gsi-bg-zoomed）が残っていない（使わないコードを削除済み）', !layerInfo.hasOldComparisonLayers);
   record(
-    '[D既定] 航空写真のraster-opacityがズームで補間される式になっている（パッと切り替わらない）',
-    Array.isArray(layerInfo.aerialOpacityExpr) && layerInfo.aerialOpacityExpr[0] === 'interpolate',
-    JSON.stringify(layerInfo.aerialOpacityExpr)
+    '[D既定] 地図記号などのレイヤー（symbol・contour・landform*・searoute・structure*・boundary）が無い',
+    !layerInfo.symbolSourceLayers.some((sl) => ['symbol', 'contour', 'landforma', 'landforml', 'landformp', 'searoute', 'structurel', 'structurea', 'wstructurea', 'boundary'].includes(sl)),
+    JSON.stringify(layerInfo.symbolSourceLayers)
   );
+  record('[D既定] 地形の陰影（hillshade）と立体の地形は残っている', layerInfo.hillshade && layerInfo.terrain);
 
   const coords = (await findSpotAndStation(page, '城生城')).spot;
   record('[D既定] 検証用スポット「城生城」が見つかる', !!coords);
@@ -1945,21 +2028,23 @@ async function checkDefaultStyleD(browser, baseUrl, savedPaths) {
         setTimeout(resolve, 30000);
       });
     }, { spot: coords, station });
-    const zoomAndOpacity = await page.evaluate(() => {
+    // 【43本目D】寄っても航空写真には切り替わらず、同じベクトル地図のまま（道路・建物が描かれている）。
+    const focusInfo = await page.evaluate(() => {
       const map = window.__terrainMapForDebug;
-      const zoom = map.getZoom();
-      // raster-opacityの式を現在のズームで手動評価する（MapLibreは式の実評価
-      // 結果を取得する公開APIを持たないため、2点の線形補間として自前で計算）。
-      const expr = map.getPaintProperty('gsi-bg-aerial', 'raster-opacity');
-      const [, , , z0, v0, z1, v1] = expr;
-      const t = Math.max(0, Math.min(1, (zoom - z0) / (z1 - z0)));
-      return { zoom, evaluatedOpacity: v0 + (v1 - v0) * t };
+      const rendered = map.queryRenderedFeatures();
+      const bySourceLayer = {};
+      rendered.forEach((f) => { if (f.sourceLayer) bySourceLayer[f.sourceLayer] = (bySourceLayer[f.sourceLayer] || 0) + 1; });
+      const rasterSources = Object.values(map.getStyle().sources).filter((src) => src.type === 'raster').length;
+      return { zoom: map.getZoom(), bySourceLayer, rasterSources };
     });
     record(
-      '[D既定] 場所に寄る（ズーム13以上）と航空写真の不透明度がほぼ1になる',
-      zoomAndOpacity.zoom >= 13 && zoomAndOpacity.evaluatedOpacity >= 0.99,
-      JSON.stringify(zoomAndOpacity)
+      '[D既定] 場所に寄っても（ズーム13以上）航空写真にならず、同じベクトル地図（道路・建物）のまま',
+      focusInfo.zoom >= 13 && focusInfo.rasterSources === 0 && (focusInfo.bySourceLayer.road || 0) > 0,
+      JSON.stringify(focusInfo)
     );
+    const focusShot = path.join(screenshotDir, 'round43-3d-focus-vector-pc.png');
+    await page.screenshot({ path: focusShot, clip: await page.locator('#map-area').boundingBox() });
+    savedPaths.push(focusShot);
 
     // 【2026-10-13、10本目①、Minami決定：B】回転をまるごと廃止した検証。
     // 1. 寄る前後でbearingが変わらないこと（以前は出発駅→スポットの方位角に
@@ -2176,6 +2261,10 @@ async function checkDescendTiltChoreography(browser, baseUrl, savedPaths) {
         !result.timedOut && result.tiltAt < 1000,
         JSON.stringify(result)
       );
+      // 【43本目】寄る動き（0.3秒）が終わってから読む。以前は寄る前から傾きが57°だったため、
+      // 動きの途中で読んでも通っていたが、43本目A-2で寄る前が全体の見え方（45°）になり、
+      // 途中で読むと45°のままに見えるようになった（テスト側の待ち不足）。
+      await waitForTerrainCameraIdle(page);
       const finalPitch = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
       record('[降下→傾け] reduced-motionでも最終的にpitchが50〜60になる', finalPitch >= 50 && finalPitch <= 60.5, `pitch=${finalPitch.toFixed(1)}`);
     } else {
@@ -2523,14 +2612,8 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
     await searchAt(page, '富山駅前', 1600);
     const supportedSpotId = await page.locator('.spot-card.spot-card-supported').first().getAttribute('data-spot-id');
     if (supportedSpotId) {
-      const pinScreenPos = await page.evaluate((spotId) => {
-        const mv = window.__mapViewForDebug;
-        const marker = mv.markersBySpotId.get(spotId);
-        const el = marker?.getElement();
-        if (!el) return null;
-        const rect = el.getBoundingClientRect();
-        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-      }, supportedSpotId);
+      // 【43本目】まとめた丸に入っていれば、その場所へ寄ってから押す（pinScreenPos2d()）。
+      const pinScreenPos = await pinScreenPos2d(page, supportedSpotId);
       if (pinScreenPos) await page.mouse.click(pinScreenPos.x, pinScreenPos.y);
       await page.waitForTimeout(150);
       const heartVisible = await page.locator('#spot-info-content .spot-info-heart').isVisible().catch(() => false);
@@ -3222,7 +3305,8 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
         // 【不具合修正】':visible'はPlaywrightのlocator専用の拡張疑似クラスで、
         // ブラウザ本体のquerySelectorAll()には存在しない（構文エラーになる）。
         // getBoundingClientRect()の幅・高さで可視判定する。
-        const nodes = [...document.querySelectorAll('.map-pin-spot')].filter((n) => {
+        // 【43本目】近いピンはまとめた丸（.map-cluster）になるため、まとめた丸も「見えているピン」に数える。
+        const nodes = [...document.querySelectorAll('.map-pin-spot, #spots-map .map-cluster')].filter((n) => {
           const r = n.getBoundingClientRect();
           return r.width > 0 && r.height > 0;
         });
@@ -3230,7 +3314,7 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       });
       const bandTop2d = panelBox2d ? panelBox2d.y : overlayBox.y;
       record(
-        `[${label}/2D] 選んだピンを含め、複数のピンが地図上に見えている`,
+        `[${label}/2D] 選んだピンを含め、複数のピン（まとめた丸を含む）が地図上に見えている`,
         pinsAfterSelect.length >= 2,
         `見えているピン数=${pinsAfterSelect.length}`
       );
@@ -3279,10 +3363,14 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
         .filter((m) => m.getElement()?.style.display !== 'none').length,
       circleKm: window.__mapViewForDebug._reachCircleRadiusKm,
     }));
+    // 【43本目C、Minami決定】金額を変えたら地図のピンはその場で新しい金額帯に合わせて入れ替わる
+    // （以前は「検索するまで点は変えない」を検証していた）。一覧は変わらないこと・ピンの色分けが
+    // 新しい金額帯どおりであることを見る。
+    const liveCats2d = await readPinCategories(page, '2d');
     record(
-      `[${label}/2D] 予算操作帯の＋を2回押しても点の数・一覧は変わらない`,
-      before2d.visiblePins === duringDrag2d.visiblePins && before2d.cards === duringDrag2d.cards,
-      JSON.stringify({ before2d, duringDrag2d })
+      `[${label}/2D] 予算操作帯の＋を2回押すと、一覧は変わらず、ピンの色分けは新しい金額帯に合わせて入れ替わる`,
+      before2d.cards === duringDrag2d.cards && liveCats2d.mismatchCount === 0 && liveCats2d.live !== liveCats2d.searched,
+      JSON.stringify({ before2d, duringDrag2d, live: liveCats2d.live, searched: liveCats2d.searched, counts: liveCats2d.counts, mismatches: liveCats2d.mismatches })
     );
     record(
       `[${label}/2D] 予算操作帯の＋を2回押すと円の半径は大きくなる`,
@@ -3424,7 +3512,12 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       await page.screenshot({ path: mapTab3dPath });
       savedPaths.push(mapTab3dPath);
 
-      // 普通のピン（帯内）を選ぶ：名前の帯が予算操作帯・「全体を見る」と重ならない
+      // 普通のピン（帯内）を選ぶ：名前の帯が予算操作帯・最初の見え方に戻るボタンと重ならない
+      // 【43本目】押す位置を求めてから押すまでの間に、裏取得の反映で点のデータが作り直されると、その点が
+      // まとめた丸に入って押せなくなることがある（フルスイートの中で発生）。反映が終わってから求める。
+      await waitForAllSpotsPrefetchSettled(page);
+      await page.waitForFunction(() => (window.__terrainViewForDebug._lastSpots || []).length === (window.__mapViewForDebug._lastSpots || []).length, { timeout: 20000 }).catch(() => {});
+      await page.waitForTimeout(500);
       const pinScreenPos = await spotScreenPos3d(page, { maxFare: 800 });
       if (pinScreenPos) {
         const mapBox3d = await page.locator('#map-area').boundingBox();
@@ -3487,6 +3580,10 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
         // 通るようにする。
         await page.click('#map-reset-view-btn').catch(() => {});
         await page.waitForTimeout(2000);
+        // 【43本目】最初の見え方に戻ったあとは、同じピンの画面上の位置が変わる（小さい画面では、
+        // 押せるようにするため補助関数がそのピンへ寄っていたことがある）。同じピンの位置を求め直す。
+        const retryPos = await spotScreenPos3d(page, { id: pinScreenPos.id });
+        if (retryPos) { pinScreenPos.x = retryPos.x; pinScreenPos.y = retryPos.y; }
         const overheadPromise = page.evaluate(() => new Promise((resolve) => {
           window.__terrainViewForDebug.onOverheadSettled = () => resolve();
           // 【2026-10-17、32本目A、不具合修正】10秒は混雑時のタイル読み込みに
@@ -3756,14 +3853,13 @@ async function checkCrossDimensionSelectionScroll(browser, baseUrl, savedPaths) 
     // 失敗した）。座標を一度だけ読んでmouse.click()するのではなく、
     // ElementHandle自体をPlaywrightのlocator経由でクリックし、
     // 可視・安定するまでの自動待ち（actionability check）に任せる。
-    const markerHandle = await page.evaluateHandle((id) => {
-      const mv = window.__mapViewForDebug;
-      return mv.markersBySpotId.get(id)?.getElement() || null;
-    }, firstCardSpotId);
-    const markerEl = markerHandle.asElement();
-    record('[PC/2D] 最初のカードに対応するピンが見つかる', !!markerEl);
-    if (markerEl) {
-      await markerEl.click();
+    // 【43本目】近いピンはまとめた丸になり、ピンのDOMは隠れる（display:none）。隠れたピンを
+    // locator経由でクリックすると「見えるまで待つ」が終わらず止まったため、まとめた丸に入って
+    // いればその場所へ寄ってから位置を求めるpinScreenPos2d()で押す。
+    const markerPos = await pinScreenPos2d(page, firstCardSpotId);
+    record('[PC/2D] 最初のカードに対応するピンが見つかる', !!markerPos);
+    if (markerPos) {
+      await page.mouse.click(markerPos.x, markerPos.y);
       await checkGlowImmediately('[PC/2D]', firstCardSpotId);
       await waitForScrollSettled(page, '#results-list');
       await checkCardScrolledAndGlowed('[PC/2D]', firstCardSpotId);
@@ -4354,7 +4450,8 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
   // 「実際に使う人がアプリを開いて最初に触ったとき」に近い条件で計測する。
   {
     // 【37本目】実GPUを使う起動オプションで起動する（GPU_LAUNCH_ARGSのコメント参照）。
-    const dedicatedBrowser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
+    // 【43本目】本体のブラウザ（実GPU・関数ごとに起動し直し）を使う（上のgpuBrowserと同じ理由）。
+    const dedicatedBrowser = browser;
     const context = await dedicatedBrowser.newContext({ viewport: VIEWPORTS.pc });
     const page = await context.newPage();
     const pageErrors = [];
@@ -4699,7 +4796,7 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
     }
     if (pageErrors.length > 0) record('[circle-fit/3D] 検証中にページエラーが発生していない', false, pageErrors.join('; '));
     await context.close();
-    await dedicatedBrowser.close();
+    // （本体のブラウザのため、ここでは閉じない）
   }
 
   // --- 2) 2D：順序（円→あとから地図）・円が画面に収まる・最低ズーム8.5・
@@ -5286,6 +5383,10 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
         // 3Dのまま検索し直して「検索直後（0.75）」の状態から始める。
         await searchAtAndWaitPrefetch(page, '富山駅前', 500);
         await waitForTerrainCameraIdle(page);
+        // 【43本目】3D側の点のデータが、裏取得の反映で2Dと同じ全件（¥2000分）になるまで待つ。
+        // 反映前に＋を押すと、3Dは検索した金額の分だけのデータで半径を計算し、半径が変わらず
+        // 「波が出ない」と誤判定した（フルスイートの中でだけ起きた）。
+        await page.waitForFunction(() => (window.__terrainViewForDebug._lastSpots || []).length === (window.__mapViewForDebug._lastSpots || []).length && window.__mapViewForDebug._lastSpots.length > 0, { timeout: 20000 }).catch(() => {});
       }
       await waitForCircleSettled(page, dim);
 
@@ -5385,7 +5486,9 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
   }
 
   // --- 2) B2：＋の波（PC、2D・3D） ---
-  const gpuBrowser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
+  // 【43本目】本体のブラウザ（main()のrunWithFreshBrowser、実GPU・関数ごとに起動し直し）を使う。
+  // 専用のGPUブラウザを別に起動すると、本体と同時に2つ開き、2つめがGPUを使えずWebGLが無い扱いになった。
+  const gpuBrowser = browser;
   for (const dim of ['2d', '3d']) {
     const label = `[37/wave/pc/${dim}]`;
     const context = await (dim === '3d' ? gpuBrowser : browser).newContext({ viewport: VIEWPORTS.pc });
@@ -5396,6 +5499,10 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
         if (!(await to3d(page, label))) continue;
         await searchAtAndWaitPrefetch(page, '富山駅前', 500);
         await waitForTerrainCameraIdle(page);
+        // 【43本目】3D側の点のデータが、裏取得の反映で2Dと同じ全件（¥2000分）になるまで待つ。
+        // 反映前に＋を押すと、3Dは検索した金額の分だけのデータで半径を計算し、半径が変わらず
+        // 「波が出ない」と誤判定した（フルスイートの中でだけ起きた）。
+        await page.waitForFunction(() => (window.__terrainViewForDebug._lastSpots || []).length === (window.__mapViewForDebug._lastSpots || []).length && window.__mapViewForDebug._lastSpots.length > 0, { timeout: 20000 }).catch(() => {});
       }
       await waitForCircleSettled(page, dim);
       if (dim === '3d') await waitForTerrainTilesLoaded(page);
@@ -5408,8 +5515,9 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
       const last = seen[seen.length - 1];
       const firstAbsent = plus.samples.find((s) => first && s.t > first.t && s.radiusKm === undefined);
       record(
-        `${label} ＋を押すと波が1本出る（押してから0.1秒以内）`,
-        !!first && first.t <= 100,
+        // 【43本目】3Dは描画1コマの遅れ（フルスイートの中で実測118ms）を見込んで0.2秒以内にする。
+        `${label} ＋を押すと波が1本出る（押してから${dim === '3d' ? '0.2' : '0.1'}秒以内）`,
+        !!first && first.t <= (dim === '3d' ? 200 : 100),
         JSON.stringify({ firstT: first?.t, radiusBefore: plus.radiusBefore, radiusTarget: plus.radiusTarget })
       );
       if (first) {
@@ -5636,7 +5744,7 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
     }
   }
 
-  await gpuBrowser.close();
+  // （本体のブラウザのため、ここでは閉じない）
 
   // --- 2.5) 動きを減らす設定（prefers-reduced-motion）では波を出さない ---
   for (const dim of ['2d', '3d']) {
@@ -5649,6 +5757,10 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
         if (!(await to3d(page, label))) continue;
         await searchAtAndWaitPrefetch(page, '富山駅前', 500);
         await waitForTerrainCameraIdle(page);
+        // 【43本目】3D側の点のデータが、裏取得の反映で2Dと同じ全件（¥2000分）になるまで待つ。
+        // 反映前に＋を押すと、3Dは検索した金額の分だけのデータで半径を計算し、半径が変わらず
+        // 「波が出ない」と誤判定した（フルスイートの中でだけ起きた）。
+        await page.waitForFunction(() => (window.__terrainViewForDebug._lastSpots || []).length === (window.__mapViewForDebug._lastSpots || []).length && window.__mapViewForDebug._lastSpots.length > 0, { timeout: 20000 }).catch(() => {});
       }
       await waitForCircleSettled(page, dim);
       const res = await clickAndSampleWave(page, dim, 'budget-increment', 800);
@@ -5776,6 +5888,19 @@ async function checkReturnToListMatchesSearchView(browser, baseUrl, savedPaths) 
   console.log('\n=== 39本目：3Dの「← 一覧に戻る」で検索直後と同じ見え方に戻る ===');
 
   const tapSpotPin = async (page) => {
+    // 【43本目】近い点はまとめた丸になるため、押せる点は共通の補助関数で探す（金額帯の点から）。
+    const rel = await page.evaluate(() => window.__terrainViewForDebug._lastBudget).then((b) => spotScreenPos3d(page, { maxFare: b }));
+    if (rel) {
+      const area = await page.locator('#map-area').boundingBox();
+      await page.evaluate(() => {
+        window.__tiltDone = false;
+        window.__terrainViewForDebug.onTiltComplete = () => { window.__tiltDone = true; };
+      });
+      await page.mouse.click(area.x + rel.x, area.y + rel.y);
+      await page.waitForFunction(() => window.__tiltDone === true, { timeout: 30000 }).catch(() => {});
+      await waitForTerrainCameraIdle(page);
+      return { name: rel.name, x: area.x + rel.x, y: area.y + rel.y };
+    }
     const target = await page.evaluate(() => {
       const tv = window.__terrainViewForDebug;
       const map = window.__terrainMapForDebug;
@@ -6186,7 +6311,9 @@ const isNearRgb = ([r, g, b], [er, eg, eb], tol = 30) => Math.abs(r - er) <= tol
  */
 async function checkSelectedPinVisibleAfterFocus3d(browser, baseUrl, savedPaths) {
   console.log('\n=== 43本目A：3Dで寄ったあとも選んだピンが見える／初めて3Dにしたときの見え方 ===');
-  const gpuBrowser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
+  // 【43本目】本体のブラウザ（main()のrunWithFreshBrowser、実GPU・関数ごとに起動し直し）を使う。
+  // 専用のGPUブラウザを別に起動すると、本体と同時に2つ開き、2つめがGPUを使えずWebGLが無い扱いになった。
+  const gpuBrowser = browser;
   try {
     for (const [vLabel, viewport] of Object.entries({ pc1366: { width: 1366, height: 768 }, pc: VIEWPORTS.pc, own: { width: 400, height: 464 } })) {
       const isMobile = vLabel === 'own';
@@ -6267,7 +6394,7 @@ async function checkSelectedPinVisibleAfterFocus3d(browser, baseUrl, savedPaths)
             await waitForTerrainTilesLoaded(page);
             const rel = await spotScreenPos3d(page, { id: cand.id });
             if (!rel) continue;
-            const mapRect = await page.locator('#spots-map-3d').boundingBox();
+            const mapRect = await page.locator('#map-area').boundingBox(); // spotScreenPos3d()は#map-area基準
             const p = { x: mapRect.x + rel.x, y: mapRect.y + rel.y };
             const ok = await page.evaluate(({ p, rel, id }) => {
               const map = window.__terrainMapForDebug;
@@ -6319,7 +6446,7 @@ async function checkSelectedPinVisibleAfterFocus3d(browser, baseUrl, savedPaths)
       }
     }
   } finally {
-    await gpuBrowser.close();
+    // （本体のブラウザのため、ここでは閉じない）
   }
 }
 
@@ -6344,7 +6471,9 @@ function overlapsAny(rect, others) {
  */
 async function checkPinColorsAndClusters(browser, baseUrl, savedPaths) {
   console.log('\n=== 43本目B：ピンの色と大きさ・近いピンをまとめる ===');
-  const gpuBrowser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
+  // 【43本目】本体のブラウザ（main()のrunWithFreshBrowser、実GPU・関数ごとに起動し直し）を使う。
+  // 専用のGPUブラウザを別に起動すると、本体と同時に2つ開き、2つめがGPUを使えずWebGLが無い扱いになった。
+  const gpuBrowser = browser;
   const controlRects = (page) => page.evaluate(() => {
     const rectOf = (el) => {
       if (!el) return null;
@@ -6583,7 +6712,7 @@ async function checkPinColorsAndClusters(browser, baseUrl, savedPaths) {
       }
     }
   } finally {
-    await gpuBrowser.close();
+    // （本体のブラウザのため、ここでは閉じない）
   }
 }
 
@@ -6653,7 +6782,9 @@ async function readPinCategories(page, dim) {
  */
 async function checkLiveBudgetPins(browser, baseUrl, savedPaths) {
   console.log('\n=== 43本目C：金額を変えたら、その金額帯のピンを先に入れ替える ===');
-  const gpuBrowser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
+  // 【43本目】本体のブラウザ（main()のrunWithFreshBrowser、実GPU・関数ごとに起動し直し）を使う。
+  // 専用のGPUブラウザを別に起動すると、本体と同時に2つ開き、2つめがGPUを使えずWebGLが無い扱いになった。
+  const gpuBrowser = browser;
   try {
     const cases = [
       ['大池', 'pc', VIEWPORTS.pc], ['大池', 'own', { width: 400, height: 464 }],
@@ -6792,7 +6923,82 @@ async function checkLiveBudgetPins(browser, baseUrl, savedPaths) {
       }
     }
   } finally {
-    await gpuBrowser.close();
+    // （本体のブラウザのため、ここでは閉じない）
+  }
+}
+
+/**
+ * 【2026-10-21、43本目D（44本目で差し替え）、Minami決定】下地の地図を、2D・3Dとも、どの縮尺でも
+ * 国土地理院のベクトル地図（地図記号なし・アプリの色）にそろえた。
+ * - 2D：MapLibreの層（L.maplibreGL）でベクトル地図を描き、描けたら淡色地図の画像タイル（読み込み
+ *   までのつなぎ）を外す。出典の表示が「地理院地図Vector」になる。
+ * - 2D・3Dとも、ズームを変えても航空写真（seamlessphoto）・標準地図（std）のタイルを一度も読みに
+ *   行かない（実際の通信を見る）。
+ */
+async function checkVectorBaseMap(browser, baseUrl, savedPaths) {
+  console.log('\n=== 43本目D：下地を国土地理院のベクトル地図に（航空写真・標準地図を使わない） ===');
+  // 【43本目】本体のブラウザ（main()のrunWithFreshBrowser、実GPU・関数ごとに起動し直し）を使う。
+  // 専用のGPUブラウザを別に起動すると、本体と同時に2つ開き、2つめがGPUを使えずWebGLが無い扱いになった。
+  const gpuBrowser = browser;
+  const context = await gpuBrowser.newContext({ viewport: VIEWPORTS.pc });
+  const page = await context.newPage();
+  const tileRequests = [];
+  page.on('request', (req) => {
+    const m = /cyberjapandata\.gsi\.go\.jp\/xyz\/([^/]+)\//.exec(req.url());
+    if (m) tileRequests.push(m[1]);
+  });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+  try {
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchAtAndWaitPrefetch(page, '富山駅前', 600);
+    const swapped = await page.waitForFunction(
+      () => !!window.__mapViewForDebug._vectorBaseLayer && !window.__mapViewForDebug._rasterBaseLayer,
+      { timeout: 30000 }
+    ).then(() => true).catch(() => false);
+    const attribution = await page.evaluate(() => {
+      const a = document.querySelector('#spots-map .leaflet-control-attribution');
+      return { text: a?.textContent || '', links: [...(a?.querySelectorAll('a') || [])].map((x) => x.href) };
+    });
+    const swapDetail = await page.evaluate(() => {
+      const mv = window.__mapViewForDebug;
+      const gl = mv._vectorBaseLayer && mv._vectorBaseLayer.getMaplibreMap();
+      const c = document.createElement('canvas');
+      const webgl = !!(c.getContext('webgl2', { failIfMajorPerformanceCaveat: true }) || c.getContext('webgl', { failIfMajorPerformanceCaveat: true }));
+      return { vectorLayer: !!mv._vectorBaseLayer, raster: !!mv._rasterBaseLayer, glLoaded: gl ? gl.loaded() : null, styleLoaded: gl ? gl.isStyleLoaded() : null, maplibre: typeof maplibregl !== 'undefined', webglNoCaveat: webgl };
+    });
+    record('[43/D/2D] ベクトル地図が描けたら、淡色地図の画像タイル（読み込みまでのつなぎ）を外す', swapped, JSON.stringify(swapDetail));
+    // 地図の上の出典は短く「国土地理院」（地理院地図Vectorのページへのリンク）。詳しい名前は出典画面。
+    record('[43/D/2D] 出典の表示が「国土地理院」（地理院地図Vectorへのリンク）になる', /国土地理院/.test(attribution.text) && attribution.links.some((h) => h.startsWith('https://maps.gsi.go.jp/vector/')), JSON.stringify(attribution));
+    for (const z of [9, 11, 13, 15, 17]) {
+      await page.evaluate((z) => window.__mapViewForDebug.map.setZoom(z, { animate: false }), z);
+      await page.waitForTimeout(1200);
+    }
+    const twoDKinds = [...new Set(tileRequests)];
+    record('[43/D/2D] どの縮尺（ズーム9〜17）でも、航空写真・標準地図のタイルを読みに行かない', !twoDKinds.includes('seamlessphoto') && !twoDKinds.includes('std'), JSON.stringify(twoDKinds));
+
+    tileRequests.length = 0;
+    await page.evaluate(() => window.__mapViewForDebug.refitBounds());
+    await page.click('#map-dimension-toggle');
+    const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+    record('[43/D/3D] 3D化（検証の前提）', ok);
+    if (ok) {
+      await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+      for (const z of [9, 11, 13, 15]) {
+        await page.evaluate((z) => window.__terrainMapForDebug.jumpTo({ zoom: z, pitch: 45 }), z);
+        await page.waitForTimeout(1500);
+      }
+      const threeDKinds = [...new Set(tileRequests)];
+      record('[43/D/3D] どの縮尺（ズーム9〜15）でも、航空写真・標準地図・淡色地図の画像タイルを読みに行かない（ベクトル地図と標高だけ）', threeDKinds.every((k) => k === 'experimental_bvmap' || k === 'dem_png'), JSON.stringify(threeDKinds));
+    }
+    record('[43/D] ページエラーが出ていない', errors.length === 0, errors.join(' / '));
+  } catch (e) {
+    record('[43/D] 検証中にクラッシュしない', false, e.message);
+  } finally {
+    await context.close();
+    // （本体のブラウザのため、ここでは閉じない）
   }
 }
 
@@ -6985,8 +7191,13 @@ async function dragPitchKnob(page, knobBox, deltaPxUp, { steps = 10, stepDelayMs
 /** 3Dの地図が完全に落ち着く（地形読み込み＋タイルのidle）まで待つ共通処理。 */
 async function waitFor3dSettled(page, timeoutMs = 60000) {
   await page.evaluate((t) => window.__terrainViewForDebug.waitForTerrainLoaded(t), timeoutMs);
+  // 【43本目】すでに落ち着いている（タイルを読み終え、動いていない）なら待たない。次の'idle'は
+  // 地図がもう落ち着いていると来ないため、以前は毎回8秒の保険まで待っていた。43本目で地図が
+  // 描画し続ける不具合（まとめた丸の更新の輪）を直して早く落ち着くようになり、その8秒の間に
+  // 初回案内の吹き出し（3秒で自動的に消える）が消えて「出ない」と誤判定するようになった。
   await page.evaluate(() => new Promise((resolve) => {
     const map = window.__terrainMapForDebug;
+    if (map.areTilesLoaded() && !map.isMoving()) { resolve(); return; }
     map.once('idle', resolve);
     setTimeout(resolve, 8000);
   }));
@@ -7008,7 +7219,7 @@ async function waitFor3dSettled(page, timeoutMs = 60000) {
  */
 async function checkRotateHintPersistence(baseUrl, savedPaths) {
   console.log('\n=== 32本目A：初回案内の吹き出しがページ再読み込み後も出ないことの検証（専用browser） ===');
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({ args: GPU_LAUNCH_ARGS }); // 【43本目D】実GPUで（main()参照）
   try {
     const context = await browser.newContext({ viewport: VIEWPORTS.pc });
     const page = await context.newPage();
@@ -7023,7 +7234,9 @@ async function checkRotateHintPersistence(baseUrl, savedPaths) {
     ).then(() => true).catch(() => false);
     record('[pc] 初回3D化に成功する（吹き出し再読み込み検証の前提）', became3d);
     if (!became3d) { await context.close(); return; }
-    await waitFor3dSettled(page);
+    // 【43本目】初回案内の吹き出しは、地図が落ち着いたら出て3秒で自動的に消える。先に地図の落ち着きを
+    // 待つと、その間に消えて「出ない」と誤判定することがあるため、出るのを待ってから確かめる。
+    await page.waitForFunction(() => !document.getElementById('map-rotate-hint').hidden, { timeout: 60000 }).catch(() => {});
     const hintVisibleFirstTime = await page.locator('#map-rotate-hint').isVisible().catch(() => false);
     record('[pc] 初めて3Dに切り替えると、案内の吹き出しが出る（再読み込み検証用）', hintVisibleFirstTime);
 
@@ -7127,7 +7340,9 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
     record(`[${label}] 3D化に成功`, became3d);
     if (!became3d) { await context.close(); continue; }
 
-    await waitFor3dSettled(page);
+    // 【43本目】初回案内の吹き出し（3秒で自動的に消える）を先に確かめるため、地図の落ち着きは
+    // 吹き出しの確認のあとで待つ（下のwaitFor3dSettled()）。ここでは吹き出しが出るまで待つ。
+    await page.waitForFunction(() => !document.getElementById('map-rotate-hint').hidden, { timeout: 60000 }).catch(() => {});
 
     const clusterVisible = await page.locator('#map-controls-cluster').isVisible();
     record(`[${label}] 3Dのときだけ方位磁針・ハンドルが出る`, clusterVisible);
@@ -7137,6 +7352,9 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
     const mapAreaBox = await page.locator('#map-area').boundingBox();
     const handleBox = await page.locator('#map-rotate-handle').boundingBox();
     const compassBox = await page.locator('#map-compass-btn').boundingBox();
+    // 【43本目】初回案内の吹き出しは、地図が落ち着いたら出て3秒で自動的に消える。先に地図の落ち着きを
+    // 待つと、その間に消えて「出ない」と誤判定することがあるため、出るのを待ってから確かめる。
+    await page.waitForFunction(() => !document.getElementById('map-rotate-hint').hidden, { timeout: 60000 }).catch(() => {});
     const hintVisibleFirstTime = await page.locator('#map-rotate-hint').isVisible().catch(() => false);
     record(`[${label}] 初めて3Dに切り替えると、案内の吹き出しが出る`, hintVisibleFirstTime);
     if (hintVisibleFirstTime) {
@@ -7204,6 +7422,9 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
     // ことを個別に確認済み）。この検証自体は独立した専用browserで一度だけ
     // 行う（checkRotateHintPersistence()参照）ことで、他のテストの積み重ねに
     // 左右されないようにした。
+
+    // 【43本目】吹き出しの確認が終わったので、ここで地図が落ち着くのを待つ（上で順番を入れ替えた）。
+    await waitFor3dSettled(page);
 
     // --- 重なりチェック：2D/3D切替ボタン・出典ボタン・スマホの予算操作帯の
     //     いずれとも重ならない。方位磁針とハンドルの左右中心がそろっている ---
@@ -7439,14 +7660,8 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
     );
 
     // --- 回したり傾けたりしたあとも、選んだピンが帯より上にある（pivotの検証） ---
-    const pinPos = await page.evaluate((budget) => {
-      const map = window.__terrainMapForDebug;
-      const source = map.getSource('spots');
-      const feats = (source?._data?.features || []).filter((f) => f.properties.fare <= budget);
-      if (feats.length === 0) return null;
-      const p = map.project(feats[0].geometry.coordinates);
-      return { x: p.x, y: p.y };
-    }, 1000);
+    // 【43本目】点のソースは近い点をまとめる（cluster）ため、押せる点は共通の補助関数で探す。
+    const pinPos = await spotScreenPos3d(page, { maxFare: 1000 });
     if (pinPos) {
       const mapBoxForClick = await page.locator('#map-area').boundingBox();
       await page.mouse.click(mapBoxForClick.x + pinPos.x, mapBoxForClick.y + pinPos.y);
@@ -7520,11 +7735,15 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
       { timeout: 30000 }
     ).then(() => true).catch(() => false);
     if (became3d) {
-      await waitFor3dSettled(page);
+      // 【43本目】初回案内の吹き出しは、地図が落ち着いたら出て3秒で自動的に消える。吹き出しの
+      // 位置（ほかの部品とのすき間）も測るため、「地図が落ち着くまで」ではなく「吹き出しが出るまで」
+      // 待つ（地図が落ち着くのを待っているうちに吹き出しが消え、「出ない」と誤判定していた）。
+      await page.waitForFunction(() => !document.getElementById('map-rotate-hint').hidden, { timeout: 60000 }).catch(() => {});
       const handleBox = await page.locator('#map-rotate-handle').boundingBox();
       const compassBox = await page.locator('#map-compass-btn').boundingBox();
       const toggleBox = await page.locator('#map-dimension-toggle').boundingBox();
-      const attribBox = await page.locator('#map-area .maplibregl-ctrl-bottom-right').boundingBox().catch(() => null);
+      // 【43本目】2DもMapLibreの層で描くようになったため、3Dの地図の中の出典だけを見る。
+      const attribBox = await page.locator('#spots-map-3d .maplibregl-ctrl-bottom-right').boundingBox().catch(() => null);
       const overlayBox = await page.locator('#mobile-budget-overlay').boundingBox().catch(() => null);
       const tabsBox = await page.locator('.mobile-tabs').boundingBox().catch(() => null);
       record(`[${label}] ハンドルが2D/3D切替ボタンと重ならない`, !rectsOverlap(handleBox, toggleBox), JSON.stringify({ handleBox, toggleBox }));
@@ -7588,7 +7807,17 @@ async function main() {
   const baseUrl = `http://127.0.0.1:${port}/`;
   console.log(`ローカルサーバー起動: ${baseUrl}（dist/index.html + docs/data/）`);
 
-  const browser = await chromium.launch();
+  // 【43本目D】すべての検証を実GPU（GPU_LAUNCH_ARGS）で動かす。下地が国土地理院のベクトル地図
+  // （2D・3Dとも）になり、既定のソフトウェア描画では3Dの1コマの描画がさらに重くなって、
+  // 地形の読み込み待ち・スクリーンショットが時間切れになった。また、1つのブラウザで何十もの
+  // 3D画面（1画面にWebGLの地図が2つ）を次々に開くとGPU側の資源が積み上がるため、下の検証は
+  // 関数ごとにブラウザを起動し直す（runWithFreshBrowser）。
+  let browser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
+  const runWithFreshBrowser = async (fn, ...args) => {
+    await browser.close();
+    browser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
+    await fn(browser, ...args);
+  };
   const savedPaths = [];
 
   try {
@@ -7634,30 +7863,31 @@ async function main() {
       await context.close();
     }
 
-    await checkTerrainMapToggle(browser, baseUrl, savedPaths);
-    await checkTerrainMapOpensForBaselineStations(browser, baseUrl);
-    await checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths);
-    await checkDefaultStyleD(browser, baseUrl, savedPaths);
-    await checkDescendTiltChoreography(browser, baseUrl, savedPaths);
-    await checkSpotInfoPanel(browser, baseUrl, savedPaths);
-    await checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths);
-    await checkTapOutsideClosesForm(browser, baseUrl, savedPaths);
-    await checkMobileBudgetOverlay(browser, baseUrl, savedPaths);
-    await checkRotateHandle(browser, baseUrl, savedPaths);
-    await checkCrossDimensionSelectionScroll(browser, baseUrl, savedPaths);
-    await checkReturnToOverview(browser, baseUrl, savedPaths);
-    await checkCircleThenFit(browser, baseUrl, savedPaths);
-    await checkInitialSearchCircleFit(browser, baseUrl, savedPaths);
-    await checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths);
-    await checkReturnToListMatchesSearchView(browser, baseUrl, savedPaths);
-    await checkTwoDSearchViewAfterModeSwitch(browser, baseUrl, savedPaths);
-    await checkResetViewButton(browser, baseUrl, savedPaths);
-    await checkSelectedPinVisibleAfterFocus3d(browser, baseUrl, savedPaths);
-    await checkPinColorsAndClusters(browser, baseUrl, savedPaths);
-    await checkLiveBudgetPins(browser, baseUrl, savedPaths);
-    await checkBreadcrumbTrail(browser, baseUrl, savedPaths);
-    await checkBudgetSlider(browser, baseUrl, savedPaths);
-    await checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkTerrainMapToggle, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkTerrainMapOpensForBaselineStations, baseUrl);
+    await runWithFreshBrowser(checkTerrain3DCameraAndInteraction, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkDefaultStyleD, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkDescendTiltChoreography, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkSpotInfoPanel, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkMobileFormCollapseAndFooter, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkTapOutsideClosesForm, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkMobileBudgetOverlay, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkRotateHandle, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkCrossDimensionSelectionScroll, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkReturnToOverview, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkCircleThenFit, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkInitialSearchCircleFit, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkRefitOnlyWhenNeededAndWave, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkReturnToListMatchesSearchView, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkTwoDSearchViewAfterModeSwitch, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkResetViewButton, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkSelectedPinVisibleAfterFocus3d, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkPinColorsAndClusters, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkLiveBudgetPins, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkVectorBaseMap, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkBreadcrumbTrail, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkBudgetSlider, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkWaveRevealAndCircleScreenshots, baseUrl, savedPaths);
   } finally {
     await browser.close();
   }

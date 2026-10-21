@@ -131,7 +131,21 @@ async function bundleHTML() {
       for (const file of ['gsi-dem-protocol.js', 'terrain-map-view.js', 'gsi-dem-worker.js']) {
         fs.copyFileSync(path.join(jsDir, file), path.join(outDir, file));
       }
+      // 【2026-10-21、43本目D】2DでもMapLibreで国土地理院のベクトル地図を描くための、Leaflet用の
+      // 橋渡し（@maplibre/maplibre-gl-leaflet 0.1.4、ISCライセンス、assets/vendor/maplibre-gl-leaflet/
+      // LICENSE）。MapLibre本体と同じく遅延読込のため、同じフォルダにコピーする。
+      fs.copyFileSync(path.join(rootDir, 'assets/vendor/maplibre-gl-leaflet/leaflet-maplibre-gl.js'), path.join(outDir, 'leaflet-maplibre-gl.js'));
     }
+    // 【43本目D】下地の地図のスタイル（scripts/build-map-style.jsが作る、国土地理院のベクトル地図・
+    // 地図記号なし・アプリの色）。2D・3Dとも、地図を出すときに読み込む。
+    const mapStyleSrc = path.join(rootDir, 'assets/vendor/gsi-vector/app-style.json');
+    if (!fs.existsSync(mapStyleSrc)) throw new Error('assets/vendor/gsi-vector/app-style.json がありません（node scripts/build-map-style.js を実行してください）');
+    for (const outRoot of [distDir, docsDir]) {
+      const outDir = path.join(outRoot, 'vendor/gsi-vector');
+      fs.mkdirSync(outDir, { recursive: true });
+      fs.copyFileSync(mapStyleSrc, path.join(outDir, 'app-style.json'));
+    }
+    console.log('✅ 下地の地図のスタイル（vendor/gsi-vector/app-style.json）を dist/・docs/ にコピー完了');
     console.log(`✅ MapLibre GL JS・3D地図の遅延読込モジュールを dist/・docs/ の vendor/maplibre/ にコピー完了（インライン化はしない）`);
 
     console.log(

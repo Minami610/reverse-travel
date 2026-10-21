@@ -1,5 +1,11 @@
 /**
- * map-view.js - 検索結果を俯瞰する地図（Leaflet + 国土地理院タイル）
+ * map-view.js - 検索結果を俯瞰する地図（Leaflet + 国土地理院のベクトル地図）
+ *
+ * 【2026-10-21、43本目D（44本目で差し替え）、Minami決定】下地の地図は、国土地理院のベクトル地図
+ * （地理院地図Vector）を地図記号なし・アプリの色にしたもの（3Dと共通。scripts/build-map-style.js）。
+ * Leafletはベクトル地図を描けないため、MapLibreをLeafletの層の1枚として重ねる（L.maplibreGL）。
+ * MapLibreの読み込みが終わるまでと、WebGLが使えない環境では、淡色地図の画像タイルを出す
+ * （以前の標準地図は情報が多くごちゃごちゃしていた、Minami実機確認）。
  *
  * Google Maps 等の商用APIは使わず、地理院タイル（無料・出典明示のみで利用可）を
  * 採用している。Leaflet本体はバンドル時にインライン化されるため、地図の
@@ -10,10 +16,17 @@
  * 利用規約上、ウェブサイト上でのリアルタイム読み込みは出典明示のみで
  * 申請不要（大量一括ダウンロード等は対象外）。
  */
+import { loadVectorBaseMapForLeaflet } from './terrain-loader.js';
 
-const GSI_TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png';
+// 【43本目D】ベクトル地図を読み込むまで・WebGLが使えない環境で出す、淡色地図の画像タイル
+// （以前は標準地図std）。
+const GSI_TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png';
 const GSI_ATTRIBUTION =
-  '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院</a>';
+  '<a href="https://maps.gsi.go.jp/vector/" target="_blank" rel="noopener">国土地理院</a>'; // 【43本目】ベクトル地図の出典と同じ短い表記（同じ文字列ならLeafletは1つにまとめて出す）
+// 【43本目】地図の上の出典は短くする（scripts/build-map-style.jsのsources.attributionと同じ。
+// 長いとPCの地図の下の情報枠が狭まり、場所の名前が見えなくなるため）。
+const GSI_VECTOR_ATTRIBUTION =
+  '<a href="https://maps.gsi.go.jp/vector/" target="_blank" rel="noopener">国土地理院</a>';
 // 予算の帯の幅（既存の検索・一覧と同じ定義）。main.jsにも同名の定数があるが、
 // バンドル後は同じスクリプトスコープに連結されるため、名前が衝突しないよう
 // このファイルだけMAP_BAND_WIDTHという別名にしている。
@@ -189,10 +202,11 @@ export class MapView {
       // 計算どおりの比率になるようにする。
       zoomSnap: 0,
     });
-    L.tileLayer(GSI_TILE_URL, {
+    this._rasterBaseLayer = L.tileLayer(GSI_TILE_URL, {
       attribution: GSI_ATTRIBUTION,
       maxZoom: 18,
     }).addTo(this.map);
+    this._loadVectorBaseMap();
     this.markersLayer = L.layerGroup().addTo(this.map);
     this._clusterLayer = L.layerGroup().addTo(this.map);
     // 【43本目B-2】画面上の距離でまとめるため、ズームが変わったらまとめ直す。
@@ -204,6 +218,60 @@ export class MapView {
     // 【41本目】以前はここでzoomendを見て「全体を見る」ボタン（寄っているときだけ出る）の
     // 表示を切り替えていたが、ボタンをいつでも出ている「最初の見え方に戻るボタン」に
     // 置き換えたため不要になった。
+  }
+
+  /**
+   * 【2026-10-21、43本目D】下地を国土地理院のベクトル地図（地図記号なし・アプリの色）に差し替える。
+   * 読み込み（MapLibre・橋渡し・スタイル）が終わり、ベクトル地図の最初の描画が済んだら、
+   * 淡色地図の画像タイルを外す（それまでは画像タイルを出しておき、地図が白く抜けない）。
+   * WebGLが使えない・読み込みに失敗したときは、画像タイルのまま続ける（エラーは出さない）。
+   */
+  _loadVectorBaseMap() {
+    loadVectorBaseMapForLeaflet().then((style) => {
+      if (!this.map || this._vectorBaseLayer) return;
+      const layer = L.maplibreGL({ style, interactive: false, attribution: GSI_VECTOR_ATTRIBUTION });
+      this._vectorBaseLayer = layer;
+      // 【不具合修正】Leafletは、地図がまだ最初の表示位置を持たない（_loadedがfalseの）うちに
+      // 加えた層の準備（onAdd）を後回しにする。そのため加えた直後はGLの地図がまだ無く
+      // （getMaplibreMap()がundefined）、差し替えの準備が例外で止まり、淡色地図の画像タイルが
+      // 裏に残り続けた（実機相当の確認で発覚）。層の準備ができた合図（'add'）を待ってから行う。
+      layer.once('add', () => this._watchVectorBaseLayerReady(layer));
+      layer.addTo(this.map);
+    }).catch(() => {});
+  }
+
+  /** 【43本目D】ベクトル地図の層の準備ができたら、描けたところで淡色地図の画像タイルを外す。 */
+  _watchVectorBaseLayerReady(layer) {
+    const glMap = layer.getMaplibreMap();
+    if (!glMap) return;
+    const swap = () => {
+      if (this._rasterBaseLayer && this.map) {
+        this.map.removeLayer(this._rasterBaseLayer);
+        this._rasterBaseLayer = null;
+      }
+    };
+    // 'load'だけを待つと、橋渡し（maplibre-gl-leaflet）の内部で地図が作られる順番によっては
+    // 合図を取り逃し、淡色地図の画像タイルが裏に残り続けた（実機相当の確認で発覚：GLの地図は
+    // loaded()がtrueなのに差し替わっていなかった）。描画が落ち着いた合図（'idle'）でも確かめる。
+    const trySwap = () => {
+      if (!glMap.loaded()) return;
+      glMap.off('idle', trySwap);
+      glMap.off('load', trySwap);
+      swap();
+    };
+    glMap.on('idle', trySwap);
+    glMap.on('load', trySwap);
+    trySwap();
+    // 予備：通信が混んでいてタイルを読み終わる（loaded()）まで時間がかかるときも、スタイルが
+    // 読めて描き始めていれば数秒後に差し替える（そうしないと画像タイルがいつまでも裏に残り、
+    // 不要な通信を続けた。実機相当の長時間の確認で発覚）。
+    setTimeout(() => {
+      if (this._rasterBaseLayer && glMap.isStyleLoaded()) {
+        glMap.off('idle', trySwap);
+        glMap.off('load', trySwap);
+        swap();
+      }
+    }, 6000);
   }
 
   /**
@@ -296,6 +364,14 @@ export class MapView {
       if (!this.isContainerVisible()) return;
       this.forceMarkerReposition();
       this.refitBounds();
+      // 【43本目、不具合修正】最初の検索では、地図がまだ表示前（検索結果の画面に切り替わる前）に
+      // render()が呼ばれ、applyBudget()の塗り分け・まとめが保留されたままになっていた（裏取得の
+      // 再描画まで約1.2秒、ピンが色分けされず、まとめた丸も出なかった。実機相当の確認で発覚）。
+      // 見えるようになったこのコマでやり直す。
+      if (this.lastBudget != null) {
+        this._restyleMarkers();
+        this._recluster();
+      }
     });
   }
 

@@ -1217,7 +1217,13 @@ class ReverseTravel {
    * タイミングに後回しにする。
    */
   scheduleMaxBudgetPrefetch(stationId) {
-    const schedule = window.requestIdleCallback || ((cb) => setTimeout(cb, 50));
+    // 【43本目、不具合修正】requestIdleCallbackは、ページが暇になるまで後回しにする。期限を付けないと、
+    // 地図の描画が重い間（下地がベクトル地図になり、3Dでは特に）いつまでも実行されず、地図の点が
+    // 検索した金額の分だけのまま「¥2000分」に差し替わらないことがあった（金額を上げても円が
+    // 広がらない。実機相当の長時間の確認で発覚）。遅くとも1.5秒後には実行する。
+    const schedule = window.requestIdleCallback
+      ? (cb) => window.requestIdleCallback(cb, { timeout: 1500 })
+      : (cb) => setTimeout(cb, 50);
     schedule(async () => {
       // 裏の計算が終わるまでの間に別の駅で検索し直されていたら、
       // 今の表示とは無関係なデータのため何もしない。
@@ -1243,6 +1249,10 @@ class ReverseTravel {
           // 使っていたが、それは「点がすぐ変わる」挙動そのものだった）。
           this.mapView.render(departureStation, allSpots, this.currentBudget);
           if (this.terrainMapView) this.terrainMapView.render(departureStation, allSpots, this.currentBudget);
+          // 【43本目、不具合修正】render()は地図のピンを作り直して選択を外すため、検索直後にピンを
+          // 選んでいた（情報枠を開いていた）場合、この裏取得の反映で選択だけが外れ、情報枠は開いた
+          // まま選んだピンの強調が消えていた。選んでいたピンを、情報枠などはそのままに地図側だけ選び直す。
+          this.restoreMapSelectionAfterRerender();
           // 円・帯の件数プレビューはスライダーの今の値で出してよい（動かしながら
           // 変えてよい表示のため）。allSpotsが揃ったことで、半径・件数とも
           // より正確になる。
@@ -1552,6 +1562,20 @@ class ReverseTravel {
    * あるため選択自体は引き継げる。検索し直し直後等でcurrentAllSpotsに見つから
    * ない場合は選択を諦める（エラーにしない。Minami指示）。
    */
+  /**
+   * 【2026-10-21、43本目、不具合修正】地図を作り直したあと（裏取得の反映）、選んでいたピンを
+   * 2D・3Dの地図の上だけで選び直す（一覧のハイライト・情報枠は変えない＝コールバックを呼ばない）。
+   */
+  restoreMapSelectionAfterRerender() {
+    if (!this.selectedSpotId) return;
+    const spot = this.currentAllSpots?.find((s) => s.id === this.selectedSpotId);
+    if (!spot) return;
+    this.mapView.selectedSpotId = spot.id;
+    this.mapView.setMarkerState(spot.id, 'selected', true);
+    this.mapView._recluster();
+    this.terrainMapView?.setSelectedSpot(spot);
+  }
+
   reapplySelectionAfterModeSwitch() {
     if (!this.selectedSpotId) return;
     const spot = this.currentAllSpots?.find((s) => s.id === this.selectedSpotId);
@@ -2289,8 +2313,11 @@ class ReverseTravel {
     const mapArea = document.getElementById('map-area');
     const toggle = this.elements.mapDimensionToggle;
     if (!mapArea || !toggle) return;
+    // 【43本目、不具合修正】2Dの下地もMapLibreの層（maplibre-gl-leaflet）で描くようになり、
+    // #map-area全体から'.maplibregl-ctrl-bottom-right'を探すと、3D表示中に裏で隠れている2D側の
+    // 部品（幅0）を先に見つけて、情報枠の幅が最小（100px）まで縮んでいた。表示中の地図の中だけを探す。
     const attrib = mapArea.querySelector(
-      mapArea.classList.contains('mode-3d') ? '.maplibregl-ctrl-bottom-right' : '.leaflet-control-attribution'
+      mapArea.classList.contains('mode-3d') ? '#spots-map-3d .maplibregl-ctrl-bottom-right' : '#spots-map .leaflet-control-attribution'
     );
     const mapRect = mapArea.getBoundingClientRect();
     const toggleRect = toggle.getBoundingClientRect();
