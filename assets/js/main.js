@@ -776,6 +776,13 @@ class ReverseTravel {
    * 最後に検索したときの状態のまま。代わりに、出発駅を中心にした到達範囲の円
    * だけを広げる・縮める（2D・3D共通）。帯の件数プレビューはこれまでどおり
    * 動かしながら変えてよい（検索の目安になるため、Minami指示）。
+   * 【2026-10-21、43本目、Minami決定：C】上の「点は変えない」を見直し、地図のピンは
+   * その場で新しい金額帯に合わせて入れ替える（金額帯に入ったまま＝青・新しく入った＝
+   * オレンジ・金額帯より安くなった＝灰色・予算をこえる＝出さない。map-view.js・
+   * terrain-map-view.jsのpinCategory()）。円が同じ大きさの区間（例：大池の¥1,100〜¥1,500）
+   * でも、ピンの色が変わることで変化が見えるようにするため。一覧（カード）は今までどおり
+   * 「¥◯で探す」「この条件で検索」を押したときに更新し、そのときオレンジは青になる。
+   * 金額を検索した金額に戻すと、ピンも検索した直後と同じ状態に戻る。
    * まだ検索していない（this.currentAllSpotsが空）ときは円・件数プレビューとも出さない。
    * 【2026-10-15、11本目②、Minami決定：C】実際にユーザーが予算を触った
    * （userTouch:true、既定）ときだけ、情報枠を閉じる・寄っていれば全体に戻す。
@@ -794,6 +801,9 @@ class ReverseTravel {
     // では出さない。上げたかどうかは、直前にこのメソッドへ渡された金額と比べる。
     const raised = userTouch && this._liveMapBudget != null && budget > this._liveMapBudget;
     this._liveMapBudget = budget;
+    // 【43本目C】ピンを今の金額に合わせて塗り直す（裏取得・フォームを閉じて元に戻すときも同じ）。
+    this.mapView.setLiveBudget(budget);
+    this.terrainMapView?.setLiveBudget(budget);
     this.mapView.updateReachCircle(budget, { style: 'live', wave: raised });
     this.terrainMapView?.updateReachCircle(budget, { style: 'live', wave: raised });
     if (userTouch) {

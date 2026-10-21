@@ -1009,9 +1009,12 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
         circleKm: mv._reachCircleRadiusKm,
       };
     });
+    // 【43本目C、Minami決定】金額を変えたら地図のピンはその場で色が入れ替わるようになった
+    // （表示状態は変わりうる。色の決まりはcheckLiveBudgetPins()で検証）。ここでは、ピン自体は
+    // 作り直されない（数が同じ）ことだけを見る。
     record(
-      'スライダーを動かしている間、地図の点（2D）の数・表示状態は変わらない',
-      markersBeforeDrag.count === markersDuringDrag.count && markersBeforeDrag.visible === markersDuringDrag.visible,
+      'スライダーを動かしている間、地図の点（2D）は作り直されない（数が同じ）',
+      markersBeforeDrag.count === markersDuringDrag.count,
       `変更前${JSON.stringify(markersBeforeDrag)} → ドラッグ中${JSON.stringify(markersDuringDrag)}`
     );
     record(
@@ -3518,7 +3521,10 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       await page.waitForTimeout(300);
       const filterAfter = await page.evaluate(() => window.__terrainViewForDebug._spotDataSignature);
       const circleAfter3d = await page.evaluate(() => window.__terrainViewForDebug._reachCircleRadiusKm);
-      record(`[${label}/3D] 予算操作帯の＋を2回押しても点の絞り込み（帯フィルタ）は変わらない`, filterBefore === filterAfter, JSON.stringify({ filterBefore, filterAfter }));
+      // 【43本目C、Minami決定】金額を変えたらピンはその場で新しい金額帯に合わせて入れ替わる
+      // （以前は「検索するまで点は変えない」を検証していた）。色の決まりどおりかを見る。
+      const liveCats3d = await readPinCategories(page, '3d');
+      record(`[${label}/3D] 予算操作帯の＋を2回押すと、点の色分けが新しい金額帯に合わせて入れ替わる`, liveCats3d.mismatchCount === 0 && liveCats3d.live !== liveCats3d.searched, JSON.stringify({ live: liveCats3d.live, searched: liveCats3d.searched, counts: liveCats3d.counts, mismatches: liveCats3d.mismatches, changed: filterBefore !== filterAfter }));
       record(`[${label}/3D] 予算操作帯の＋を2回押すと円の半径は大きくなる`, circleAfter3d > circleBefore3d, JSON.stringify({ circleBefore3d, circleAfter3d }));
       const distanceInfo3d = await page.evaluate(() => ({
         hidden: document.getElementById('mobile-budget-distance').hidden,
@@ -6582,6 +6588,215 @@ async function checkPinColorsAndClusters(browser, baseUrl, savedPaths) {
 }
 
 /**
+ * 【43本目C】今の地図のピンの色の決まり（2D：各ピンのdata-cat、3D：点のデータの一覧）と、
+ * 期待値（テスト側で同じ規則を独立に計算）を比べるための材料を集める。
+ */
+async function readPinCategories(page, dim) {
+  return page.evaluate((dim) => {
+    const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
+    const searched = dim === '3d' ? view._lastBudget : view.lastBudget;
+    const live = view._liveBudget;
+    const bandWidth = 200;
+    const expect = (fare) => {
+      if (!(fare <= live)) return 'hidden';
+      if (fare > live - bandWidth) return (fare <= searched && fare > searched - bandWidth) ? 'blue' : 'orange';
+      return 'gray';
+    };
+    const actual = {};
+    if (dim === '3d') {
+      (view._spotDataSignature || '').split(',').filter(Boolean).forEach((x) => {
+        const i = x.lastIndexOf(':');
+        actual[x.slice(0, i)] = x.slice(i + 1);
+      });
+    } else {
+      view.markersBySpotId.forEach((m, id) => { actual[id] = m.getElement()?.dataset.cat; });
+    }
+    const spots = (view._lastSpots || []).filter((s) => Number.isFinite(s.latitude) && s.id !== view.selectedSpotId);
+    const mismatches = [];
+    const counts = { blue: 0, orange: 0, gray: 0, hidden: 0 };
+    spots.forEach((s) => {
+      const e = expect(s.source_round_trip_fare);
+      counts[e]++;
+      const a = dim === '3d' ? (actual[s.id] ?? 'hidden') : actual[s.id];
+      if (a !== e) mismatches.push({ id: s.id, fare: s.source_round_trip_fare, expected: e, actual: a });
+    });
+    // まとめた丸のオレンジの点：中にオレンジがあるときだけ付いている
+    let dotMismatch = 0;
+    let clustersWithOrange = 0;
+    if (dim === '3d') {
+      (view._clusterMarkers || new Map()).forEach((e) => {
+        const hasDot = !!e.el.querySelector('.map-cluster-orange-dot');
+        if (e.hasOrange) clustersWithOrange++;
+        if (hasDot !== !!e.hasOrange) dotMismatch++;
+      });
+    } else {
+      view._clusters.forEach((c) => {
+        const hasOrange = c.members.some((id) => actual[id] === 'orange');
+        const hasDot = !!c.marker.getElement()?.querySelector('.map-cluster-orange-dot');
+        if (hasOrange) clustersWithOrange++;
+        if (hasDot !== hasOrange) dotMismatch++;
+      });
+    }
+    const signature = spots.map((s) => `${s.id}:${dim === '3d' ? (actual[s.id] ?? 'hidden') : actual[s.id]}`).sort().join(',');
+    return { searched, live, counts, mismatches: mismatches.slice(0, 5), mismatchCount: mismatches.length, dotMismatch, clustersWithOrange, signature, radiusKm: view._reachCircleTargetKm };
+  }, dim);
+}
+
+/**
+ * 【2026-10-21、43本目、Minami決定：C】金額を変えたら（＋−・スライダー）、その場で地図のピンを
+ * 新しい金額帯に合わせて入れ替える：金額帯に入ったまま＝青・新しく入った＝オレンジ・金額帯より
+ * 安くなった＝灰色・予算をこえる＝出さない。一覧（カード）は「¥◯で探す」「この条件で検索」で
+ * 更新し、そのときオレンジは青になる。金額を元に戻すとピンも元に戻る。円が同じ大きさの区間
+ * （大池の¥1,100〜¥1,500）でもピンの色は変わる。オレンジを含むまとめた丸には小さなオレンジの点。
+ * 富山駅前・大池 × PC・400×464 × 2D/3D。あわせて、大池・往復¥600から＋を3回押した状態の
+ * スクリーンショットを撮る。
+ */
+async function checkLiveBudgetPins(browser, baseUrl, savedPaths) {
+  console.log('\n=== 43本目C：金額を変えたら、その金額帯のピンを先に入れ替える ===');
+  const gpuBrowser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
+  try {
+    const cases = [
+      ['大池', 'pc', VIEWPORTS.pc], ['大池', 'own', { width: 400, height: 464 }],
+      ['富山駅前', 'pc', VIEWPORTS.pc],
+    ];
+    for (const [station, vLabel, viewport] of cases) {
+      const isMobile = vLabel !== 'pc';
+      const incId = isMobile ? 'mobile-budget-increment' : 'budget-increment';
+      const decId = isMobile ? 'mobile-budget-decrement' : 'budget-decrement';
+      for (const dim of ['2d', '3d']) {
+        const label = `[43/C/${station}/${vLabel}/${dim}]`;
+        const context = await (dim === '3d' ? gpuBrowser : browser).newContext({ viewport });
+        const page = await context.newPage();
+        const errors = [];
+        page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+        page.on('console', (msg) => {
+          if (msg.type() === 'error' && !isKnownAcceptableConsoleMessage(msg.text())) errors.push(msg.text());
+        });
+        try {
+          await page.goto(baseUrl, { waitUntil: 'load' });
+          await page.waitForSelector('#departure-input');
+          await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+          await searchAtAndWaitPrefetch(page, station, 600);
+          if (isMobile) {
+            await page.click('.tab-btn[data-tab="map"]');
+            await page.waitForTimeout(400);
+          }
+          if (dim === '3d') {
+            await page.click('#map-dimension-toggle');
+            const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+            record(`${label} 3D化（検証の前提）`, ok);
+            if (!ok) continue;
+            await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+            await page.evaluate(() => document.getElementById('map-rotate-hint')?.click());
+            await waitForTerrainTilesLoaded(page);
+          } else {
+            await waitForWaveRevealSettled(page);
+          }
+          await page.waitForTimeout(500);
+          const s0 = await readPinCategories(page, dim);
+          record(`${label} 検索した直後は、金額帯の場所はすべて青（オレンジが無い）`, s0.counts.orange === 0 && s0.mismatchCount === 0, JSON.stringify({ counts: s0.counts, mismatches: s0.mismatches }));
+
+          // ＋を3回（¥600→¥900）
+          await assertNotObscured(page, incId, `${label} ＋`);
+          for (let i = 0; i < 3; i++) {
+            await page.evaluate((id) => document.getElementById(id).click(), incId);
+            await page.waitForTimeout(120);
+          }
+          await waitForCircleSettled(page, dim);
+          if (dim === '3d') await waitForTerrainTilesLoaded(page);
+          await page.waitForTimeout(400);
+          const s1 = await readPinCategories(page, dim);
+          record(
+            `${label} ＋を3回押すと、新しく金額帯に入った場所がオレンジ、金額帯に残った場所は青、安くなった場所は灰色、予算をこえる場所は出ない`,
+            s1.live === 900 && s1.searched === 600 && s1.counts.orange > 0 && s1.mismatchCount === 0,
+            JSON.stringify({ live: s1.live, searched: s1.searched, counts: s1.counts, mismatches: s1.mismatches })
+          );
+          record(`${label} オレンジを含むまとめた丸には、右上に小さなオレンジの点が付く（含まない丸には付かない）`, s1.dotMismatch === 0, JSON.stringify({ clustersWithOrange: s1.clustersWithOrange, dotMismatch: s1.dotMismatch }));
+          const cardsBefore = await page.evaluate(() => [...document.querySelectorAll('.spot-card')].map((c) => c.dataset.spotId).join(','));
+          if (station === '大池') {
+            const shotPath = path.join(screenshotDir, `round43-orange-${dim}-${vLabel}.png`);
+            await page.screenshot({ path: shotPath, clip: await page.locator('#map-area').boundingBox() });
+            savedPaths.push(shotPath);
+          }
+
+          // −を3回で元の金額（¥600）に戻すと、ピンも検索した直後と同じに戻る
+          for (let i = 0; i < 3; i++) {
+            await page.evaluate((id) => document.getElementById(id).click(), decId);
+            await page.waitForTimeout(120);
+          }
+          await waitForCircleSettled(page, dim);
+          await page.waitForTimeout(400);
+          const s2 = await readPinCategories(page, dim);
+          record(`${label} 金額を検索した金額に戻すと、ピンもすべて検索した直後の状態に戻る`, s2.signature === s0.signature, JSON.stringify({ live: s2.live, counts: s2.counts }));
+
+          // もう一度＋を3回 →「¥◯で探す」（スマホ）／「この条件で検索」（PC）で、オレンジが青になる
+          for (let i = 0; i < 3; i++) {
+            await page.evaluate((id) => document.getElementById(id).click(), incId);
+            await page.waitForTimeout(120);
+          }
+          await waitForCircleSettled(page, dim);
+          const cardsDuring = await page.evaluate(() => [...document.querySelectorAll('.spot-card')].map((c) => c.dataset.spotId).join(','));
+          record(`${label} 金額を変えただけでは、一覧（カード）は変わらない`, cardsDuring === cardsBefore);
+          const searchBtnId = isMobile ? 'mobile-budget-search-btn' : 'search-btn';
+          const prefetchBefore = await page.evaluate(() => window.__maxBudgetPrefetchAppliedCount || 0);
+          await clickElementChecked(page, searchBtnId, `${label} ${isMobile ? '「¥◯で探す」' : '「この条件で検索」'}`);
+          await page.waitForFunction((n) => (window.__maxBudgetPrefetchAppliedCount || 0) > n, prefetchBefore, { timeout: 20000 }).catch(() => {});
+          await page.waitForTimeout(1500);
+          if (dim === '3d') await waitForTerrainCameraIdle(page);
+          const s3 = await readPinCategories(page, dim);
+          const cardsAfter = await page.evaluate(() => [...document.querySelectorAll('.spot-card')].map((c) => c.dataset.spotId).join(','));
+          record(
+            `${label} 検索すると、オレンジのピンは青になり、一覧も新しい金額で更新される`,
+            s3.searched === 900 && s3.live === 900 && s3.counts.orange === 0 && s3.mismatchCount === 0 && cardsAfter !== cardsBefore,
+            JSON.stringify({ searched: s3.searched, live: s3.live, counts: s3.counts })
+          );
+
+          // 円が同じ大きさの区間でも、ピンの色は変わる（大池・PCで1回だけ見る）
+          if (station === '大池' && vLabel === 'pc') {
+            // 円の半径が同じで、しかも¥100上げると金額帯に出入りする場所がある区間
+            // （新しく入る＝(b, b+100]、灰色になる＝(b-200, b-100]）を探す（大池なら¥1,100〜¥1,500）。
+            const sameStart = await page.evaluate((dim) => {
+              const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
+              const fares = (view._lastSpots || []).map((x) => x.source_round_trip_fare);
+              for (let b = 300; b < 2000; b += 100) {
+                const r = view.computeReachRadiusKm(b);
+                const moves = fares.some((f) => (f > b && f <= b + 100) || (f > b - 200 && f <= b - 100));
+                if (r > 0 && Math.abs(view.computeReachRadiusKm(b + 100) - r) < 1e-9 && moves) return b;
+              }
+              return null;
+            }, dim);
+            if (sameStart) {
+              await setBudgetSlider(page, sameStart);
+              await waitForCircleSettled(page, dim);
+              await page.waitForTimeout(300);
+              const a = await readPinCategories(page, dim);
+              await page.evaluate((id) => document.getElementById(id).click(), incId);
+              await waitForCircleSettled(page, dim);
+              await page.waitForTimeout(300);
+              const b = await readPinCategories(page, dim);
+              record(
+                `${label} 円の大きさが変わらない区間（¥${sameStart}→¥${sameStart + 100}）でも、ピンの色は変わる`,
+                Math.abs(a.radiusKm - b.radiusKm) < 1e-6 && a.signature !== b.signature && b.mismatchCount === 0,
+                JSON.stringify({ radius: a.radiusKm, before: a.counts, after: b.counts })
+              );
+            } else {
+              record(`${label} 円の大きさが変わらない区間が見つかる（検証の前提）`, false);
+            }
+          }
+          record(`${label} コンソールにエラーが出ていない（標高タイルの404を除く）`, errors.length === 0, errors.join(' / '));
+        } catch (e) {
+          record(`${label} 検証中にクラッシュしない`, false, e.message);
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  } finally {
+    await gpuBrowser.close();
+  }
+}
+
+/**
  * 【2026-10-11、6本目E】「見てきた場所」の足あと表示を検証する。
  * 高松築港・往復¥1000の1件目「多和神社」は、実データ確認済みで
  * 「この先へ」を2回たどれる（多和神社→志度寺→玉泉寺）ため、3か所たどる
@@ -7439,6 +7654,7 @@ async function main() {
     await checkResetViewButton(browser, baseUrl, savedPaths);
     await checkSelectedPinVisibleAfterFocus3d(browser, baseUrl, savedPaths);
     await checkPinColorsAndClusters(browser, baseUrl, savedPaths);
+    await checkLiveBudgetPins(browser, baseUrl, savedPaths);
     await checkBreadcrumbTrail(browser, baseUrl, savedPaths);
     await checkBudgetSlider(browser, baseUrl, savedPaths);
     await checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths);

@@ -400,6 +400,19 @@ export class MapView {
   }
 
   /**
+   * 【2026-10-21、43本目、Minami決定：C】金額を変えたら（＋−・スライダー）、その場で
+   * ピンを新しい金額帯に合わせて塗り直し、まとめ直す（検索した金額＝lastBudgetは変えない）。
+   * 地図が見えていないときは、見えたとき（handleShown()）に今の金額で塗り直される。
+   * @param {number} budget 今の金額
+   */
+  setLiveBudget(budget) {
+    this._liveBudget = budget;
+    if (this.lastBudget == null || !this.isContainerVisible()) return;
+    this._restyleMarkers();
+    this._recluster();
+  }
+
+  /**
    * 【2026-10-21、43本目、Minami決定：B-1】ピンの色と大きさを、今の金額（_liveBudget）と
    * 検索した金額（lastBudget）から塗り分ける（pinCategory()参照）。青・オレンジは直径13pxの
    * くっきりした丸に白いふち、灰色は小さな点。以前の光のにじみ（box-shadowのぼかし）はやめた。

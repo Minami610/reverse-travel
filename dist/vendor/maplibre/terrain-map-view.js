@@ -876,6 +876,24 @@ export class TerrainMapView {
   }
 
   /**
+   * 【2026-10-21、43本目、Minami決定：C】金額を変えたら（＋−・スライダー）、その場で
+   * ピンを新しい金額帯に合わせて入れ替える（検索した金額＝_lastBudgetは変えない）。
+   * スライダーを動かしている間は何度も呼ばれるため、データの作り直しは1コマに1回へ間引く。
+   * 検索直後の波の演出の途中なら、波のほうが最後にデータを作り直す（ここでは作り直さない）。
+   * @param {number} budget 今の金額
+   */
+  setLiveBudget(budget) {
+    this._liveBudget = budget;
+    if (this._liveRebuildScheduled) return;
+    this._liveRebuildScheduled = true;
+    requestAnimationFrame(() => {
+      this._liveRebuildScheduled = false;
+      if (this._waveFrame) return;
+      this._rebuildSpotData();
+    });
+  }
+
+  /**
    * 【2026-10-21、43本目、Minami決定：B／C】点のソースに渡すデータを作り直す。今の金額
    * （_liveBudget）をこえる点は入れない・選んだピンは入れない（別のレイヤーでいつも見える）・
    * 検索直後の波の途中なら出発駅から revealKm 以内の点だけ入れる。各点には色の決まり（cat、
