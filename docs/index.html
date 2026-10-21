@@ -7932,6 +7932,18 @@ class ReverseTravel {
       // 効かない）。検索済みなら、今の帯・allSpotsをここで明示的に反映する。
       if (this.currentDepartureStationId) {
         this.terrainMapView.render(station, this.currentAllSpots, this.currentBudget);
+        // 【2026-10-21、43本目、Minami決定：A-2】検索したあとに初めて3Dへ切り替えたときも、
+        // 検索した直後と同じ見え方（円が短辺の0.6、傾き45°、向きは北）にする。以前は
+        // ズーム9・傾き57°のまま（下の11本目②の判断でカメラを触らなかった）だった。
+        // 2回目以降の切り替えでは、3Dで見ていた位置のまま（見えていない間に検索が
+        // あったときだけ、returnToSearchView()の保留→resize()で合わせ直される）。
+        // まだ一度も検索していないとき（currentDepartureStationIdが無い）は従来どおり。
+        // 3Dのコンテナはこの時点ではまだ表示前のため、returnToSearchView()は保留し、
+        // 直後のapplyMapMode()→resize()で合わせる。
+        if (!this._terrainShownAfterSearch) {
+          this._terrainShownAfterSearch = true;
+          this.terrainMapView.returnToSearchView({ durationMs: 0 });
+        }
       }
       this.mapMode = '3d';
       saveMapModePreference('3d');

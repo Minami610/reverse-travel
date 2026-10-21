@@ -6123,6 +6123,166 @@ async function checkResetViewButton(browser, baseUrl, savedPaths) {
 }
 
 /**
+ * 【43本目】画面の(x,y)（ページ座標）を中心に、(2r+1)四方の実際の色をスクリーンショットから読む。
+ * 3DはWebGLの描画結果のため、DOMやMapLibreのqueryRenderedFeatures()では「実際に見えているか
+ * （地形の裏に隠れていないか・画面の外に出ていないか）」が分からない。撮った画像をページ内の
+ * canvasに描き、その点の画素を直接読む。
+ * @returns {Promise<number[][]>} [[r,g,b], ...]
+ */
+async function readPixelsAt(page, x, y, r = 2) {
+  const buf = await page.screenshot({ clip: { x: Math.max(0, x - r), y: Math.max(0, y - r), width: 2 * r + 1, height: 2 * r + 1 } });
+  return page.evaluate(async (b64) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${b64}`;
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = img.width;
+    c.height = img.height;
+    const g = c.getContext('2d');
+    g.drawImage(img, 0, 0);
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    const px = [];
+    for (let i = 0; i < d.length; i += 4) px.push([d[i], d[i + 1], d[i + 2]]);
+    return px;
+  }, buf.toString('base64'));
+}
+
+// 【43本目】3Dの選んだピンの色（terrain-map-view.jsのCOLOR_SELECTED）。
+const TEST_SELECTED_PIN_RGB = [27, 94, 158];
+const isNearRgb = ([r, g, b], [er, eg, eb], tol = 30) => Math.abs(r - er) <= tol && Math.abs(g - eg) <= tol && Math.abs(b - eb) <= tol;
+
+/**
+ * 【2026-10-21、43本目、不具合修正A-1】3Dでピンを押して寄ったあと、選んだピンが画面の中で
+ * 実際に見えていること。MapLibreは寄る動きのあいだ中心の高さを「余白を含めない画面の真ん中」
+ * の地面の標高に合わせるため、山の上の場所では中心の高さが谷の標高のままになり、ピンが
+ * 計算より上（地図の高さが低い画面では画面の外）に描かれていた（Minami実機確認：大池・
+ * 往復¥1,500・前田山。terrain-map-view.jsの_alignCenterElevationToSpot()参照）。
+ * PC（1366×768＝地図の高さが低いPC、1920×1080）と400×464で、大池・往復¥1,500から、
+ * 山の上（いちばん標高が高い）・海の近く（いちばん標高が低い）・街中（出発駅にいちばん近い）
+ * の3つのピンを実際に押し、寄り終わったあと、その点の画素が選んだピンの色であることを確かめる。
+ * あわせて、検索したあとに初めて3Dへ切り替えたときの見え方（A-2：円0.6・傾き45°・北向き）も確かめる。
+ */
+async function checkSelectedPinVisibleAfterFocus3d(browser, baseUrl, savedPaths) {
+  console.log('\n=== 43本目A：3Dで寄ったあとも選んだピンが見える／初めて3Dにしたときの見え方 ===');
+  const gpuBrowser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
+  try {
+    for (const [vLabel, viewport] of Object.entries({ pc1366: { width: 1366, height: 768 }, pc: VIEWPORTS.pc, own: { width: 400, height: 464 } })) {
+      const isMobile = vLabel === 'own';
+      const context = await gpuBrowser.newContext({ viewport });
+      const page = await context.newPage();
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+      page.on('console', (msg) => {
+        if (msg.type() === 'error' && !isKnownAcceptableConsoleMessage(msg.text())) errors.push(msg.text());
+      });
+      const label = `[43/A/${vLabel}]`;
+      try {
+        await page.goto(baseUrl, { waitUntil: 'load' });
+        await page.waitForSelector('#departure-input');
+        await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+        await searchAtAndWaitPrefetch(page, '大池', 1500);
+        if (isMobile) {
+          await page.click('.tab-btn[data-tab="map"]');
+          await page.waitForTimeout(300);
+        }
+        await page.click('#map-dimension-toggle');
+        const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+        record(`${label} 3D化（検証の前提）`, ok);
+        if (!ok) continue;
+        await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+        await page.evaluate(() => document.getElementById('map-rotate-hint')?.click());
+        await waitForTerrainTilesLoaded(page);
+        // A-2：検索したあとに初めて3Dへ切り替えたときの見え方
+        const first = await measureCircleState(page, '3d');
+        record(
+          `${label} 検索したあとに初めて3Dへ切り替えると、円0.6・傾き45°・北向き（A-2）`,
+          first.ratio >= TEST_FIT_RATIO_MIN && first.ratio <= TEST_FIT_RATIO_MAX && Math.abs(first.pitch - TEST_OVERVIEW_PITCH) < 0.5 && Math.abs(first.bearing) < 0.5,
+          JSON.stringify({ ratio: first.ratio, pitch: first.pitch, bearing: first.bearing, zoom: first.zoom })
+        );
+
+        // 3つのピンを選ぶ（予算内・地図の上で押せる位置にあるもの）。
+        const targets = await page.evaluate(() => {
+          const tv = window.__terrainViewForDebug;
+          const map = window.__terrainMapForDebug;
+          const dep = tv._lastDepartureStation;
+          const rect = map.getContainer().getBoundingClientRect();
+          const toRad = (d) => (d * Math.PI) / 180;
+          const hav = (a, b, c, d) => {
+            const x = Math.sin(toRad(c - a) / 2) ** 2 + Math.cos(toRad(a)) * Math.cos(toRad(c)) * Math.sin(toRad(d - b) / 2) ** 2;
+            return 2 * 6371 * Math.asin(Math.sqrt(x));
+          };
+          const cands = (tv._lastSpots || [])
+            .filter((s) => s.source_round_trip_fare <= tv._lastBudget && Number.isFinite(s.latitude))
+            .map((s) => ({ s, elev: map.queryTerrainElevation([s.longitude, s.latitude]) ?? 0, km: hav(dep.stop_lat, dep.stop_lon, s.latitude, s.longitude) }));
+          const pick = (arr) => arr.find(({ s }) => {
+            const p = map.project([s.longitude, s.latitude]);
+            return p.x > 30 && p.x < rect.width - 110 && p.y > 40 && p.y < rect.height - 60;
+          });
+          const mountain = pick([...cands].sort((a, b) => b.elev - a.elev));
+          const sea = pick([...cands].sort((a, b) => a.elev - b.elev));
+          const town = pick([...cands].filter((c) => c.km > 0.3).sort((a, b) => a.km - b.km));
+          return [['山の上', mountain], ['海の近く', sea], ['街中', town]]
+            .filter(([, c]) => c)
+            .map(([kind, c]) => ({ kind, id: c.s.id, name: c.s.name, elev: Math.round(c.elev), latitude: c.s.latitude, longitude: c.s.longitude }));
+        });
+        record(`${label} 山の上・海の近く・街中の3つのピンが選べる（検証の前提）`, targets.length === 3, JSON.stringify(targets.map((t) => `${t.kind}:${t.name}(${t.elev}m)`)));
+        for (const t of targets) {
+          // 前のピンに寄ったままだと押せる位置が変わるため、毎回最初の見え方に戻してから押す。
+          await page.evaluate(() => window.__terrainViewForDebug.returnToSearchView({ durationMs: 0 }));
+          await page.waitForTimeout(200);
+          await waitForTerrainTilesLoaded(page);
+          const pos = await page.evaluate((t) => {
+            const map = window.__terrainMapForDebug;
+            const rect = map.getContainer().getBoundingClientRect();
+            const p = map.project([t.longitude, t.latitude]);
+            return { x: rect.left + p.x, y: rect.top + p.y };
+          }, t);
+          await page.evaluate(() => {
+            window.__tiltDone = false;
+            window.__terrainViewForDebug.onTiltComplete = () => { window.__tiltDone = true; };
+          });
+          await page.mouse.click(pos.x, pos.y);
+          await page.waitForFunction(() => window.__tiltDone === true, { timeout: 36000 }).catch(() => {});
+          await waitForTerrainTilesLoaded(page);
+          const sel = await page.evaluate(() => {
+            const tv = window.__terrainViewForDebug;
+            const map = window.__terrainMapForDebug;
+            const s = (tv._lastSpots || []).find((x) => x.id === tv.selectedSpotId);
+            if (!s) return null;
+            const rect = map.getContainer().getBoundingClientRect();
+            const p = map.project([s.longitude, s.latitude]);
+            const panel = document.getElementById('spot-info-panel');
+            const panelTop = panel && !panel.hidden ? panel.getBoundingClientRect().top : rect.bottom;
+            return { name: s.name, x: rect.left + p.x, y: rect.top + p.y, top: rect.top, bottom: Math.min(rect.bottom, panelTop), left: rect.left, right: rect.right, pitch: map.getPitch() };
+          });
+          if (!sel) { record(`${label} ${t.kind}（${t.name}）を押すとピンが選ばれる`, false); continue; }
+          const inside = sel.x > sel.left + 4 && sel.x < sel.right - 4 && sel.y > sel.top + 4 && sel.y < sel.bottom - 4;
+          const px = inside ? await readPixelsAt(page, sel.x, sel.y, 2) : [];
+          const matched = px.filter((c) => isNearRgb(c, TEST_SELECTED_PIN_RGB)).length;
+          record(
+            `${label} ${t.kind}（${sel.name}、標高${t.elev}m）を押して寄ったあと、選んだピンが画面の中に見えている（その点の色が選んだピンの色）`,
+            inside && matched >= Math.ceil(px.length / 2),
+            JSON.stringify({ x: Math.round(sel.x - sel.left), y: Math.round(sel.y - sel.top), visibleHeight: Math.round(sel.bottom - sel.top), pitch: sel.pitch, matched, of: px.length, center: px[Math.floor(px.length / 2)] })
+          );
+          if (vLabel === 'pc' && t.kind === '山の上') {
+            const shotPath = path.join(screenshotDir, 'round43-a1-mountain-pin-3d-pc.png');
+            await page.screenshot({ path: shotPath, clip: await page.locator('#map-area').boundingBox() });
+            savedPaths.push(shotPath);
+          }
+        }
+        record(`${label} コンソールにエラーが出ていない（標高タイルの404を除く）`, errors.length === 0, errors.join(' / '));
+      } catch (e) {
+        record(`${label} 検証中にクラッシュしない`, false, e.message);
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await gpuBrowser.close();
+  }
+}
+
+/**
  * 【2026-10-11、6本目E】「見てきた場所」の足あと表示を検証する。
  * 高松築港・往復¥1000の1件目「多和神社」は、実データ確認済みで
  * 「この先へ」を2回たどれる（多和神社→志度寺→玉泉寺）ため、3か所たどる
@@ -6978,6 +7138,7 @@ async function main() {
     await checkReturnToListMatchesSearchView(browser, baseUrl, savedPaths);
     await checkTwoDSearchViewAfterModeSwitch(browser, baseUrl, savedPaths);
     await checkResetViewButton(browser, baseUrl, savedPaths);
+    await checkSelectedPinVisibleAfterFocus3d(browser, baseUrl, savedPaths);
     await checkBreadcrumbTrail(browser, baseUrl, savedPaths);
     await checkBudgetSlider(browser, baseUrl, savedPaths);
     await checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths);

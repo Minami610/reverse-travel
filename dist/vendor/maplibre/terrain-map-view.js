@@ -1534,10 +1534,12 @@ export class TerrainMapView {
       if (this.onTiltComplete) this.onTiltComplete(spot);
       return;
     }
+    this._alignCenterElevationToSpot(spot);
     this.map.easeTo({
       pitch: SPOT_FOCUS_PITCH,
       zoom: SPOT_FOCUS_ZOOM,
       center: [spot.longitude, spot.latitude],
+      freezeElevation: true,
       duration: TILT_DURATION_MS,
       padding: this.getRevealPadding(),
     });
@@ -1545,6 +1547,30 @@ export class TerrainMapView {
       if (token !== this._flySpotToken || !this.map) return;
       if (this.onTiltComplete) this.onTiltComplete(spot);
     });
+  }
+
+  /**
+   * 【2026-10-21、43本目、不具合修正】選んだ場所へ寄る前に、カメラの中心の高さ（elevation）を
+   * その場所の標高にそろえる。
+   * 原因：MapLibre（5.6.1）は地形があるとき、寄る動き（flyTo/easeTo）のあいだ中心の高さを
+   * 「帯よけの余白（padding）を含めない画面の真ん中」の地面の標高に合わせて動かし、
+   * 終わりに地面の上で中心を計算し直す（_updateElevation・_finalizeElevation）。帯よけの
+   * 下の余白で画面の真ん中は手前（谷側）にずれるため、山の上の場所に寄ると、中心の高さが
+   * 谷の標高のままになる（実測：大池から前田山へ寄ると、中心の高さ16.8m、前田山の標高548m）。
+   * その結果ピンは計算上の位置（余白を除いた範囲の真ん中）より約130px上に描かれ、PCでも
+   * 地図の高さが低い画面（1280×720では地図の高さ385px・下の余白180px）や400×464では、
+   * 選んだピンが地図の上の外に出て見えなくなっていた（Minami実機確認：大池・往復¥1,500）。
+   * 対策：動き出す直前に中心の高さを選んだ場所の標高へ瞬時にそろえ（jumpTo({elevation})、
+   * easeTo/flyToは"elevation"オプションを受け付けないため）、動きのあいだは
+   * freezeElevation:trueで高さを固定する。標高が読めない（標高タイルが未読込）ときは何もしない。
+   * 降り始める時点では粗い標高しか無いことがあるため、降りたあと（細かいタイル読込後）の
+   * 傾けの前にもう一度そろえ直す。
+   */
+  _alignCenterElevationToSpot(spot) {
+    if (!this.map || typeof this.map.queryTerrainElevation !== 'function') return;
+    const elevation = this.map.queryTerrainElevation([spot.longitude, spot.latitude]);
+    if (!isFiniteNumber(elevation)) return;
+    this.map.jumpTo({ elevation });
   }
 
   flyToSpot(spot, departureStation) {
@@ -1570,10 +1596,12 @@ export class TerrainMapView {
     const revealPadding = this.getRevealPadding();
 
     if (sameSpotAlreadyFocused && !prefersReducedMotion()) {
+      this._alignCenterElevationToSpot(spot);
       this.map.easeTo({
         pitch: SPOT_FOCUS_PITCH,
         zoom: SPOT_FOCUS_ZOOM,
         center: [spot.longitude, spot.latitude],
+        freezeElevation: true,
         duration: TILT_DURATION_MS,
         padding: revealPadding,
       });
@@ -1587,8 +1615,10 @@ export class TerrainMapView {
     }
 
     if (prefersReducedMotion()) {
+      this._alignCenterElevationToSpot(spot);
       this.map.flyTo({
         center: [spot.longitude, spot.latitude],
+        freezeElevation: true,
         zoom: SPOT_FOCUS_ZOOM,
         pitch: SPOT_FOCUS_PITCH,
         duration: REDUCED_MOTION_FLY_DURATION_MS,
@@ -1600,8 +1630,10 @@ export class TerrainMapView {
       return;
     }
 
+    this._alignCenterElevationToSpot(spot);
     this.map.flyTo({
       center: [spot.longitude, spot.latitude],
+      freezeElevation: true, // 中心の高さは直前の_alignCenterElevationToSpot()の値のまま動かさない
       zoom: SPOT_FOCUS_ZOOM,
       pitch: 0,
       duration: SPOT_FOCUS_DURATION_MS,
@@ -1614,12 +1646,14 @@ export class TerrainMapView {
       this.waitForSceneSettled().then(() => {
         if (token !== this._flySpotToken || !this.map) return;
         if (this.onOverheadSettled) this.onOverheadSettled(spot);
+        this._alignCenterElevationToSpot(spot); // 降りたあとの細かい標高でそろえ直す
         // center・paddingを傾けのeaseToでも明示し直す（spotの座標＋情報帯よけの
         // ずらし幅を毎回同じに保つ。paddingだけ省略した場合の挙動に依存しない）。
         this.map.easeTo({
           pitch: SPOT_FOCUS_PITCH,
           duration: TILT_DURATION_MS,
           center: [spot.longitude, spot.latitude],
+          freezeElevation: true,
           padding: revealPadding,
         });
         this.map.once('moveend', () => {
