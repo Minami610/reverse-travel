@@ -29,6 +29,9 @@ const TEXT_FIT_SAFETY_MARGIN_PX = 3;
 const MIN_BUDGET = 200;
 const MAX_BUDGET = 2000; // 2026-10-06、Minamiさんの判断により¥1000から変更
 const BUDGET_STEP = 100;
+// 【2026-10-21、41本目】最初の見え方に戻るボタン（#map-reset-view-btn）で戻るときの
+// なめらかな動きの長さ（以前の「全体を見る」と同じ1.5秒前後、Minami指示）。
+const RESET_VIEW_DURATION_MS = 1500;
 // 【2026-10-13、10本目②】scheduleMaxBudgetPrefetch()参照。map-view.js・
 // terrain-map-view.jsのWAVE_DURATION_MS（1000ms、検索後に点が波のように出る
 // 演出の所要時間）より確実に後になるよう、裏取得の反映を遅らせるための余裕時間。
@@ -111,7 +114,6 @@ class ReverseTravel {
       this.highlightCard(spotId);
       this.showSpotInfoPanel(spotId);
     };
-    this.mapView.onFocusChange = () => this.updateViewAllButton();
     // 3D地図のインスタンスは3D切替が実際に行われるまで作らない（4本目②：
     // terrain-map-view.jsはMapLibre本体と同じく遅延読込のため、クラス自体が
     // まだ存在しない。activateTerrainMap()がloadTerrainModule()経由で
@@ -162,7 +164,7 @@ class ReverseTravel {
       spotInfoPanel: document.getElementById('spot-info-panel'),
       spotInfoContent: document.getElementById('spot-info-content'),
       spotInfoClose: document.getElementById('spot-info-close'),
-      viewAllBtn: document.getElementById('view-all-btn'),
+      mapResetViewBtn: document.getElementById('map-reset-view-btn'),
       departureInput: document.getElementById('departure-input'),
       departureSuggestions: document.getElementById('departure-suggestions'),
       budgetInput: document.getElementById('budget-input'),
@@ -315,12 +317,15 @@ class ReverseTravel {
     // 無いため3Dを開始できない。起動時に前回3Dだった場合の自動復元は、
     // 最初の検索結果が出た直後（renderSearchResults）で行う。
     this.elements.mapDimensionToggle?.addEventListener('click', () => this.toggleMapDimension());
-    // 【2026-10-15、11本目①②】地図の下の固定情報枠の閉じるボタン・
-    // 「全体を見る」ボタン（Minami決定：A・C）。
+    // 【2026-10-15、11本目①】地図の下の固定情報枠の閉じるボタン（Minami決定：A）。
     this.elements.spotInfoClose?.addEventListener('click', () => this.hideSpotInfoPanel());
-    this.elements.viewAllBtn?.addEventListener('click', () => {
-      if (this.mapMode === '3d') this.terrainMapView?.returnToOverview();
-      else this.mapView.returnToOverview();
+    // 【2026-10-21、41本目、Minami決定】最初の見え方に戻るボタン（地図の右上、方位磁針の
+    // すぐ下。2Dは右上）。検索した直後と同じ見え方（円が短辺の0.6、3Dは傾き45°・向きは
+    // 変えない）へなめらかに戻す。以前の「全体を見る」（寄っているときだけ出る文字ボタン）の
+    // 役目を引き継ぎ、いつでも押せるようにした（一度も検索していないときは出さない）。
+    this.elements.mapResetViewBtn?.addEventListener('click', () => {
+      if (this.mapMode === '3d') this.terrainMapView?.returnToSearchView({ durationMs: RESET_VIEW_DURATION_MS });
+      else this.mapView.returnToSearchView({ durationSec: RESET_VIEW_DURATION_MS / 1000 });
     });
     // 【4本目②】前回3Dを選んだ端末でだけ、ページの読み込みが落ち着いたあと
     // MapLibre一式を先読みする（2Dの人には一切先読みしない。Minami指示）。
@@ -783,11 +788,14 @@ class ReverseTravel {
     if (userTouch) {
       this.hideSpotInfoPanel();
     }
-    // 【37本目、Minami決定：B2】ユーザーが金額を上げたときだけ、前の縁から
-    // 新しい縁へ波を1本出す（下げたとき・裏取得による更新では出さない。
-    // 広がったかどうかは各地図側で半径を比べて判断する）。
-    this.mapView.updateReachCircle(budget, { style: 'live', wave: userTouch });
-    this.terrainMapView?.updateReachCircle(budget, { style: 'live', wave: userTouch });
+    // 【37本目、Minami決定：B2／41本目で変更】ユーザーが金額を上げたときだけ、出発駅
+    // （円の中心）から新しい縁へ波を1本出す。41本目から、円が広がらなかった（半径が
+    // 同じ）ときも出す（「ここまで届く」を見せるため）。下げたとき・裏取得による更新
+    // では出さない。上げたかどうかは、直前にこのメソッドへ渡された金額と比べる。
+    const raised = userTouch && this._liveMapBudget != null && budget > this._liveMapBudget;
+    this._liveMapBudget = budget;
+    this.mapView.updateReachCircle(budget, { style: 'live', wave: raised });
+    this.terrainMapView?.updateReachCircle(budget, { style: 'live', wave: raised });
     if (userTouch) {
       // 【2026-10-17、32本目B、Minami決定】まず円の半径が変わるのを見せ、
       // 最後の操作から0.4秒止まったら地図を円全体が収まる大きさへ合わせる。
@@ -1359,7 +1367,10 @@ class ReverseTravel {
     // 【2026-10-13、10本目②】「この条件で検索」を押した結果の表示なので、
     // 出発駅から近い順に点が波のように広がって出る演出を行う（Minami指示）。
     const departureStation = this.data.stations?.[departureStationId];
+    this._liveMapBudget = budget; // 【41本目】＋の波の「上げたか」の基準（updateMapBudgetLive()参照）
     this.mapView.render(departureStation, this.currentAllSpots, budget, { reveal: true });
+    // 【41本目】最初の見え方に戻るボタンは、一度検索したら出す。
+    if (this.elements.mapResetViewBtn) this.elements.mapResetViewBtn.hidden = false;
     // 3D地図は3D切替が一度も行われるまでインスタンス自体が無い（遅延読込、4本目②）。
     // 作成済みならrender()を呼ぶ（未初期化でも座標だけ保持する設計のため、
     // activateTerrainMap()が後から呼ばれたときに自動で反映される）。
@@ -1370,12 +1381,10 @@ class ReverseTravel {
       // 以前はfitToBudget()（スポット座標基準・最低ズーム9.5）のままで、
       // 予算によっては円がごく一部にしか見えない／画面からはみ出すことがあった
       // （Minami実機確認：富山駅前・往復¥500で円が小さすぎる、¥1,500ではみ出す）。
-      // 【37本目】「全体を見る」（returnToOverview()）も同じfitCircleToView()に
-      // 揃えた（検索直後と同じ見え方に戻る）。
-      this.terrainMapView.fitCircleToView({
-        radiusKm: this.terrainMapView.computeReachRadiusKm(budget),
-        animate: false,
-      });
+      // 【41本目】最初の見え方に戻るボタン・「← 一覧に戻る」と同じreturnToSearchView()
+      // （円が短辺の0.6、傾き45°、向きは変えない）を使う。3Dが見えていない（2D表示中）
+      // ときは、3Dに切り替えたとき（resize()）に合わせる。
+      this.terrainMapView.returnToSearchView({ durationMs: 0 });
     }
 
     // 【2026-10-14、25本目、不具合修正】updateMobileBudgetOverlay()・
@@ -1440,7 +1449,6 @@ class ReverseTravel {
           this.highlightCard(spotId);
           this.showSpotInfoPanel(spotId);
         };
-        this.terrainMapView.onFocusChange = () => this.updateViewAllButton();
         this.layoutController.terrainMapView = this.terrainMapView; // 遅延生成のため後から差し替える
       }
       await this.terrainMapView.ensureMap({ lat: station.stop_lat, lon: station.stop_lon });
@@ -1510,9 +1518,6 @@ class ReverseTravel {
         this.mapView.handleShown();
       }
     });
-    // 【2026-10-15、11本目②】「全体を見る」ボタンの表示判定は2D/3Dそれぞれ
-    // 独立して持っているため、切り替えのたびに今表示中の側の状態に合わせ直す。
-    this.updateViewAllButton();
     // 【2026-10-13、22本目、Minami決定】2D・3Dを切り替えても選んでいたピンは
     // 選ばれたままにする。
     this.reapplySelectionAfterModeSwitch();
@@ -2397,18 +2402,6 @@ class ReverseTravel {
     // 「▼条件を変える」）になったため、文言の付け替えはしない。「閉じる」は
     // #form-close-btn（常に「▲閉じる」、CSS側でcollapsed時のみ非表示）が担う。
     this.elements.searchSummaryToggle?.setAttribute('aria-expanded', String(!collapsed));
-  }
-
-  /**
-   * 【2026-10-15、11本目②、Minami決定：C】現在表示中の地図（2D/3D）が
-   * 寄っているときだけ「全体を見る」ボタンを出す。
-   */
-  updateViewAllButton() {
-    if (!this.elements.viewAllBtn) return;
-    const focused = this.mapMode === '3d'
-      ? !!this.terrainMapView?._focusedOnSpot
-      : this.mapView.isZoomedInPastOverview();
-    this.elements.viewAllBtn.hidden = !focused;
   }
 
   /**

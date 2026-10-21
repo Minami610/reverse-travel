@@ -33,6 +33,13 @@ const GSI_STD_ATTRIBUTION =
 const GSI_DEM_ATTRIBUTION = '国土地理院の標高タイルを加工して3D地形として表示';
 
 const DEFAULT_PITCH = 57; // Minami指示：55〜60の中間
+// 【2026-10-21、41本目、Minami決定：案1】全体の見え方（検索した直後・最初の見え方に戻る
+// ボタン・「← 一覧に戻る」）のときだけ、傾きを57°より浅い45°にする。57°では円の奥側が
+// 遠近でつぶれ、画面の上の約4割に出発駅から6〜44km先の遠景が写り（富山駅北口なら
+// 富山湾）、円が下の方に小さく見えていた（40本目の計測）。場所に寄ったときの傾き
+// （SPOT_FOCUS_PITCH）は変えない。ハンドルで傾きを変えた人が金額を変えたときも、
+// 傾きは勝手に戻さない（fitCircleToView({onlyIfNeeded:true})は今の傾きのまま）。
+const OVERVIEW_PITCH = 45;
 const DEFAULT_ZOOM = 9;
 const DEFAULT_EXAGGERATION = 2; // Minami指示：2〜2.5倍から開始
 const DEM_MAXZOOM = 12; // Minami指示：DEM10Bの範囲に抑え、それ以上は自動オーバーズーム
@@ -156,9 +163,8 @@ const WAVE_DURATION_MS = 1000; // Minami指示：検索後、点を波のよう�
 const SELECTED_SOURCE_ID = 'selected-spot';
 const SELECTED_LAYER_ID = 'selected-spot-circle';
 const SELECTED_GLOW_LAYER_ID = 'selected-spot-glow';
-// 【2026-10-15、11本目②】「全体を見る」ボタン・予算操作時の自動復帰に使う
-// なめらかな引きの所要時間（Minami指示：1.5秒前後）。
-const RETURN_TO_OVERVIEW_DURATION_MS = 1500;
+// 【41本目】「全体を見る」で使っていた戻りの所要時間（1.5秒）は、最初の見え方に戻る
+// ボタンの処理と一緒にmain.js（RESET_VIEW_DURATION_MS）へ移した。
 
 // 【2026-10-17、32本目B、Minami決定】予算の±・スライダー操作：まず円の半径を
 // なめらかに変え、最後の操作から少し止まったら、円「全体」が収まるよう
@@ -180,10 +186,14 @@ const CIRCLE_FIT_DURATION_MS = 450;
 // 固定90pxの特別扱いをやめ、「地図を合わせたあと、円の直径が見えている
 // 範囲の短い辺の7〜8割になるように」という目標から直接、余白の比率を
 // 逆算する一本の式にした（CIRCLE_FIT_TARGET_DIAMETER_RATIO参照）。
-const CIRCLE_FIT_TARGET_DIAMETER_RATIO = 0.75; // 目標7〜8割の中間値
+// 【2026-10-21、41本目、Minami決定：C】0.75→0.6（2Dのmap-view.jsと同じ）。金額が大きく
+// なって地図が引いたあと、＋を押しても円の広がりが小さく見えた（40本目の計測）ため、
+// 地図を合わせたときの円を小さめにして広がる余地を残す。
+const CIRCLE_FIT_TARGET_DIAMETER_RATIO = 0.6;
 // 【2026-10-20、37本目、Minami決定：A】金額操作のあとは、円の直径÷短辺（3Dは35本目と
 // 同じく横方向で測る）が0.9をこえたときだけ0.75へ引き、0.35を下回ったときだけ0.6へ
 // 寄る。その間は地図を動かさず円だけが広がる・縮む（2Dのmap-view.jsと同じ値）。
+// 【41本目】9割をこえたときの行き先も0.75→0.6（CIRCLE_FIT_TARGET_DIAMETER_RATIO）。
 const CIRCLE_REFIT_UPPER_RATIO = 0.9;
 const CIRCLE_REFIT_LOWER_RATIO = 0.35;
 const CIRCLE_ZOOM_IN_TARGET_RATIO = 0.6;
@@ -343,7 +353,6 @@ export class TerrainMapView {
     this.onSelectionChange = null; // 【2026-10-11、6本目B】地図の点をタップしたとき、一覧のカードをスクロール＋光らせるため（2Dのmap-view.jsと同じ役割）
     this.onOverheadSettled = null; // 【2026-10-13、8本目】(spot) => void、真上から見た状態の読み込みが済んだ瞬間（計測・テスト用）
     this.onTiltComplete = null; // 同上。傾け終わった瞬間（計測・テスト用）
-    this.onFocusChange = null; // 【2026-10-15、11本目②】(focused: boolean) => void … 「全体を見る」ボタンの表示切替用
     this.selectedSpotId = null; // 【2026-10-15、11本目①】情報枠・PC一覧ハイライトとの連動用
     this._lastDepartureStation = null;
     this._lastSpots = null;
@@ -889,10 +898,12 @@ export class TerrainMapView {
    */
   updateReachCircle(budget, { style = 'live', wave = false } = {}) {
     const targetKm = this.computeReachRadiusKm(budget);
-    // 【37本目、Minami決定：B2】ユーザーが金額を上げて円が広がるときだけ、
-    // 「その時の縁」（アニメーション途中ならその値）から新しい縁へ波を出す。
-    if (wave && targetKm > this._reachCircleRadiusKm + 0.01) {
-      this._startCircleWave(this._reachCircleRadiusKm, targetKm);
+    // 【41本目、Minami決定】ユーザーが金額を上げたとき（呼び出し元のmain.jsがwave:trueを
+    // 渡す）、出発駅（円の中心）から新しい縁まで波を出す（2Dと同じ）。37本目は「前の縁
+    // から」で、円が広がらなかったときは出さなかったが、「ここまで届く」を見せるため、
+    // 半径が同じでも出す。
+    if (wave && targetKm > 0) {
+      this._startCircleWave(0, targetKm);
     }
     this._animateCircleRadius(targetKm, style);
   }
@@ -1080,11 +1091,13 @@ export class TerrainMapView {
    * _reachCircleRadiusKmがまだ0→目標値へアニメーション中（_animateCircleRadius()
    * 参照）のため、目標値を直接渡す必要がある。
    * 【2026-10-20、37本目、Minami決定：A】onlyIfNeeded:true（金額操作のあと）のときは、
-   * 今の円の横方向の直径÷短辺がCIRCLE_REFIT_UPPER_RATIO（0.9）をこえたときだけ0.75へ引き、
-   * CIRCLE_REFIT_LOWER_RATIO（0.35）を下回ったときだけ0.6へ寄る。その間は動かさない
-   * （寄っている状態・「全体を見る」ボタンにも触れない）。検索直後・「全体を見る」は
-   * 従来どおり常に0.75へ合わせる（onlyIfNeeded:false）。
-   * 【37本目】「全体を見る」用に、傾き（pitch）と動きの長さ（durationMs）も上書きできる。
+   * 今の円の横方向の直径÷短辺がCIRCLE_REFIT_UPPER_RATIO（0.9）をこえたとき、または
+   * CIRCLE_REFIT_LOWER_RATIO（0.35）を下回ったときだけ合わせる。その間は動かさない
+   * （寄っている状態にも触れない）。検索直後・最初の見え方に戻るボタン・「← 一覧に戻る」は
+   * 常に合わせる（onlyIfNeeded:false、returnToSearchView()）。
+   * 【41本目】合わせる先はどの場面も短辺の0.6（CIRCLE_FIT_TARGET_DIAMETER_RATIO）。
+   * 【37本目】傾き（pitch）と動きの長さ（durationMs）も上書きできる（returnToSearchView()が
+   * 傾きOVERVIEW_PITCHを渡す）。
    * @param {{radiusKm?: number, animate?: boolean, onlyIfNeeded?: boolean, pitch?: number, durationMs?: number}} [opts]
    * @returns {number|null} 動かした先のズーム（動かさなかったときはnull）
    */
@@ -1210,7 +1223,6 @@ export class TerrainMapView {
     }
     this._focusedOnSpot = false;
     this._flyFocusedSpotId = null;
-    if (this.onFocusChange) this.onFocusChange(false);
   }
 
   // 【2026-10-20、39本目】ここにあった旧「全体表示」fitToBudget()（スポット座標基準・
@@ -1219,21 +1231,12 @@ export class TerrainMapView {
   // 削除した（経緯はgit logの5本目・34本目・37本目・39本目を参照）。
 
   /**
-   * 【2026-10-15、11本目②、Minami決定：C】「全体を見る」ボタン・予算操作時の
-   * 自動復帰。場所に寄っている（_focusedOnSpot）ときだけ全体の位置へなめらかに
-   * 引く（1.5秒前後）。航空写真→淡色地図の切り替えは既存のズーム連動式
-   * （AERIAL_OPACITY_EXPR）がそのまま効くため、ここで特別な処理は不要。
-   */
-  returnToOverview() {
-    if (!this._focusedOnSpot || this._lastBudget == null) return;
-    this.returnToSearchView({ durationMs: RETURN_TO_OVERVIEW_DURATION_MS });
-  }
-
-  /**
    * 【2026-10-20、39本目、Minami決定】検索した直後と同じ見え方（最後に検索した金額の円に
-   * fitCircleToView()で0.75、傾き57°、向きは変えない）へ戻る。「全体を見る」
-   * （returnToOverview()、寄っているときだけ）と「← 一覧に戻る」（main.jsの
-   * showResultsList()、以前はfitToBudget()・最低ズーム9.5）の共通処理。
+   * fitCircleToView()で合わせる、向きは変えない）へ戻る。
+   * 【41本目】円は短辺の0.6、傾きはOVERVIEW_PITCH（45°）。使う場面は、検索した直後
+   * （main.jsのrenderSearchResults()、durationMs:0）・最初の見え方に戻るボタン
+   * （#map-reset-view-btn、以前の「全体を見る」の役目）・「← 一覧に戻る」（main.jsの
+   * showResultsList()）の3つ。
    * スマホで詳細画面から一覧タブへ戻ったときのように、地図が見えていない
    * （コンテナ0×0）ときは合わせられないため、次に地図が見えたとき（resize()）に
    * 合わせ直す（以前のfitToBudget()も、見えていない間に呼ばれた分のカメラ位置は
@@ -1255,16 +1258,11 @@ export class TerrainMapView {
     // 場所へ寄る途中（flyToSpot()の「降りる→傾ける」の後半が保留中）に戻ったとき、
     // あとから傾ける動きが始まって戻った位置を上書きしないよう無効化する。
     this._flySpotToken++;
-    // 【2026-10-20、37本目、Minami決定】以前は昔の全体表示の計算（fitToBudget()、
-    // スポット座標基準・最低ズーム9.5）で戻していたため、検索直後（36本目から
-    // fitCircleToView()、最低ズーム8.5）と見え方が違っていた。「全体を見る」は
-    // 「最初の見え方に戻る」ボタンなので、検索直後と同じfitCircleToView()（いつも
-    // 0.75に合わせる）で、最後に検索した金額の円に合わせる。傾きは従来の
-    // fitToBudget()と同じく既定（DEFAULT_PITCH）へ戻し、向きは変えない。
+    // 最後に検索した金額の円に合わせる。傾きはOVERVIEW_PITCH（41本目から45°）、向きは変えない。
     this._cancelFitCircleToView();
     this.fitCircleToView({
       radiusKm: this.computeReachRadiusKm(this._lastBudget),
-      pitch: DEFAULT_PITCH,
+      pitch: OVERVIEW_PITCH,
       durationMs,
     });
   }
@@ -1565,10 +1563,10 @@ export class TerrainMapView {
     const sameSpotAlreadyFocused = this._focusedOnSpot && this._flyFocusedSpotId === spot.id;
     const token = ++this._flySpotToken;
     this._flyFocusedSpotId = spot.id;
-    // 【2026-10-15、11本目②】寄り始めた時点で「全体を見る」ボタンを出す
-    // （Minami決定：C。途中でも全体へ戻れるようにする）。
+    // 寄っている間はtrue（同じ場所を続けて選んだかの判定に使う）。
+    // 【41本目】以前はこれで「全体を見る」ボタンを出していたが、ボタンはいつでも出ている
+    // 最初の見え方に戻るボタン（#map-reset-view-btn）に置き換えた。
     this._focusedOnSpot = true;
-    if (this.onFocusChange) this.onFocusChange(true);
     const revealPadding = this.getRevealPadding();
 
     if (sameSpotAlreadyFocused && !prefersReducedMotion()) {

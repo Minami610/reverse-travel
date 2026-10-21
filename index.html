@@ -194,6 +194,16 @@
             <path d="M12,22 L15.5,13 L12,15.5 L8.5,13 Z" class="map-compass-needle-s"></path>
           </svg>
         </button>
+        <!-- 【2026-10-21、41本目、Minami決定】最初の見え方に戻るボタン。方位磁針のすぐ下
+             （3D）／右上（2D、方位磁針・ハンドルは3Dだけ）。一度検索したら、いつでも出ている
+             （以前の「全体を見る」文字ボタンの役目を引き継いだ）。GPSの現在地ボタン（⌖）と
+             間違われないよう、地図の出発駅と同じオレンジのしずく形を小さく入れる。 -->
+        <button type="button" id="map-reset-view-btn" class="map-reset-view-btn" aria-label="出発駅を中心に、最初の見え方に戻す" title="出発駅を中心に、最初の見え方に戻す" hidden>
+          <svg class="map-reset-view-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12,2.5 C8.1,2.5 5,5.5 5,9.3 C5,14.4 12,21.5 12,21.5 C12,21.5 19,14.4 19,9.3 C19,5.5 15.9,2.5 12,2.5 Z" class="map-reset-view-pin"></path>
+            <circle cx="12" cy="9.3" r="2.6" class="map-reset-view-pin-dot"></circle>
+          </svg>
+        </button>
         <div
           id="map-rotate-handle"
           class="map-rotate-handle"
@@ -233,9 +243,8 @@
         <button type="button" id="spot-info-close" class="spot-info-close" aria-label="閉じる">×</button>
         <div id="spot-info-content" class="spot-info-content"></div>
       </div>
-      <!-- 【2026-10-15、11本目②】寄っているときだけ出す「全体を見る」ボタン
-           （Minami決定：C）。右上の方角ボタン（3Dのみ）の下に重ならないよう配置。 -->
-      <button type="button" id="view-all-btn" class="view-all-btn" hidden>全体を見る</button>
+      <!-- 【41本目】寄っているときだけ出していた「全体を見る」ボタン（11本目②）は、
+           いつでも出ている最初の見え方に戻るボタン（#map-reset-view-btn）に置き換えた。 -->
     </div>
   </div>
 

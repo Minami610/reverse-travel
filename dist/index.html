@@ -1448,7 +1448,7 @@ header p {
 /* 【2026-10-13、22本目、Minami決定】スマホでは地図の下端いっぱいに予算操作帯
    を出すため、出典（attribution）コントロール（2D=Leaflet・3D=MapLibreとも
    既定は右下）を左上・2D/3D切替ボタンの下へ移す。方位磁針（MapLibre既定は
-   右上）・「全体を見る」（右上、view-all-btn参照）は右側のまま変更しない。 */
+   右上）・最初の見え方に戻るボタン（右上、#map-controls-cluster参照）は右側のまま変更しない。 */
 @media (max-width: 759px) {
   #map-area .leaflet-bottom.leaflet-right,
   #map-area .maplibregl-ctrl-bottom-right {
@@ -1708,52 +1708,18 @@ header p {
   white-space: nowrap;
 }
 
-/* 【2026-10-15、11本目②】「全体を見る」ボタン（Minami決定：C）。右上の
-   回転ハンドル（3Dのみ）の下に重ならない位置に置く。
-   【2026-10-14、23本目修正】方位磁針（MapLibreのNavigationControl、
-   高さ約29px）を「つかんで回すハンドル」（56px）に置き換えたため、
-   top値を54px→78px（8px開始＋56px＋8pxの隙間）に広げた。
-   【2026-10-16、27本目修正】ハンドルを56px→64pxに拡大したため、
-   78px→86px（8px開始＋64px＋14pxの隙間、元と同じ隙間を維持）に広げた。
-   【2026-10-17、32本目A、Minami決定】方位磁針を別に分離し、ハンドルの上に
-   方位磁針（32px）を置く構成（#map-controls-cluster）に変えたため、
-   クラスタ全体の高さ（8px開始＋32px＋8px隙間＋72px＝120px）＋8pxの隙間で
-   128pxに広げた。低い画面（高さ500px以下）では、クラスタ＋全体を見るが
-   縦に収まらないため、地図の左上（2D/3D切替ボタンの下）へ移す
-   （Minami決定：A-3）。 */
-.view-all-btn {
-  position: absolute;
-  top: 128px;
-  right: 8px;
-  z-index: 1000;
-  padding: 0.35rem 0.7rem;
-  border: none;
-  border-radius: 999px;
-  background-color: rgba(255, 255, 255, 0.92);
-  color: var(--color-text);
-  font-size: 0.78rem;
-  font-weight: 600;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-  cursor: pointer;
-}
-
-/* 【2026-10-17、32本目A】低い画面（高さ500px以下、400×464などのスマホ実機を
-   想定）では、右上の縦の並び（方位磁針128px分＋クラスタ）に「全体を見る」
-   まで収めると窮屈・他要素と重なるため、地図の左上（2D/3D切替ボタン
-   top:8px・高さ約32.8px、出典ボタンtop:54px、の下）へ移す。 */
-@media (max-height: 500px) {
-  .view-all-btn {
-    top: 94px;
-    right: auto;
-    left: 8px;
-  }
-}
+/* 【2026-10-21、41本目、Minami決定】寄っているときだけ出していた「全体を見る」
+   文字ボタン（11本目②、.view-all-btn）は、いつでも出ている「最初の見え方に戻るボタン」
+   （.map-reset-view-btn、下の#map-controls-clusterの中）に置き換えた。 */
 
 /* 【2026-10-17、32本目A、Minami決定】方位磁針（上、32px）とハンドル（下、
    72px）を縦に並べ、左右中心をそろえるための入れ物。flexboxの
    align-items:centerで、サイズの違う2つの丸を自動的に中心そろえできる。 */
 .map-controls-cluster {
-  display: none;
+  /* 【41本目】最初の見え方に戻るボタンは2Dでも出すため、入れ物自体はいつも出す
+     （方位磁針・ハンドルは下の規則で3Dのときだけ出す）。上から：方位磁針 → 戻るボタン →
+     ハンドル（3D）。2Dは戻るボタンだけが右上に来る。 */
+  display: flex;
   position: absolute;
   top: 8px;
   right: 8px;
@@ -1763,8 +1729,50 @@ header p {
   gap: 8px;
 }
 
-#map-area.mode-3d .map-controls-cluster {
+#map-area:not(.mode-3d) .map-compass-btn,
+#map-area:not(.mode-3d) .map-rotate-handle {
+  display: none;
+}
+
+/* 【2026-10-21、41本目、Minami決定】最初の見え方に戻るボタン。方位磁針と同じ32pxの
+   白い丸に、地図の出発駅と同じオレンジのしずく形を小さく入れる（GPSの現在地ボタン
+   「⌖」と間違われないようにするため）。一度も検索していないときはhidden属性で隠す
+   （display:flexを指定しているため、[hidden]のときの規則を明示しないと隠れない）。 */
+.map-reset-view-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--color-border);
+  background-color: white;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
   display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.map-reset-view-btn[hidden] {
+  display: none;
+}
+
+.map-reset-view-btn:focus-visible {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.map-reset-view-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.map-reset-view-pin {
+  /* 3Dの出発駅の印（terrain-map-view.jsのmaplibregl.Marker({color:'#e06c2c'})）と同じ色 */
+  fill: #e06c2c;
+}
+
+.map-reset-view-pin-dot {
+  fill: white;
 }
 
 /* 方位磁針：押すと北（bearing0）だけに戻る（傾きは変えない）。ハンドルから
@@ -1994,7 +2002,9 @@ header p {
    合わせて出す。 */
 .map-rotate-hint {
   position: absolute;
-  top: 58px;
+  /* 【41本目】ハンドルの上に最初の見え方に戻るボタン（32px＋隙間8px）が入ったため、
+     58px→98pxへ下げた（矢印がハンドルの中心を指す位置）。 */
+  top: 98px;
   right: 88px;
   max-width: 180px;
   z-index: 1000;
@@ -3428,6 +3438,16 @@ header p {
             <path d="M12,22 L15.5,13 L12,15.5 L8.5,13 Z" class="map-compass-needle-s"></path>
           </svg>
         </button>
+        <!-- 【2026-10-21、41本目、Minami決定】最初の見え方に戻るボタン。方位磁針のすぐ下
+             （3D）／右上（2D、方位磁針・ハンドルは3Dだけ）。一度検索したら、いつでも出ている
+             （以前の「全体を見る」文字ボタンの役目を引き継いだ）。GPSの現在地ボタン（⌖）と
+             間違われないよう、地図の出発駅と同じオレンジのしずく形を小さく入れる。 -->
+        <button type="button" id="map-reset-view-btn" class="map-reset-view-btn" aria-label="出発駅を中心に、最初の見え方に戻す" title="出発駅を中心に、最初の見え方に戻す" hidden>
+          <svg class="map-reset-view-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12,2.5 C8.1,2.5 5,5.5 5,9.3 C5,14.4 12,21.5 12,21.5 C12,21.5 19,14.4 19,9.3 C19,5.5 15.9,2.5 12,2.5 Z" class="map-reset-view-pin"></path>
+            <circle cx="12" cy="9.3" r="2.6" class="map-reset-view-pin-dot"></circle>
+          </svg>
+        </button>
         <div
           id="map-rotate-handle"
           class="map-rotate-handle"
@@ -3467,9 +3487,8 @@ header p {
         <button type="button" id="spot-info-close" class="spot-info-close" aria-label="閉じる">×</button>
         <div id="spot-info-content" class="spot-info-content"></div>
       </div>
-      <!-- 【2026-10-15、11本目②】寄っているときだけ出す「全体を見る」ボタン
-           （Minami決定：C）。右上の方角ボタン（3Dのみ）の下に重ならないよう配置。 -->
-      <button type="button" id="view-all-btn" class="view-all-btn" hidden>全体を見る</button>
+      <!-- 【41本目】寄っているときだけ出していた「全体を見る」ボタン（11本目②）は、
+           いつでも出ている最初の見え方に戻るボタン（#map-reset-view-btn）に置き換えた。 -->
     </div>
   </div>
 
@@ -4960,7 +4979,11 @@ const MAP_CIRCLE_FIT_DURATION_SEC = 0.45;
 // 見えている範囲の短い辺の7〜8割になるように」という目標から、3D側の
 // CIRCLE_FIT_TARGET_DIAMETER_RATIOと同じ考え方で余白の比率を決める
 // （2Dは方位磁針・ハンドルが無いため、3D側のような右側の追加余白は不要）。
-const MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO = 0.75;
+// 【2026-10-21、41本目、Minami決定：C】0.75→0.6。金額が大きくなって地図が引いたあと、
+// ＋を押しても円の広がりが小さく見えた（40本目の計測：＋1回で縁が動くのはPCで30px前後、
+// 400×464で15px前後）。地図を合わせたときの円を小さめにして、広がる余地を残す。
+// 金額操作で9割をこえたときも、3.5割を下回ったときも、この0.6に合わせる。
+const MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO = 0.6;
 // 【2026-10-19、34本目、Minami決定：B】「全体を見る」・検索直後の全体表示
 // （fitToBudget()、2Dはこの定数を使わず別途maxZoom:16のみで下限なし）は
 // 変えない。円を合わせるとき（fitCircleToView()）だけ、小さいスマホで
@@ -4975,6 +4998,7 @@ const MAP_CIRCLE_FIT_MIN_ZOOM = 8.5;
 // 新しいエリアが開けた感じが無かった）。円の直径÷見えている範囲の短辺が
 // 上限（0.9）をこえたら0.75へ引き、下限（0.35）を下回ったら0.6へ寄る。
 // その間は地図を動かさず、円だけが広がる・縮む。
+// 【41本目】9割をこえたときの行き先も0.75→0.6（MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO）。
 const MAP_CIRCLE_REFIT_UPPER_RATIO = 0.9;
 const MAP_CIRCLE_REFIT_LOWER_RATIO = 0.35;
 const MAP_CIRCLE_ZOOM_IN_TARGET_RATIO = 0.6;
@@ -5024,10 +5048,8 @@ class MapView {
     this._waveTimers = [];
     this._pendingWaveReveal = false; // 【2026-10-13、10本目②】layout-controller.jsのinvalidateMapSize()参照
     this._needsSearchFit = false; // 【40本目】見えていない間に検索があり、見えたときに検索直後の見え方へ合わせ直す必要がある
-    this._overviewZoom = null; // 【2026-10-15、11本目②】直近のfitToBudget()が合わせたズーム（寄っているか判定用）
 
     this.onSelectionChange = null; // (spotId) => void … ピン選択と一覧パネルの連動用
-    this.onFocusChange = null; // 【2026-10-15、11本目②】(focused: boolean) => void … 「全体を見る」ボタンの表示切替用
   }
 
   ensureMap() {
@@ -5055,12 +5077,9 @@ class MapView {
     // 検証用の参照（terrain-map-view.jsのwindow.__terrainViewForDebugと同じ考え方）。
     // アプリ自体はこれを使わない。本番でも害はないため条件分岐は入れていない。
     window.__mapViewForDebug = this;
-
-    // 【2026-10-15、11本目②】ユーザーが手でズームした結果、全体（_overviewZoom）
-    // より寄った状態になったかを「全体を見る」ボタンの表示判定に使う。
-    this.map.on('zoomend', () => {
-      if (this.onFocusChange) this.onFocusChange(this.isZoomedInPastOverview());
-    });
+    // 【41本目】以前はここでzoomendを見て「全体を見る」ボタン（寄っているときだけ出る）の
+    // 表示を切り替えていたが、ボタンをいつでも出ている「最初の見え方に戻るボタン」に
+    // 置き換えたため不要になった。
   }
 
   /**
@@ -5127,20 +5146,14 @@ class MapView {
     // 同じ「円に合わせる」計算（fitCircleToView、最低ズーム8.5）に揃える。
     // fitToBudget()自体はこのまま呼ぶ（lastBounds・lastBudgetの記録のため）が、
     // 実際にカメラを置く位置はfitCircleToView()で上書きする。
-    // 【37本目】「全体を見る」（returnToOverview()）も同じfitCircleToView()に
-    // 揃えたため、検索直後と「全体を見る」の見え方は同じになる。
+    // 【37本目・41本目】最初の見え方に戻るボタン（returnToSearchView()）も同じ
+    // fitCircleToView()のため、検索直後と同じ見え方に戻る。
     this.fitToBudget(budget, { animate: false });
     this.updateReachCircle(budget, { style: 'settled' });
     const fittedZoom = this.fitCircleToView({ radiusKm: this.computeReachRadiusKm(budget), animate: false });
     // 【40本目、不具合修正】3D表示中など2Dが見えていない間の検索では、ここで合わせられない。
     // 見えたとき（handleShown()）に検索直後の見え方へ合わせ直すため覚えておく。
     this._needsSearchFit = fittedZoom == null;
-    // 【不具合修正】_overviewZoomをfitToBudget()が計算した値（スポット座標
-    // 基準）のまま残すと、検索直後（実際のカメラはfitCircleToView()の位置）
-    // でisZoomedInPastOverview()が「もう全体より寄っている」と誤判定し、
-    // 「全体を見る」ボタンが検索直後から出てしまう。実際にカメラを置いた
-    // 位置（fitCircleToView()の結果）を基準に更新し直す。
-    if (this.map) this._overviewZoom = this.map.getZoom();
     if (reveal) this._startWaveReveal();
 
     // PC/スマホの切り替えやタブが非表示（display:none）のタイミングで
@@ -5271,8 +5284,6 @@ class MapView {
    * 予算以下（帯＋それより安い点）が全部入るよう、地図をなめらかに引く/寄せる。
    * スライダーを指から離したときに呼ぶ想定（Minami指示：動かしている間は
    * カメラを動かさない）。新規検索時（animate:false）は瞬時に合わせる。
-   * 【2026-10-15、11本目②】この「全体の位置」をreturnToOverview()・
-   * isZoomedInPastOverview()の基準として_overviewZoomに覚えておく。
    * @param {number} budget
    * @param {{animate?: boolean, durationSec?: number}} [opts]
    */
@@ -5300,7 +5311,6 @@ class MapView {
     // 【2026-10-10】¥2000選択時に点が画面端からはみ出る不具合をMinamiが
     // スクリーンショットで発見（主に3D側だったが、余白は2Dも合わせて広げる）。
     const options = { padding: [48, 48], maxZoom: 16 };
-    this._overviewZoom = Math.min(this.map.getBoundsZoom(bounds, false, L.point(48, 48)), options.maxZoom);
     if (reachPrefersReducedMotion()) {
       // 【2026-10-20、36本目、不具合修正】animate:falseをoptionsに含めず
       // this.map.fitBounds()を呼ぶと、Leafletが「animateを指定しない」場合の
@@ -5320,7 +5330,6 @@ class MapView {
       // 上のreachPrefersReducedMotion()分岐と同じ理由でanimate:falseを明示する。
       this.map.fitBounds(bounds, { ...options, animate: false });
     }
-    if (this.onFocusChange) this.onFocusChange(false);
   }
 
   /**
@@ -5389,7 +5398,6 @@ class MapView {
     const radiusKm = this.lastBudget != null ? this.computeReachRadiusKm(this.lastBudget) : 0;
     if (radiusKm > 0) {
       this.fitCircleToView({ radiusKm, animate: false });
-      if (this.map) this._overviewZoom = this.map.getZoom();
     } else if (this.lastBounds.length > 0) {
       // 到達範囲0km（0件検索）等、円が無いときだけ以前どおりスポット座標
       // （実質は出発駅のみ）基準でフィットする。
@@ -5399,39 +5407,22 @@ class MapView {
   }
 
   /**
-   * 【2026-10-15、11本目②、Minami決定：C】ユーザーが手でズームして、
-   * 全体の位置（_overviewZoom）より寄っているかどうか。
-   * 「全体を見る」ボタンの表示判定・予算操作時の自動復帰判定に使う。
-   */
-  isZoomedInPastOverview() {
-    if (!this.map || this._overviewZoom == null) return false;
-    return this.map.getZoom() > this._overviewZoom + 0.3;
-  }
-
-  /**
-   * 「全体を見る」ボタン・予算操作時の自動復帰（Minami決定：C）。寄っている
-   * ときに全体の位置へなめらかに引く。向き（bearing）は2Dに無いため変更不要。
-   * 【2026-10-20、37本目、Minami決定】以前は昔の全体表示の計算（fitToBudget()、
-   * スポット座標基準）で戻していたため、検索直後（36本目からfitCircleToView()）
-   * より引いた位置に戻ってしまっていた。「全体を見る」は「最初の見え方に戻る」
-   * ボタンなので、検索直後と同じfitCircleToView()（いつも0.75に合わせる。
-   * 金額操作時の「必要なときだけ動かす」判断は使わない）で、最後に検索した
-   * 金額の円に合わせる。
+   * 【2026-10-21、41本目、Minami決定】最初の見え方に戻るボタン（地図の右上、いつでも
+   * 出ている）。検索した直後と同じ見え方（最後に検索した金額の円が短辺の0.6）へ
+   * なめらかに戻す。以前の「全体を見る」（寄っているときだけ出る文字ボタン、
+   * returnToOverview()）の役目を引き継いだため、寄っているかどうかの判定
+   * （isZoomedInPastOverview()・_overviewZoom）は不要になり削除した。
+   * 向き（bearing）は2Dに無いため変更不要。
    * @param {{durationSec?: number}} [opts]
    */
-  returnToOverview({ durationSec = 1.5 } = {}) {
-    if (!this.map || this.lastBudget == null || !this.isZoomedInPastOverview()) return;
+  returnToSearchView({ durationSec = 1.5 } = {}) {
+    if (!this.map || this.lastBudget == null) return;
     this._cancelFitCircleToView();
-    const zoom = this.fitCircleToView({
+    this.fitCircleToView({
       radiusKm: this.computeReachRadiusKm(this.lastBudget),
       animate: true,
       durationSec,
     });
-    // 行き先のズームを全体の基準にする（検索直後に記録した値と同じになるはずだが、
-    // その後の画面サイズ変更等にも追従させる）。途中のzoomendでは行き先より
-    // 寄った値が出るが、そのときボタンが一瞬残っても最後のzoomendで消える。
-    if (zoom != null) this._overviewZoom = zoom;
-    if (this.onFocusChange) this.onFocusChange(false);
   }
 
   /**
@@ -5468,10 +5459,12 @@ class MapView {
    */
   updateReachCircle(budget, { style = 'live', wave = false } = {}) {
     const targetKm = this.computeReachRadiusKm(budget);
-    // 【37本目、Minami決定：B2】ユーザーが金額を上げて円が広がるときだけ、
-    // 「その時の縁」（アニメーション途中ならその値）から新しい縁へ波を出す。
-    if (wave && targetKm > this._reachCircleRadiusKm + 0.01) {
-      this._startCircleWave(this._reachCircleRadiusKm, targetKm);
+    // 【41本目、Minami決定】ユーザーが金額を上げたとき（呼び出し元のmain.jsがwave:trueを
+    // 渡す）、出発駅（円の中心）から新しい縁まで波を出す。37本目は「前の縁から」で、
+    // 円が広がらなかったときは出さなかったが、「ここまで届く」を見せるため、半径が
+    // 同じでも出す。
+    if (wave && targetKm > 0) {
+      this._startCircleWave(0, targetKm);
     }
     this._animateCircleRadius(targetKm, style);
   }
@@ -5604,7 +5597,8 @@ class MapView {
    * 【2026-10-20、37本目、Minami決定：A】onlyIfNeeded:true（金額操作のあと）のときは、
    * 今の円の直径÷短辺がMAP_CIRCLE_REFIT_UPPER_RATIO（0.9）をこえたときだけ0.75へ引き、
    * MAP_CIRCLE_REFIT_LOWER_RATIO（0.35）を下回ったときだけ0.6へ寄る。その間は動かさない。
-   * 検索直後・「全体を見る」は従来どおり常に0.75へ合わせる（onlyIfNeeded:false）。
+   * 検索直後・最初の見え方に戻るボタンは常に合わせる（onlyIfNeeded:false）。
+   * 【41本目】合わせる先はどの場面も短辺の0.6（MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO）。
    * @param {{radiusKm?: number, animate?: boolean, onlyIfNeeded?: boolean, durationSec?: number}} [opts]
    * @returns {number|null} 動かした先のズーム（動かさなかったときはnull）
    */
@@ -5643,9 +5637,10 @@ class MapView {
       Math.round(shortSide * (1 - MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO)),
       Math.floor(shortSide / 2) - 1
     );
-    // fitZoomは「円の直径が短辺の0.75になるズーム」。2D（メルカトル）ではズームが
-    // 1上がると画面上の長さがちょうど2倍になるため、任意のズームzでの比率は
-    // 0.75 × 2^(z − fitZoom)、比率rになるズームは fitZoom + log2(r / 0.75) で求まる。
+    // fitZoomは「円の直径が短辺のT（MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO、41本目から0.6）に
+    // なるズーム」。2D（メルカトル）ではズームが1上がると画面上の長さがちょうど2倍になる
+    // ため、任意のズームzでの比率は T × 2^(z − fitZoom)、比率rになるズームは
+    // fitZoom + log2(r / T) で求まる。
     const fitZoom = this.map.getBoundsZoom(bounds, false, L.point(padding, padding));
     let targetZoom = fitZoom;
     let currentZoom = null;
@@ -6509,6 +6504,9 @@ const TEXT_FIT_SAFETY_MARGIN_PX = 3;
 const MIN_BUDGET = 200;
 const MAX_BUDGET = 2000; // 2026-10-06、Minamiさんの判断により¥1000から変更
 const BUDGET_STEP = 100;
+// 【2026-10-21、41本目】最初の見え方に戻るボタン（#map-reset-view-btn）で戻るときの
+// なめらかな動きの長さ（以前の「全体を見る」と同じ1.5秒前後、Minami指示）。
+const RESET_VIEW_DURATION_MS = 1500;
 // 【2026-10-13、10本目②】scheduleMaxBudgetPrefetch()参照。map-view.js・
 // terrain-map-view.jsのWAVE_DURATION_MS（1000ms、検索後に点が波のように出る
 // 演出の所要時間）より確実に後になるよう、裏取得の反映を遅らせるための余裕時間。
@@ -6591,7 +6589,6 @@ class ReverseTravel {
       this.highlightCard(spotId);
       this.showSpotInfoPanel(spotId);
     };
-    this.mapView.onFocusChange = () => this.updateViewAllButton();
     // 3D地図のインスタンスは3D切替が実際に行われるまで作らない（4本目②：
     // terrain-map-view.jsはMapLibre本体と同じく遅延読込のため、クラス自体が
     // まだ存在しない。activateTerrainMap()がloadTerrainModule()経由で
@@ -6642,7 +6639,7 @@ class ReverseTravel {
       spotInfoPanel: document.getElementById('spot-info-panel'),
       spotInfoContent: document.getElementById('spot-info-content'),
       spotInfoClose: document.getElementById('spot-info-close'),
-      viewAllBtn: document.getElementById('view-all-btn'),
+      mapResetViewBtn: document.getElementById('map-reset-view-btn'),
       departureInput: document.getElementById('departure-input'),
       departureSuggestions: document.getElementById('departure-suggestions'),
       budgetInput: document.getElementById('budget-input'),
@@ -6795,12 +6792,15 @@ class ReverseTravel {
     // 無いため3Dを開始できない。起動時に前回3Dだった場合の自動復元は、
     // 最初の検索結果が出た直後（renderSearchResults）で行う。
     this.elements.mapDimensionToggle?.addEventListener('click', () => this.toggleMapDimension());
-    // 【2026-10-15、11本目①②】地図の下の固定情報枠の閉じるボタン・
-    // 「全体を見る」ボタン（Minami決定：A・C）。
+    // 【2026-10-15、11本目①】地図の下の固定情報枠の閉じるボタン（Minami決定：A）。
     this.elements.spotInfoClose?.addEventListener('click', () => this.hideSpotInfoPanel());
-    this.elements.viewAllBtn?.addEventListener('click', () => {
-      if (this.mapMode === '3d') this.terrainMapView?.returnToOverview();
-      else this.mapView.returnToOverview();
+    // 【2026-10-21、41本目、Minami決定】最初の見え方に戻るボタン（地図の右上、方位磁針の
+    // すぐ下。2Dは右上）。検索した直後と同じ見え方（円が短辺の0.6、3Dは傾き45°・向きは
+    // 変えない）へなめらかに戻す。以前の「全体を見る」（寄っているときだけ出る文字ボタン）の
+    // 役目を引き継ぎ、いつでも押せるようにした（一度も検索していないときは出さない）。
+    this.elements.mapResetViewBtn?.addEventListener('click', () => {
+      if (this.mapMode === '3d') this.terrainMapView?.returnToSearchView({ durationMs: RESET_VIEW_DURATION_MS });
+      else this.mapView.returnToSearchView({ durationSec: RESET_VIEW_DURATION_MS / 1000 });
     });
     // 【4本目②】前回3Dを選んだ端末でだけ、ページの読み込みが落ち着いたあと
     // MapLibre一式を先読みする（2Dの人には一切先読みしない。Minami指示）。
@@ -7263,11 +7263,14 @@ class ReverseTravel {
     if (userTouch) {
       this.hideSpotInfoPanel();
     }
-    // 【37本目、Minami決定：B2】ユーザーが金額を上げたときだけ、前の縁から
-    // 新しい縁へ波を1本出す（下げたとき・裏取得による更新では出さない。
-    // 広がったかどうかは各地図側で半径を比べて判断する）。
-    this.mapView.updateReachCircle(budget, { style: 'live', wave: userTouch });
-    this.terrainMapView?.updateReachCircle(budget, { style: 'live', wave: userTouch });
+    // 【37本目、Minami決定：B2／41本目で変更】ユーザーが金額を上げたときだけ、出発駅
+    // （円の中心）から新しい縁へ波を1本出す。41本目から、円が広がらなかった（半径が
+    // 同じ）ときも出す（「ここまで届く」を見せるため）。下げたとき・裏取得による更新
+    // では出さない。上げたかどうかは、直前にこのメソッドへ渡された金額と比べる。
+    const raised = userTouch && this._liveMapBudget != null && budget > this._liveMapBudget;
+    this._liveMapBudget = budget;
+    this.mapView.updateReachCircle(budget, { style: 'live', wave: raised });
+    this.terrainMapView?.updateReachCircle(budget, { style: 'live', wave: raised });
     if (userTouch) {
       // 【2026-10-17、32本目B、Minami決定】まず円の半径が変わるのを見せ、
       // 最後の操作から0.4秒止まったら地図を円全体が収まる大きさへ合わせる。
@@ -7839,7 +7842,10 @@ class ReverseTravel {
     // 【2026-10-13、10本目②】「この条件で検索」を押した結果の表示なので、
     // 出発駅から近い順に点が波のように広がって出る演出を行う（Minami指示）。
     const departureStation = this.data.stations?.[departureStationId];
+    this._liveMapBudget = budget; // 【41本目】＋の波の「上げたか」の基準（updateMapBudgetLive()参照）
     this.mapView.render(departureStation, this.currentAllSpots, budget, { reveal: true });
+    // 【41本目】最初の見え方に戻るボタンは、一度検索したら出す。
+    if (this.elements.mapResetViewBtn) this.elements.mapResetViewBtn.hidden = false;
     // 3D地図は3D切替が一度も行われるまでインスタンス自体が無い（遅延読込、4本目②）。
     // 作成済みならrender()を呼ぶ（未初期化でも座標だけ保持する設計のため、
     // activateTerrainMap()が後から呼ばれたときに自動で反映される）。
@@ -7850,12 +7856,10 @@ class ReverseTravel {
       // 以前はfitToBudget()（スポット座標基準・最低ズーム9.5）のままで、
       // 予算によっては円がごく一部にしか見えない／画面からはみ出すことがあった
       // （Minami実機確認：富山駅前・往復¥500で円が小さすぎる、¥1,500ではみ出す）。
-      // 【37本目】「全体を見る」（returnToOverview()）も同じfitCircleToView()に
-      // 揃えた（検索直後と同じ見え方に戻る）。
-      this.terrainMapView.fitCircleToView({
-        radiusKm: this.terrainMapView.computeReachRadiusKm(budget),
-        animate: false,
-      });
+      // 【41本目】最初の見え方に戻るボタン・「← 一覧に戻る」と同じreturnToSearchView()
+      // （円が短辺の0.6、傾き45°、向きは変えない）を使う。3Dが見えていない（2D表示中）
+      // ときは、3Dに切り替えたとき（resize()）に合わせる。
+      this.terrainMapView.returnToSearchView({ durationMs: 0 });
     }
 
     // 【2026-10-14、25本目、不具合修正】updateMobileBudgetOverlay()・
@@ -7920,7 +7924,6 @@ class ReverseTravel {
           this.highlightCard(spotId);
           this.showSpotInfoPanel(spotId);
         };
-        this.terrainMapView.onFocusChange = () => this.updateViewAllButton();
         this.layoutController.terrainMapView = this.terrainMapView; // 遅延生成のため後から差し替える
       }
       await this.terrainMapView.ensureMap({ lat: station.stop_lat, lon: station.stop_lon });
@@ -7990,9 +7993,6 @@ class ReverseTravel {
         this.mapView.handleShown();
       }
     });
-    // 【2026-10-15、11本目②】「全体を見る」ボタンの表示判定は2D/3Dそれぞれ
-    // 独立して持っているため、切り替えのたびに今表示中の側の状態に合わせ直す。
-    this.updateViewAllButton();
     // 【2026-10-13、22本目、Minami決定】2D・3Dを切り替えても選んでいたピンは
     // 選ばれたままにする。
     this.reapplySelectionAfterModeSwitch();
@@ -8877,18 +8877,6 @@ class ReverseTravel {
     // 「▼条件を変える」）になったため、文言の付け替えはしない。「閉じる」は
     // #form-close-btn（常に「▲閉じる」、CSS側でcollapsed時のみ非表示）が担う。
     this.elements.searchSummaryToggle?.setAttribute('aria-expanded', String(!collapsed));
-  }
-
-  /**
-   * 【2026-10-15、11本目②、Minami決定：C】現在表示中の地図（2D/3D）が
-   * 寄っているときだけ「全体を見る」ボタンを出す。
-   */
-  updateViewAllButton() {
-    if (!this.elements.viewAllBtn) return;
-    const focused = this.mapMode === '3d'
-      ? !!this.terrainMapView?._focusedOnSpot
-      : this.mapView.isZoomedInPastOverview();
-    this.elements.viewAllBtn.hidden = !focused;
   }
 
   /**

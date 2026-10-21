@@ -3416,9 +3416,9 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
         await page.waitForTimeout(300);
         const panelBox3d = await page.locator('#spot-info-panel').boundingBox();
         record(`[${label}/3D] 名前の帯が予算操作帯と重ならない`, !rectsOverlap(panelBox3d, overlayBox3d), JSON.stringify({ panelBox3d, overlayBox3d }));
-        const viewAllBox3d = await page.locator('#view-all-btn').boundingBox().catch(() => null);
-        if (viewAllBox3d) {
-          record(`[${label}/3D] 「全体を見る」ボタンが回転ハンドルと重ならない`, !compassBox3d || !rectsOverlap(viewAllBox3d, compassBox3d), JSON.stringify({ viewAllBox3d, compassBox3d }));
+        const resetBox3d = await page.locator('#map-reset-view-btn').boundingBox().catch(() => null);
+        if (resetBox3d) {
+          record(`[${label}/3D] 最初の見え方に戻るボタンが回転ハンドルと重ならない`, !compassBox3d || !rectsOverlap(resetBox3d, compassBox3d), JSON.stringify({ resetBox3d, compassBox3d }));
         }
         await tiltCompletePromise3d;
         // 【26本目②、不具合修正】ピンを押したあと、読み込みが終わっても
@@ -3456,10 +3456,10 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
         // easeTo、onOverheadSettledを呼ばない）を通ってしまい、
         // onOverheadSettledを待つこのテスト自体がハングしていた
         // （実際に実行して確認：verify-layout全体が停止した）。
-        // 「全体を見る」で一度フォーカスを外してから押し直すことで、
+        // 最初の見え方に戻るボタン（41本目、以前の「全体を見る」）で一度フォーカスを外してから押し直すことで、
         // ここでの最初のクリックが必ず「降りる→傾ける」の2段階を
         // 通るようにする。
-        await page.click('#view-all-btn').catch(() => {});
+        await page.click('#map-reset-view-btn').catch(() => {});
         await page.waitForTimeout(2000);
         const overheadPromise = page.evaluate(() => new Promise((resolve) => {
           window.__terrainViewForDebug.onOverheadSettled = () => resolve();
@@ -3840,10 +3840,10 @@ async function checkReturnToOverview(browser, baseUrl, savedPaths) {
       // 【37本目、Minami決定】「全体を見る」は検索直後と同じfitCircleToView()（最後に
       // 検索した金額の円・既定の傾き57°）で戻るようになったため、基準値もそれで計算
       // させる（以前はfitToBudget()）。
-      await page.evaluate(() => {
+      await page.evaluate((pitch) => {
         const tv = window.__terrainViewForDebug;
-        tv.fitCircleToView({ radiusKm: tv.computeReachRadiusKm(tv._lastBudget), pitch: 57, animate: false });
-      });
+        tv.fitCircleToView({ radiusKm: tv.computeReachRadiusKm(tv._lastBudget), pitch, animate: false });
+      }, TEST_OVERVIEW_PITCH);
       await page.waitForTimeout(100); // easeTo()起動自体のラグを避ける（isMoving()が真になる前に見てしまうのを防ぐ）
       await page.waitForFunction(() => !window.__terrainMapForDebug.isMoving(), { timeout: 10000 }).catch(() => {});
       const overviewZoom = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
@@ -3859,8 +3859,9 @@ async function checkReturnToOverview(browser, baseUrl, savedPaths) {
           });
         }, { spot, station });
 
-        const viewAllVisibleWhenFocused = await page.locator('#view-all-btn').isVisible().catch(() => false);
-        record('[3D] 寄っている間は「全体を見る」ボタンが出る', viewAllVisibleWhenFocused);
+        // 【41本目】「全体を見る」は、いつでも出ている最初の見え方に戻るボタンに置き換えた。
+        const resetVisibleWhenFocused = await page.locator('#map-reset-view-btn').isVisible().catch(() => false);
+        record('[3D] 寄っている間も最初の見え方に戻るボタンが出ている', resetVisibleWhenFocused);
 
         // 予算（+）を触る＝ユーザー操作。
         // 【2026-10-17、32本目B、Minami決定】以前はここで「全体表示（fitToBudget
@@ -3896,8 +3897,8 @@ async function checkReturnToOverview(browser, baseUrl, savedPaths) {
           Math.abs(bearingAfterBudgetTouch - bearingBeforeFocus) < 0.01,
           `寄る前=${bearingBeforeFocus} / 操作後=${bearingAfterBudgetTouch}`
         );
-        const viewAllHiddenAfterReturn = await page.locator('#view-all-btn').isHidden().catch(() => false);
-        record('[3D] 予算操作で円に合わせて地図が動くと「全体を見る」ボタンが消える', viewAllHiddenAfterReturn);
+        const resetVisibleAfterBudget = await page.locator('#map-reset-view-btn').isVisible().catch(() => false);
+        record('[3D] 予算操作で円に合わせて地図が動いたあとも、最初の見え方に戻るボタンは出たまま', resetVisibleAfterBudget);
 
         const mapAreaBox = await page.locator('#map-area').boundingBox();
         const returnedPath = path.join(screenshotDir, 'return-to-overview-3d-pc.png');
@@ -3915,12 +3916,12 @@ async function checkReturnToOverview(browser, baseUrl, savedPaths) {
         // 【2026-10-18、33本目、不具合修正】上と同じ理由（page.click()の安定待ちが
         // 重い負荷下でタイムアウトし得る）でevaluate経由のclick()にする。
         // 【2026-10-19、34本目】押す前の隠れチェックも合わせて行う。
-        await clickElementChecked(page, 'view-all-btn', '[3D] 「全体を見る」ボタン');
+        await clickElementChecked(page, 'map-reset-view-btn', '[3D] 最初の見え方に戻るボタン');
         await page.waitForTimeout(100); // easeTo()起動自体のラグを避ける（isMoving()が真になる前に見てしまうのを防ぐ）
       await page.waitForFunction(() => !window.__terrainMapForDebug.isMoving(), { timeout: 10000 }).catch(() => {});
         const zoomAfterViewAllBtn = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
         record(
-          '[3D] 「全体を見る」ボタンで同じ全体の位置に戻る',
+          '[3D] 最初の見え方に戻るボタンで同じ全体の位置に戻る',
           Math.abs(zoomAfterViewAllBtn - overviewZoom) < 1.0,
           `全体=${overviewZoom.toFixed(2)} / ボタン後=${zoomAfterViewAllBtn.toFixed(2)}`
         );
@@ -3943,8 +3944,8 @@ async function checkReturnToOverview(browser, baseUrl, savedPaths) {
     const zoomedIn2d = overviewZoom2d + 3;
     await page.evaluate((z) => { window.__mapViewForDebug.map.setZoom(z, { animate: false }); }, zoomedIn2d);
     await page.waitForTimeout(200);
-    const viewAllVisible2d = await page.locator('#view-all-btn').isVisible().catch(() => false);
-    record('[2D] 手でズームすると「全体を見る」ボタンが出る', viewAllVisible2d);
+    const resetVisible2d = await page.locator('#map-reset-view-btn').isVisible().catch(() => false);
+    record('[2D] 手でズームしても最初の見え方に戻るボタンが出ている（41本目：いつでも出ている）', resetVisible2d);
 
     // 【2026-10-17、32本目B、Minami決定】以前は「予算を触るとfitToBudget基準の
     // overviewZoomへ戻る」ことを検証していたが、予算操作時の自動復帰は
@@ -4273,10 +4274,10 @@ async function checkInitialSearchCircleFit(browser, baseUrl, savedPaths) {
 
         const atZoomFloor = dim === '3d' ? ratio.zoom <= 8.55 : ratio.zoom <= 8.55;
         const ratioOk = dim === '3d'
-          ? (ratio.vertRatio >= 0.65 && ratio.vertRatio <= 0.85) || (ratio.horizRatio >= 0.65 && ratio.horizRatio <= 0.85)
-          : (ratio.vertRatio >= 0.65 && ratio.vertRatio <= 0.85 && ratio.horizRatio >= 0.65 && ratio.horizRatio <= 0.85);
+          ? (ratio.horizRatio >= TEST_FIT_RATIO_MIN && ratio.horizRatio <= TEST_FIT_RATIO_MAX)
+          : ((ratio.vertRatio >= TEST_FIT_RATIO_MIN && ratio.vertRatio <= TEST_FIT_RATIO_MAX) && (ratio.horizRatio >= TEST_FIT_RATIO_MIN && ratio.horizRatio <= TEST_FIT_RATIO_MAX));
         record(
-          `[${vLabel}/${dim}/¥${budget}] 検索直後、円の直径が見えている範囲の短辺の7〜8割（最低ズーム8.5に当たっている場合を除く）`,
+          `[${vLabel}/${dim}/¥${budget}] 検索直後、円の直径が見えている範囲の短辺の0.6前後（41本目。3Dは横方向。最低ズーム8.5に当たっている場合を除く）`,
           ratioOk || atZoomFloor,
           JSON.stringify({ ...ratio, atZoomFloor })
         );
@@ -4466,10 +4467,10 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
         const shortSide = Math.min(rect.width, rect.height);
         return { vertRatio: vertDiameterPx / shortSide, horizRatio: horizDiameterPx / shortSide, shortSide };
       });
-      const ratioOk3d = (diameterRatio3d.vertRatio >= 0.65 && diameterRatio3d.vertRatio <= 0.85)
-        || (diameterRatio3d.horizRatio >= 0.65 && diameterRatio3d.horizRatio <= 0.85);
+      // 【41本目】目標は0.75→0.6、3Dは35本目の決まりどおり横方向で見る。
+      const ratioOk3d = (diameterRatio3d.horizRatio >= TEST_FIT_RATIO_MIN && diameterRatio3d.horizRatio <= TEST_FIT_RATIO_MAX);
       record(
-        '[circle-fit/3D] 円の直径が見えている範囲の短辺の7〜8割（最低ズーム8.5に当たっている場合を除く）',
+        '[circle-fit/3D] 円の直径が見えている範囲の短辺の0.6前後（41本目。横方向。最低ズーム8.5に当たっている場合を除く）',
         ratioOk3d || atZoomFloor,
         JSON.stringify({ ...diameterRatio3d, atZoomFloor })
       );
@@ -4755,10 +4756,9 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       const shortSide = Math.min(rect.width, rect.height);
       return { vertRatio: vertDiameterPx / shortSide, horizRatio: horizDiameterPx / shortSide, shortSide };
     });
-    const ratioOk2d = diameterRatio2d.vertRatio >= 0.65 && diameterRatio2d.vertRatio <= 0.85
-      && diameterRatio2d.horizRatio >= 0.65 && diameterRatio2d.horizRatio <= 0.85;
+    const ratioOk2d = (diameterRatio2d.vertRatio >= TEST_FIT_RATIO_MIN && diameterRatio2d.vertRatio <= TEST_FIT_RATIO_MAX) && (diameterRatio2d.horizRatio >= TEST_FIT_RATIO_MIN && diameterRatio2d.horizRatio <= TEST_FIT_RATIO_MAX);
     record(
-      '[circle-fit/2D] 円の直径が見えている範囲の短辺の7〜8割（最低ズーム8.5に当たっている場合を除く）',
+      '[circle-fit/2D] 円の直径が見えている範囲の短辺の0.6前後（41本目。最低ズーム8.5に当たっている場合を除く）',
       ratioOk2d || atZoomFloor2d,
       JSON.stringify({ ...diameterRatio2d, atZoomFloor2d })
     );
@@ -4938,6 +4938,13 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
 const TEST_REFIT_UPPER_RATIO = 0.9;
 const TEST_REFIT_LOWER_RATIO = 0.35;
 const TEST_CIRCLE_WAVE_DURATION_MS = 500;
+// 【41本目、Minami決定：C／案1】地図を合わせたときの円の直径÷短辺（本番のCIRCLE_FIT_TARGET_DIAMETER_RATIO）と、
+// 全体の見え方（検索した直後・最初の見え方に戻るボタン・「← 一覧に戻る」）の3Dの傾き（本番のOVERVIEW_PITCH）。
+// 0.6の許容範囲は0.55〜0.65（35本目の0.75に対する0.65〜0.85より狭いのは、目標そのものが小さいため）。
+const TEST_FIT_RATIO_MIN = 0.55;
+const TEST_FIT_RATIO_MAX = 0.65;
+const TEST_OVERVIEW_PITCH = 45;
+const TEST_SPOT_FOCUS_PITCH = 60; // 本番のSPOT_FOCUS_PITCH（場所に寄ったときの傾き、41本目でも変えない）
 // 【37本目】3Dの波（0.5秒）の途中経過を測るための、実GPU（Direct3D 11）を使うChromiumの
 // 起動オプション。既定のヘッドレス起動はソフトウェア描画（SwiftShader）になり、地形に
 // かぶせた層（到達円・波）を描き直すたびに1コマ約1〜2秒かかる（画面サイズを400×464に
@@ -5284,7 +5291,7 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
             noMoveCases.push(entry);
           } else {
             const atFloor = after.zoom <= 8.55;
-            entry.ok = (after.ratio >= 0.7 && after.ratio <= 0.8) || atFloor;
+            entry.ok = (after.ratio >= TEST_FIT_RATIO_MIN && after.ratio <= TEST_FIT_RATIO_MAX) || atFloor;
             refitCases.push(entry);
           }
         }
@@ -5296,7 +5303,7 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
         JSON.stringify(noMoveCases)
       );
       record(
-        `${label} ＋で円が9割をこえたときだけ地図が引き、円の直径が短辺の0.75（7〜8割）になる`,
+        `${label} ＋で円が9割をこえたときだけ地図が引き、円の直径が短辺の0.6になる（41本目で0.75→0.6）`,
         refitCases.length > 0 && refitCases.every((c) => c.ok),
         JSON.stringify(refitCases)
       );
@@ -5385,8 +5392,8 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
       );
       if (first) {
         record(
-          `${label} 波は前の円の縁から始まり、新しい円の縁まで広がる`,
-          Math.abs(first.fromKm - plus.radiusBefore) < 0.01 && Math.abs(first.toKm - plus.radiusTarget) < 0.01
+          `${label} 波は出発駅（円の中心）から始まり、新しい円の縁まで広がる（41本目）`,
+          first.fromKm === 0 && Math.abs(first.toKm - plus.radiusTarget) < 0.01
             && seen.every((s) => s.radiusKm >= first.fromKm - 1e-6 && s.radiusKm <= first.toKm + 1e-6)
             && last.radiusKm > first.radiusKm,
           JSON.stringify({ fromKm: first.fromKm, toKm: first.toKm, radiusBefore: plus.radiusBefore, target: plus.radiusTarget, firstR: first.radiusKm, lastR: last.radiusKm })
@@ -5530,6 +5537,34 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
         if (dim === '3d') await waitForTerrainTilesLoaded(page);
       }
 
+      // 【41本目、Minami決定】＋で円が広がらなかった（半径が同じ）ときも、波は出す
+      // （「ここまで届く」を見せるため）。¥100上げても半径が変わらない金額を、本番と同じ
+      // 半径の計算（computeReachRadiusKm）で探してから押す。
+      const sameRadiusBudget = await page.evaluate((dim) => {
+        const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
+        for (let b = 300; b < 2000; b += 100) {
+          const r0 = view.computeReachRadiusKm(b);
+          if (r0 > 0 && Math.abs(view.computeReachRadiusKm(b + 100) - r0) < 1e-9) return b;
+        }
+        return null;
+      }, dim);
+      if (sameRadiusBudget) {
+        await setBudgetSlider(page, sameRadiusBudget);
+        await waitForCircleSettled(page, dim);
+        if (dim === '3d') await waitForTerrainTilesLoaded(page);
+        const same = await clickAndSampleWave(page, dim, 'budget-increment');
+        const seenSame = same.samples.filter((x) => x.radiusKm !== undefined);
+        record(
+          `${label} ＋で円の半径が変わらなかったときも、出発駅から今の縁まで波が出る（41本目）`,
+          Math.abs(same.radiusTarget - same.radiusBefore) < 1e-6 && seenSame.length > 0 && seenSame[0].fromKm === 0
+            && Math.abs(seenSame[0].toKm - same.radiusTarget) < 0.01,
+          JSON.stringify({ budget: sameRadiusBudget, radiusBefore: same.radiusBefore, radiusTarget: same.radiusTarget, waveSamples: seenSame.length })
+        );
+        await waitForCircleSettled(page, dim);
+      } else {
+        record(`${label} ¥100上げても半径が変わらない金額が見つかる（検証の前提）`, false);
+      }
+
       // −：波は出ない（円が縮むだけ）。
       await assertNotObscured(page, 'budget-decrement', `${label} −`);
       const minus = await clickAndSampleWave(page, dim, 'budget-decrement', 800);
@@ -5565,8 +5600,8 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
       const w0 = rapid.waves[0];
       const w1 = rapid.waves[1];
       record(
-        `${label} ＋を続けて押すと、押すたびにその時の縁から新しい波が1本出る（同時に出ている波は1本だけ）`,
-        !!w0 && !!w1 && w1.fromKm > w0.fromKm && w1.fromKm <= w0.toKm + 1e-6 && (rapid.overlays === null || rapid.overlays === 1),
+        `${label} ＋を続けて押すと、押すたびに出発駅から新しい波が1本出る（前の波と入れ替わり、同時に出ている波は1本だけ）`,
+        !!w0 && !!w1 && w0.fromKm === 0 && w1.fromKm === 0 && w1.toKm >= w0.toKm && (rapid.overlays === null || rapid.overlays === 1),
         JSON.stringify(rapid)
       );
       await waitForCircleSettled(page, dim);
@@ -5631,8 +5666,17 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
         if (dim === '3d') await waitForTerrainCameraIdle(page);
         await page.waitForTimeout(500);
         const baseline = await measureCircleState(page, dim);
-        const hiddenAtStart = await page.locator('#view-all-btn').isHidden().catch(() => false);
-        record(`${label} 検索直後は「全体を見る」ボタンが出ていない`, hiddenAtStart);
+        // 【41本目】「全体を見る」（寄っているときだけ出る）は、いつでも出ている
+        // 最初の見え方に戻るボタン（#map-reset-view-btn）に置き換えた。
+        const shownAtStart = await page.locator('#map-reset-view-btn').isVisible().catch(() => false);
+        record(`${label} 検索した直後から、最初の見え方に戻るボタンが出ている`, shownAtStart);
+        if (dim === '3d') {
+          record(
+            `${label} 検索した直後の3Dの傾きは45°（全体の見え方、41本目）`,
+            Math.abs(baseline.pitch - TEST_OVERVIEW_PITCH) < 0.5,
+            `pitch=${baseline.pitch}`
+          );
+        }
 
         // 拡大・移動する（2Dは手でズーム＋ずらす、3Dは場所に寄る）。
         if (dim === '3d') {
@@ -5658,14 +5702,21 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
           await page.waitForTimeout(300);
         }
         const moved = await measureCircleState(page, dim);
-        const shownWhenZoomed = await page.locator('#view-all-btn').isVisible().catch(() => false);
+        const shownWhenZoomed = await page.locator('#map-reset-view-btn').isVisible().catch(() => false);
         record(
-          `${label} 拡大・移動すると「全体を見る」ボタンが出る`,
+          `${label} 拡大・移動したあとも、最初の見え方に戻るボタンが出ている`,
           shownWhenZoomed && moved.zoom > baseline.zoom + 0.5,
           JSON.stringify({ baselineZoom: baseline.zoom, movedZoom: moved.zoom })
         );
+        if (dim === '3d') {
+          record(
+            `${label} ピンに寄ったときの傾きは今までどおり（SPOT_FOCUS_PITCH）`,
+            Math.abs(moved.pitch - TEST_SPOT_FOCUS_PITCH) < 0.5,
+            `pitch=${moved.pitch}`
+          );
+        }
 
-        await clickElementChecked(page, 'view-all-btn', `${label} 「全体を見る」`);
+        await clickElementChecked(page, 'map-reset-view-btn', `${label} 最初の見え方に戻るボタン`);
         await page.waitForTimeout(200);
         if (dim === '3d') await waitForTerrainCameraIdle(page);
         await page.waitForTimeout(1800);
@@ -5673,13 +5724,13 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
         const back = await measureCircleState(page, dim);
         const shift = await centerShiftPx(page, dim, baseline.center);
         record(
-          `${label} 「全体を見る」で、検索した直後と同じ中心とズームに戻る`,
+          `${label} 最初の見え方に戻るボタンで、検索した直後と同じ中心・ズーム・傾きに戻る`,
           Math.abs(back.zoom - baseline.zoom) < 0.05 && shift < 3
             && (dim === '2d' || Math.abs(back.pitch - baseline.pitch) < 0.5),
           JSON.stringify({ baselineZoom: baseline.zoom, backZoom: back.zoom, centerShiftPx: +shift.toFixed(2), baselinePitch: baseline.pitch, backPitch: back.pitch })
         );
-        const hiddenAfter = await page.locator('#view-all-btn').isHidden().catch(() => false);
-        record(`${label} 戻ったあとは「全体を見る」ボタンが消える`, hiddenAfter);
+        const shownAfter = await page.locator('#map-reset-view-btn').isVisible().catch(() => false);
+        record(`${label} 戻ったあとも、最初の見え方に戻るボタンは出たまま`, shownAfter);
         record(`${label} コンソールにエラーが出ていない（標高タイルの404を除く）`, errors.length === 0, errors.join(' / '));
       } catch (e) {
         record(`${label} 検証中にクラッシュしない`, false, e.message);
@@ -5829,7 +5880,7 @@ async function checkReturnToListMatchesSearchView(browser, baseUrl, savedPaths) 
  * 確認：富山駅北口・往復¥500で、2Dにすると寄りすぎ・ピンで画面が埋まり円が見えない）。
  * PC、富山駅北口・往復¥500で次の3通りを確かめる：
  *   「3Dで検索 → 2Dに切り替え」「2Dで検索」「2Dで検索 → 3Dに切り替え → 2Dに戻す」。
- * どの場合も、円の直径が短辺の0.75前後・描かれている円が今の半径・¥500を超えるピンは
+ * どの場合も、円の直径が短辺の0.6前後（41本目）・描かれている円が今の半径・¥500を超えるピンは
  * 出ていないこと。あわせて「2Dで検索」した直後のスクリーンショットを撮る。
  */
 async function checkTwoDSearchViewAfterModeSwitch(browser, baseUrl, savedPaths) {
@@ -5868,8 +5919,8 @@ async function checkTwoDSearchViewAfterModeSwitch(browser, baseUrl, savedPaths) 
     }, { timeout: 10000 }).catch(() => {});
     const s = await state2d(page);
     record(
-      `${label} 円の直径が短辺の0.75前後（0.7〜0.8）・描かれている円が今の半径・¥500を超えるピンが出ていない`,
-      s.ratio >= 0.7 && s.ratio <= 0.8 && s.drawnKm !== null && Math.abs(s.drawnKm - s.radiusKm) < 0.01 && s.shownOverBudget === 0,
+      `${label} 円の直径が短辺の0.6前後（0.55〜0.65、41本目）・描かれている円が今の半径・¥500を超えるピンが出ていない`,
+      (s.ratio >= TEST_FIT_RATIO_MIN && s.ratio <= TEST_FIT_RATIO_MAX) && s.drawnKm !== null && Math.abs(s.drawnKm - s.radiusKm) < 0.01 && s.shownOverBudget === 0,
       JSON.stringify(s)
     );
   };
@@ -5940,6 +5991,131 @@ async function checkTwoDSearchViewAfterModeSwitch(browser, baseUrl, savedPaths) 
       record(`${label} ページエラーが出ていない`, errors.length === 0, errors.join(' / '));
     } catch (e) {
       record(`${label} 検証中にクラッシュしない`, false, e.message);
+    } finally {
+      await context.close();
+    }
+  }
+}
+
+/**
+ * 【2026-10-21、41本目、Minami決定】最初の見え方に戻るボタン（#map-reset-view-btn）。
+ * - 一度も検索していないときは出ない。
+ * - 375×667・390×844・400×464・PC × 2D/3Dで、ほかの部品（方位磁針・ハンドル・2D/3D切替・
+ *   2Dのズーム・出典・スマホの予算操作帯）と重ならず、すき間が8px以上・地図の中に収まる。
+ * - 3Dでは上から方位磁針 → 戻るボタン → ハンドルの順、2Dでは右上。
+ * - 32px前後の丸・aria-labelが「出発駅を中心に、最初の見え方に戻す」・オレンジのしずく形。
+ * あわせて、PC・400×464の3Dで検索した直後（戻るボタンが見える状態）のスクリーンショットを撮る。
+ * （押したときに検索直後と同じ中心・ズーム・傾きに戻ることはcheckRefitOnlyWhenNeededAndWave()で検証）
+ */
+async function checkResetViewButton(browser, baseUrl, savedPaths) {
+  console.log('\n=== 41本目：最初の見え方に戻るボタン ===');
+  const viewports = { sp375: { width: 375, height: 667 }, sp390: { width: 390, height: 844 }, own: { width: 400, height: 464 }, pc: VIEWPORTS.pc };
+  for (const [vLabel, viewport] of Object.entries(viewports)) {
+    const isMobile = vLabel !== 'pc';
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+    page.on('console', (msg) => {
+      if (msg.type() === 'error' && !isKnownAcceptableConsoleMessage(msg.text())) errors.push(msg.text());
+    });
+    try {
+      await page.goto(baseUrl, { waitUntil: 'load' });
+      await page.waitForSelector('#departure-input');
+      await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+      if (isMobile) {
+        await page.click('.tab-btn[data-tab="map"]');
+        await page.waitForTimeout(300);
+      }
+      const shownBeforeSearch = await page.locator('#map-reset-view-btn').isVisible().catch(() => false);
+      record(`[41/reset-btn/${vLabel}] 一度も検索していないときは、最初の見え方に戻るボタンが出ない`, !shownBeforeSearch);
+      if (isMobile) {
+        await page.click('.tab-btn[data-tab="list"]');
+        await page.waitForTimeout(200);
+      }
+      await searchAtAndWaitPrefetch(page, '富山駅前', 500);
+      if (isMobile) {
+        await page.click('.tab-btn[data-tab="map"]');
+        await page.waitForTimeout(400);
+      }
+      for (const dim of ['2d', '3d']) {
+        const label = `[41/reset-btn/${vLabel}/${dim}]`;
+        if (dim === '3d') {
+          await page.click('#map-dimension-toggle');
+          const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+          record(`${label} 3D化（検証の前提）`, ok);
+          if (!ok) break;
+          await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+          // 3Dのまま検索し直して、検索した直後の見え方にする（スクリーンショット用）。
+          await searchKeepingMapVisible(page, '富山駅前', 500, isMobile);
+          await page.waitForTimeout(500);
+          await waitForTerrainCameraIdle(page);
+          await waitForTerrainTilesLoaded(page);
+          // 初めて3Dにしたときだけ出る案内の吹き出しは、押すと消える（重なり判定の対象外にする）。
+          await page.evaluate(() => document.getElementById('map-rotate-hint')?.click());
+          await page.waitForTimeout(200);
+        }
+        const info = await page.evaluate(() => {
+          const rectOf = (el) => {
+            if (!el) return null;
+            const cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || el.hidden) return null;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0 ? { x: r.x, y: r.y, width: r.width, height: r.height } : null;
+          };
+          const btn = document.getElementById('map-reset-view-btn');
+          const others = {
+            compass: document.getElementById('map-compass-btn'),
+            handle: document.getElementById('map-rotate-handle'),
+            dimensionToggle: document.getElementById('map-dimension-toggle'),
+            leafletZoom: document.querySelector('#map-area .leaflet-control-zoom'),
+            leafletAttribution: document.querySelector('#map-area .leaflet-control-attribution'),
+            maplibreAttribution: document.querySelector('#map-area .maplibregl-ctrl-attrib'),
+            budgetOverlay: document.getElementById('mobile-budget-overlay'),
+          };
+          const out = {};
+          for (const [k, el] of Object.entries(others)) out[k] = rectOf(el);
+          return {
+            btn: rectOf(btn),
+            mapArea: rectOf(document.getElementById('map-area')),
+            ariaLabel: btn?.getAttribute('aria-label'),
+            pinFill: btn ? getComputedStyle(btn.querySelector('.map-reset-view-pin')).fill : null,
+            others: out,
+          };
+        });
+        if (!info.btn) { record(`${label} 最初の見え方に戻るボタンが出ている`, false); continue; }
+        record(`${label} 最初の見え方に戻るボタンが出ている（32px前後の丸）`, Math.abs(info.btn.width - 32) <= 4 && Math.abs(info.btn.height - 32) <= 4, JSON.stringify(info.btn));
+        record(`${label} aria-labelが「出発駅を中心に、最初の見え方に戻す」`, info.ariaLabel === '出発駅を中心に、最初の見え方に戻す', info.ariaLabel);
+        record(`${label} 出発駅と同じオレンジのしずく形が入っている`, info.pinFill === 'rgb(224, 108, 44)', info.pinFill);
+        const ma = info.mapArea;
+        record(
+          `${label} 地図の中に収まり、右上にある`,
+          info.btn.x >= ma.x && info.btn.y >= ma.y && info.btn.x + info.btn.width <= ma.x + ma.width && info.btn.y + info.btn.height <= ma.y + ma.height
+            && info.btn.x + info.btn.width >= ma.x + ma.width - 60 && info.btn.y <= ma.y + (dim === '3d' ? 60 : 20),
+          JSON.stringify({ btn: info.btn, mapArea: ma })
+        );
+        const tooClose = Object.entries(info.others)
+          .filter(([, r]) => r)
+          .map(([k, r]) => ({ k, gap: rectGap(info.btn, r) }))
+          .filter(({ gap }) => gap < 8);
+        record(`${label} ほかの部品と重ならず、すき間が8px以上`, tooClose.length === 0, JSON.stringify(tooClose));
+        if (dim === '3d' && info.others.compass && info.others.handle) {
+          record(
+            `${label} 上から方位磁針 → 戻るボタン → ハンドルの順`,
+            info.others.compass.y + info.others.compass.height <= info.btn.y && info.btn.y + info.btn.height <= info.others.handle.y,
+            JSON.stringify({ compass: info.others.compass, btn: info.btn, handle: info.others.handle })
+          );
+        }
+        if (dim === '3d' && (vLabel === 'pc' || vLabel === 'own')) {
+          const shotPath = path.join(screenshotDir, `round41-3d-after-search-${vLabel}.png`);
+          await page.screenshot({ path: shotPath, clip: await page.locator('#map-area').boundingBox() });
+          savedPaths.push(shotPath);
+        }
+        await checkNoHorizontalOverflow(page, `${label} 戻るボタンを出したあと`);
+      }
+      record(`[41/reset-btn/${vLabel}] コンソールにエラーが出ていない（標高タイルの404を除く）`, errors.length === 0, errors.join(' / '));
+    } catch (e) {
+      record(`[41/reset-btn/${vLabel}] 検証中にクラッシュしない`, false, e.message);
     } finally {
       await context.close();
     }
@@ -6263,8 +6439,11 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
     }
 
     // 2Dでは出ない
-    const clusterHiddenIn2d = await page.locator('#map-controls-cluster').isVisible().catch(() => false);
-    record(`[${label}] 2Dでは方位磁針・ハンドルが出ない`, !clusterHiddenIn2d);
+    // 【41本目】入れ物（#map-controls-cluster）は最初の見え方に戻るボタンのため2Dでも出るように
+    // なったので、方位磁針・ハンドルそれぞれが出ていないことを見る。
+    const compassVisibleIn2d = await page.locator('#map-compass-btn').isVisible().catch(() => false);
+    const handleVisibleIn2d = await page.locator('#map-rotate-handle').isVisible().catch(() => false);
+    record(`[${label}] 2Dでは方位磁針・ハンドルが出ない`, !compassVisibleIn2d && !handleVisibleIn2d);
 
     await page.click('#map-dimension-toggle');
     const became3d = await page.waitForFunction(
@@ -6798,6 +6977,7 @@ async function main() {
     await checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths);
     await checkReturnToListMatchesSearchView(browser, baseUrl, savedPaths);
     await checkTwoDSearchViewAfterModeSwitch(browser, baseUrl, savedPaths);
+    await checkResetViewButton(browser, baseUrl, savedPaths);
     await checkBreadcrumbTrail(browser, baseUrl, savedPaths);
     await checkBudgetSlider(browser, baseUrl, savedPaths);
     await checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths);

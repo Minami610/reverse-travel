@@ -768,7 +768,7 @@ header p {
 /* 【2026-10-13、22本目、Minami決定】スマホでは地図の下端いっぱいに予算操作帯
    を出すため、出典（attribution）コントロール（2D=Leaflet・3D=MapLibreとも
    既定は右下）を左上・2D/3D切替ボタンの下へ移す。方位磁針（MapLibre既定は
-   右上）・「全体を見る」（右上、view-all-btn参照）は右側のまま変更しない。 */
+   右上）・最初の見え方に戻るボタン（右上、#map-controls-cluster参照）は右側のまま変更しない。 */
 @media (max-width: 759px) {
   #map-area .leaflet-bottom.leaflet-right,
   #map-area .maplibregl-ctrl-bottom-right {
@@ -1028,52 +1028,18 @@ header p {
   white-space: nowrap;
 }
 
-/* 【2026-10-15、11本目②】「全体を見る」ボタン（Minami決定：C）。右上の
-   回転ハンドル（3Dのみ）の下に重ならない位置に置く。
-   【2026-10-14、23本目修正】方位磁針（MapLibreのNavigationControl、
-   高さ約29px）を「つかんで回すハンドル」（56px）に置き換えたため、
-   top値を54px→78px（8px開始＋56px＋8pxの隙間）に広げた。
-   【2026-10-16、27本目修正】ハンドルを56px→64pxに拡大したため、
-   78px→86px（8px開始＋64px＋14pxの隙間、元と同じ隙間を維持）に広げた。
-   【2026-10-17、32本目A、Minami決定】方位磁針を別に分離し、ハンドルの上に
-   方位磁針（32px）を置く構成（#map-controls-cluster）に変えたため、
-   クラスタ全体の高さ（8px開始＋32px＋8px隙間＋72px＝120px）＋8pxの隙間で
-   128pxに広げた。低い画面（高さ500px以下）では、クラスタ＋全体を見るが
-   縦に収まらないため、地図の左上（2D/3D切替ボタンの下）へ移す
-   （Minami決定：A-3）。 */
-.view-all-btn {
-  position: absolute;
-  top: 128px;
-  right: 8px;
-  z-index: 1000;
-  padding: 0.35rem 0.7rem;
-  border: none;
-  border-radius: 999px;
-  background-color: rgba(255, 255, 255, 0.92);
-  color: var(--color-text);
-  font-size: 0.78rem;
-  font-weight: 600;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-  cursor: pointer;
-}
-
-/* 【2026-10-17、32本目A】低い画面（高さ500px以下、400×464などのスマホ実機を
-   想定）では、右上の縦の並び（方位磁針128px分＋クラスタ）に「全体を見る」
-   まで収めると窮屈・他要素と重なるため、地図の左上（2D/3D切替ボタン
-   top:8px・高さ約32.8px、出典ボタンtop:54px、の下）へ移す。 */
-@media (max-height: 500px) {
-  .view-all-btn {
-    top: 94px;
-    right: auto;
-    left: 8px;
-  }
-}
+/* 【2026-10-21、41本目、Minami決定】寄っているときだけ出していた「全体を見る」
+   文字ボタン（11本目②、.view-all-btn）は、いつでも出ている「最初の見え方に戻るボタン」
+   （.map-reset-view-btn、下の#map-controls-clusterの中）に置き換えた。 */
 
 /* 【2026-10-17、32本目A、Minami決定】方位磁針（上、32px）とハンドル（下、
    72px）を縦に並べ、左右中心をそろえるための入れ物。flexboxの
    align-items:centerで、サイズの違う2つの丸を自動的に中心そろえできる。 */
 .map-controls-cluster {
-  display: none;
+  /* 【41本目】最初の見え方に戻るボタンは2Dでも出すため、入れ物自体はいつも出す
+     （方位磁針・ハンドルは下の規則で3Dのときだけ出す）。上から：方位磁針 → 戻るボタン →
+     ハンドル（3D）。2Dは戻るボタンだけが右上に来る。 */
+  display: flex;
   position: absolute;
   top: 8px;
   right: 8px;
@@ -1083,8 +1049,50 @@ header p {
   gap: 8px;
 }
 
-#map-area.mode-3d .map-controls-cluster {
+#map-area:not(.mode-3d) .map-compass-btn,
+#map-area:not(.mode-3d) .map-rotate-handle {
+  display: none;
+}
+
+/* 【2026-10-21、41本目、Minami決定】最初の見え方に戻るボタン。方位磁針と同じ32pxの
+   白い丸に、地図の出発駅と同じオレンジのしずく形を小さく入れる（GPSの現在地ボタン
+   「⌖」と間違われないようにするため）。一度も検索していないときはhidden属性で隠す
+   （display:flexを指定しているため、[hidden]のときの規則を明示しないと隠れない）。 */
+.map-reset-view-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--color-border);
+  background-color: white;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
   display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.map-reset-view-btn[hidden] {
+  display: none;
+}
+
+.map-reset-view-btn:focus-visible {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.map-reset-view-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.map-reset-view-pin {
+  /* 3Dの出発駅の印（terrain-map-view.jsのmaplibregl.Marker({color:'#e06c2c'})）と同じ色 */
+  fill: #e06c2c;
+}
+
+.map-reset-view-pin-dot {
+  fill: white;
 }
 
 /* 方位磁針：押すと北（bearing0）だけに戻る（傾きは変えない）。ハンドルから
@@ -1314,7 +1322,9 @@ header p {
    合わせて出す。 */
 .map-rotate-hint {
   position: absolute;
-  top: 58px;
+  /* 【41本目】ハンドルの上に最初の見え方に戻るボタン（32px＋隙間8px）が入ったため、
+     58px→98pxへ下げた（矢印がハンドルの中心を指す位置）。 */
+  top: 98px;
   right: 88px;
   max-width: 180px;
   z-index: 1000;

@@ -71,7 +71,11 @@ const MAP_CIRCLE_FIT_DURATION_SEC = 0.45;
 // 見えている範囲の短い辺の7〜8割になるように」という目標から、3D側の
 // CIRCLE_FIT_TARGET_DIAMETER_RATIOと同じ考え方で余白の比率を決める
 // （2Dは方位磁針・ハンドルが無いため、3D側のような右側の追加余白は不要）。
-const MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO = 0.75;
+// 【2026-10-21、41本目、Minami決定：C】0.75→0.6。金額が大きくなって地図が引いたあと、
+// ＋を押しても円の広がりが小さく見えた（40本目の計測：＋1回で縁が動くのはPCで30px前後、
+// 400×464で15px前後）。地図を合わせたときの円を小さめにして、広がる余地を残す。
+// 金額操作で9割をこえたときも、3.5割を下回ったときも、この0.6に合わせる。
+const MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO = 0.6;
 // 【2026-10-19、34本目、Minami決定：B】「全体を見る」・検索直後の全体表示
 // （fitToBudget()、2Dはこの定数を使わず別途maxZoom:16のみで下限なし）は
 // 変えない。円を合わせるとき（fitCircleToView()）だけ、小さいスマホで
@@ -86,6 +90,7 @@ const MAP_CIRCLE_FIT_MIN_ZOOM = 8.5;
 // 新しいエリアが開けた感じが無かった）。円の直径÷見えている範囲の短辺が
 // 上限（0.9）をこえたら0.75へ引き、下限（0.35）を下回ったら0.6へ寄る。
 // その間は地図を動かさず、円だけが広がる・縮む。
+// 【41本目】9割をこえたときの行き先も0.75→0.6（MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO）。
 const MAP_CIRCLE_REFIT_UPPER_RATIO = 0.9;
 const MAP_CIRCLE_REFIT_LOWER_RATIO = 0.35;
 const MAP_CIRCLE_ZOOM_IN_TARGET_RATIO = 0.6;
@@ -135,10 +140,8 @@ export class MapView {
     this._waveTimers = [];
     this._pendingWaveReveal = false; // 【2026-10-13、10本目②】layout-controller.jsのinvalidateMapSize()参照
     this._needsSearchFit = false; // 【40本目】見えていない間に検索があり、見えたときに検索直後の見え方へ合わせ直す必要がある
-    this._overviewZoom = null; // 【2026-10-15、11本目②】直近のfitToBudget()が合わせたズーム（寄っているか判定用）
 
     this.onSelectionChange = null; // (spotId) => void … ピン選択と一覧パネルの連動用
-    this.onFocusChange = null; // 【2026-10-15、11本目②】(focused: boolean) => void … 「全体を見る」ボタンの表示切替用
   }
 
   ensureMap() {
@@ -166,12 +169,9 @@ export class MapView {
     // 検証用の参照（terrain-map-view.jsのwindow.__terrainViewForDebugと同じ考え方）。
     // アプリ自体はこれを使わない。本番でも害はないため条件分岐は入れていない。
     window.__mapViewForDebug = this;
-
-    // 【2026-10-15、11本目②】ユーザーが手でズームした結果、全体（_overviewZoom）
-    // より寄った状態になったかを「全体を見る」ボタンの表示判定に使う。
-    this.map.on('zoomend', () => {
-      if (this.onFocusChange) this.onFocusChange(this.isZoomedInPastOverview());
-    });
+    // 【41本目】以前はここでzoomendを見て「全体を見る」ボタン（寄っているときだけ出る）の
+    // 表示を切り替えていたが、ボタンをいつでも出ている「最初の見え方に戻るボタン」に
+    // 置き換えたため不要になった。
   }
 
   /**
@@ -238,20 +238,14 @@ export class MapView {
     // 同じ「円に合わせる」計算（fitCircleToView、最低ズーム8.5）に揃える。
     // fitToBudget()自体はこのまま呼ぶ（lastBounds・lastBudgetの記録のため）が、
     // 実際にカメラを置く位置はfitCircleToView()で上書きする。
-    // 【37本目】「全体を見る」（returnToOverview()）も同じfitCircleToView()に
-    // 揃えたため、検索直後と「全体を見る」の見え方は同じになる。
+    // 【37本目・41本目】最初の見え方に戻るボタン（returnToSearchView()）も同じ
+    // fitCircleToView()のため、検索直後と同じ見え方に戻る。
     this.fitToBudget(budget, { animate: false });
     this.updateReachCircle(budget, { style: 'settled' });
     const fittedZoom = this.fitCircleToView({ radiusKm: this.computeReachRadiusKm(budget), animate: false });
     // 【40本目、不具合修正】3D表示中など2Dが見えていない間の検索では、ここで合わせられない。
     // 見えたとき（handleShown()）に検索直後の見え方へ合わせ直すため覚えておく。
     this._needsSearchFit = fittedZoom == null;
-    // 【不具合修正】_overviewZoomをfitToBudget()が計算した値（スポット座標
-    // 基準）のまま残すと、検索直後（実際のカメラはfitCircleToView()の位置）
-    // でisZoomedInPastOverview()が「もう全体より寄っている」と誤判定し、
-    // 「全体を見る」ボタンが検索直後から出てしまう。実際にカメラを置いた
-    // 位置（fitCircleToView()の結果）を基準に更新し直す。
-    if (this.map) this._overviewZoom = this.map.getZoom();
     if (reveal) this._startWaveReveal();
 
     // PC/スマホの切り替えやタブが非表示（display:none）のタイミングで
@@ -382,8 +376,6 @@ export class MapView {
    * 予算以下（帯＋それより安い点）が全部入るよう、地図をなめらかに引く/寄せる。
    * スライダーを指から離したときに呼ぶ想定（Minami指示：動かしている間は
    * カメラを動かさない）。新規検索時（animate:false）は瞬時に合わせる。
-   * 【2026-10-15、11本目②】この「全体の位置」をreturnToOverview()・
-   * isZoomedInPastOverview()の基準として_overviewZoomに覚えておく。
    * @param {number} budget
    * @param {{animate?: boolean, durationSec?: number}} [opts]
    */
@@ -411,7 +403,6 @@ export class MapView {
     // 【2026-10-10】¥2000選択時に点が画面端からはみ出る不具合をMinamiが
     // スクリーンショットで発見（主に3D側だったが、余白は2Dも合わせて広げる）。
     const options = { padding: [48, 48], maxZoom: 16 };
-    this._overviewZoom = Math.min(this.map.getBoundsZoom(bounds, false, L.point(48, 48)), options.maxZoom);
     if (reachPrefersReducedMotion()) {
       // 【2026-10-20、36本目、不具合修正】animate:falseをoptionsに含めず
       // this.map.fitBounds()を呼ぶと、Leafletが「animateを指定しない」場合の
@@ -431,7 +422,6 @@ export class MapView {
       // 上のreachPrefersReducedMotion()分岐と同じ理由でanimate:falseを明示する。
       this.map.fitBounds(bounds, { ...options, animate: false });
     }
-    if (this.onFocusChange) this.onFocusChange(false);
   }
 
   /**
@@ -500,7 +490,6 @@ export class MapView {
     const radiusKm = this.lastBudget != null ? this.computeReachRadiusKm(this.lastBudget) : 0;
     if (radiusKm > 0) {
       this.fitCircleToView({ radiusKm, animate: false });
-      if (this.map) this._overviewZoom = this.map.getZoom();
     } else if (this.lastBounds.length > 0) {
       // 到達範囲0km（0件検索）等、円が無いときだけ以前どおりスポット座標
       // （実質は出発駅のみ）基準でフィットする。
@@ -510,39 +499,22 @@ export class MapView {
   }
 
   /**
-   * 【2026-10-15、11本目②、Minami決定：C】ユーザーが手でズームして、
-   * 全体の位置（_overviewZoom）より寄っているかどうか。
-   * 「全体を見る」ボタンの表示判定・予算操作時の自動復帰判定に使う。
-   */
-  isZoomedInPastOverview() {
-    if (!this.map || this._overviewZoom == null) return false;
-    return this.map.getZoom() > this._overviewZoom + 0.3;
-  }
-
-  /**
-   * 「全体を見る」ボタン・予算操作時の自動復帰（Minami決定：C）。寄っている
-   * ときに全体の位置へなめらかに引く。向き（bearing）は2Dに無いため変更不要。
-   * 【2026-10-20、37本目、Minami決定】以前は昔の全体表示の計算（fitToBudget()、
-   * スポット座標基準）で戻していたため、検索直後（36本目からfitCircleToView()）
-   * より引いた位置に戻ってしまっていた。「全体を見る」は「最初の見え方に戻る」
-   * ボタンなので、検索直後と同じfitCircleToView()（いつも0.75に合わせる。
-   * 金額操作時の「必要なときだけ動かす」判断は使わない）で、最後に検索した
-   * 金額の円に合わせる。
+   * 【2026-10-21、41本目、Minami決定】最初の見え方に戻るボタン（地図の右上、いつでも
+   * 出ている）。検索した直後と同じ見え方（最後に検索した金額の円が短辺の0.6）へ
+   * なめらかに戻す。以前の「全体を見る」（寄っているときだけ出る文字ボタン、
+   * returnToOverview()）の役目を引き継いだため、寄っているかどうかの判定
+   * （isZoomedInPastOverview()・_overviewZoom）は不要になり削除した。
+   * 向き（bearing）は2Dに無いため変更不要。
    * @param {{durationSec?: number}} [opts]
    */
-  returnToOverview({ durationSec = 1.5 } = {}) {
-    if (!this.map || this.lastBudget == null || !this.isZoomedInPastOverview()) return;
+  returnToSearchView({ durationSec = 1.5 } = {}) {
+    if (!this.map || this.lastBudget == null) return;
     this._cancelFitCircleToView();
-    const zoom = this.fitCircleToView({
+    this.fitCircleToView({
       radiusKm: this.computeReachRadiusKm(this.lastBudget),
       animate: true,
       durationSec,
     });
-    // 行き先のズームを全体の基準にする（検索直後に記録した値と同じになるはずだが、
-    // その後の画面サイズ変更等にも追従させる）。途中のzoomendでは行き先より
-    // 寄った値が出るが、そのときボタンが一瞬残っても最後のzoomendで消える。
-    if (zoom != null) this._overviewZoom = zoom;
-    if (this.onFocusChange) this.onFocusChange(false);
   }
 
   /**
@@ -579,10 +551,12 @@ export class MapView {
    */
   updateReachCircle(budget, { style = 'live', wave = false } = {}) {
     const targetKm = this.computeReachRadiusKm(budget);
-    // 【37本目、Minami決定：B2】ユーザーが金額を上げて円が広がるときだけ、
-    // 「その時の縁」（アニメーション途中ならその値）から新しい縁へ波を出す。
-    if (wave && targetKm > this._reachCircleRadiusKm + 0.01) {
-      this._startCircleWave(this._reachCircleRadiusKm, targetKm);
+    // 【41本目、Minami決定】ユーザーが金額を上げたとき（呼び出し元のmain.jsがwave:trueを
+    // 渡す）、出発駅（円の中心）から新しい縁まで波を出す。37本目は「前の縁から」で、
+    // 円が広がらなかったときは出さなかったが、「ここまで届く」を見せるため、半径が
+    // 同じでも出す。
+    if (wave && targetKm > 0) {
+      this._startCircleWave(0, targetKm);
     }
     this._animateCircleRadius(targetKm, style);
   }
@@ -715,7 +689,8 @@ export class MapView {
    * 【2026-10-20、37本目、Minami決定：A】onlyIfNeeded:true（金額操作のあと）のときは、
    * 今の円の直径÷短辺がMAP_CIRCLE_REFIT_UPPER_RATIO（0.9）をこえたときだけ0.75へ引き、
    * MAP_CIRCLE_REFIT_LOWER_RATIO（0.35）を下回ったときだけ0.6へ寄る。その間は動かさない。
-   * 検索直後・「全体を見る」は従来どおり常に0.75へ合わせる（onlyIfNeeded:false）。
+   * 検索直後・最初の見え方に戻るボタンは常に合わせる（onlyIfNeeded:false）。
+   * 【41本目】合わせる先はどの場面も短辺の0.6（MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO）。
    * @param {{radiusKm?: number, animate?: boolean, onlyIfNeeded?: boolean, durationSec?: number}} [opts]
    * @returns {number|null} 動かした先のズーム（動かさなかったときはnull）
    */
@@ -754,9 +729,10 @@ export class MapView {
       Math.round(shortSide * (1 - MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO)),
       Math.floor(shortSide / 2) - 1
     );
-    // fitZoomは「円の直径が短辺の0.75になるズーム」。2D（メルカトル）ではズームが
-    // 1上がると画面上の長さがちょうど2倍になるため、任意のズームzでの比率は
-    // 0.75 × 2^(z − fitZoom)、比率rになるズームは fitZoom + log2(r / 0.75) で求まる。
+    // fitZoomは「円の直径が短辺のT（MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO、41本目から0.6）に
+    // なるズーム」。2D（メルカトル）ではズームが1上がると画面上の長さがちょうど2倍になる
+    // ため、任意のズームzでの比率は T × 2^(z − fitZoom)、比率rになるズームは
+    // fitZoom + log2(r / T) で求まる。
     const fitZoom = this.map.getBoundsZoom(bounds, false, L.point(padding, padding));
     let targetZoom = fitZoom;
     let currentZoom = null;
