@@ -165,6 +165,9 @@ const SPOTS_SOURCE_ID = 'spots';
 const SPOTS_LAYER_ID = 'spots-circle';
 // 【45本目】まとめた丸の位置を「今描いているズームの段」から拾うための、見えない円のレイヤー。
 const SPOTS_CLUSTER_HIT_LAYER_ID = 'spots-cluster-hit';
+const SPOTS_SINGLE_HIT_LAYER_ID = 'spots-single-hit';
+// SPOTS_LAYER_IDのいつもの絞り込み（まとめた丸はHTMLの印で描くため、ここでは描かない）。
+const SPOTS_LAYER_BASE_FILTER = ['!', ['has', 'point_count']];
 // 【47本目、Minami決定：1】まとめない点（オレンジがあるときの紺）を描くソースとレイヤー（49本目で灰色はやめた）。
 // まとめる機能（cluster）はソース単位でしか効かないため、まとめる点（オレンジがあればオレンジ、
 // なければ紺）はSPOTS_SOURCE_IDに、まとめない点はこちらに分けて入れる。
@@ -283,6 +286,46 @@ const COLOR_SELECTED = PIN_COLOR_BLUE;
 // 512とした単位で、ズームの整数の段ではちょうど画面のpx）。
 const PIN_CLUSTER_RADIUS = 14;
 const PIN_CLUSTER_MAX_ZOOM = 13;
+// 【51本目】数字の丸と重なるかを見るときの1つずつの点の半径（白いふちを含む。SPOTS_LAYER_IDの
+// circle-radius＋circle-stroke-widthと同じ値）と、丸どうしに残すすき間（2Dのmap-view.jsと同じ）。
+const PIN_ORANGE_RADIUS_WITH_STROKE = 5.5;
+const PIN_BLUE_RADIUS_WITH_STROKE = 8.5;
+const CLUSTER_OVERLAP_GAP_PX = 1;
+
+/**
+ * 【2026-10-24、51本目、Minami決定】数字の丸どうし、または数字の丸と1つずつの点が画面上で重なる
+ * ときは、重ならなくなるまで1つの丸にまとめる。2Dのmap-view.jsのmergeOverlappingClusters()と同じ
+ * （このファイルは別に読み込むため、ここにも置く）。items：{members, x, y, count}（countが2以上なら
+ * 数字の丸）。返すのは数字の丸として出すものだけ。
+ */
+function mergeOverlappingClusters(items, singleRadius) {
+  const list = items.map((it) => ({ ...it }));
+  const isCluster = (it) => it.count >= 2;
+  const radius = (it) => (isCluster(it) ? (it.count < 10 ? 28 : it.count < 50 ? 32 : 38) / 2 : singleRadius);
+  let merged = true;
+  while (merged) {
+    merged = false;
+    for (let i = 0; i < list.length && !merged; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i];
+        const b = list[j];
+        if (!isCluster(a) && !isCluster(b)) continue;
+        if (Math.hypot(a.x - b.x, a.y - b.y) >= radius(a) + radius(b) + CLUSTER_OVERLAP_GAP_PX) continue;
+        const count = a.count + b.count;
+        list[i] = {
+          members: [...a.members, ...b.members],
+          x: (a.x * a.count + b.x * b.count) / count,
+          y: (a.y * a.count + b.y * b.count) / count,
+          count,
+        };
+        list.splice(j, 1);
+        merged = true;
+        break;
+      }
+    }
+  }
+  return list.filter(isCluster);
+}
 // 【48本目、Minami決定：2】＋で新しく増えたオレンジを、波（CIRCLE_WAVE_DURATION_MS、ease-out）が
 // その場所の距離を通り過ぎた瞬間に「ぽん」と出す（小さく出て少しふくらみ元の大きさへ、0.2秒。
 // 2DのCSS .map-pin-popと同じ動き）。出している間はまとめないソース（SPOTS_POP_SOURCE_ID）に入れ、
@@ -637,7 +680,7 @@ export class TerrainMapView {
             type: 'circle',
             source: SPOTS_SOURCE_ID,
             // 【43本目】まとめた丸（point_countを持つ点）はHTMLの印で描くため、ここでは描かない。
-            filter: ['!', ['has', 'point_count']],
+            filter: SPOTS_LAYER_BASE_FILTER,
             paint: {
               // 青は直径13px（半径6.5）＋白いふち2px。
               // 【48本目、Minami決定：1】オレンジは紺の点（まとめない点のレイヤー、直径10px）と同じくらいに
@@ -672,6 +715,15 @@ export class TerrainMapView {
             source: SPOTS_SOURCE_ID,
             filter: ['has', 'point_count'],
             paint: { 'circle-radius': 14, 'circle-opacity': 0, 'circle-stroke-width': 0 },
+          },
+          // 【51本目】まとめる色の1つずつの点の位置を拾うための見えない円。数字の丸と重なって丸に入れた点は
+          // SPOTS_LAYER_IDの絞り込みで描かなくするため、位置はこちらから拾う（絞り込みに左右されない）。
+          {
+            id: SPOTS_SINGLE_HIT_LAYER_ID,
+            type: 'circle',
+            source: SPOTS_SOURCE_ID,
+            filter: ['!', ['has', 'point_count']],
+            paint: { 'circle-radius': 4, 'circle-opacity': 0, 'circle-stroke-width': 0 },
           },
           // 【2026-10-15、11本目①】選んだピンの強調（吹き出し廃止の代わり、
           // Minami指示：一回り大きく＋白い縁取り＋光の輪）。spotsレイヤーより
@@ -1210,19 +1262,48 @@ export class TerrainMapView {
     if (!this._clusterMarkers) this._clusterMarkers = new Map();
     const source = this.map.getSource(SPOTS_SOURCE_ID);
     const seen = new Set();
+    let absorbedIds = [];
     if (source && this.map.isSourceLoaded(SPOTS_SOURCE_ID)) {
       // 【45本目、不具合修正】以前はquerySourceFeatures()で拾っていたが、これは地図が覚えている
       // ほかのズームの段のタイル（縮小・拡大の直後に、なめらかに切り替えるため残しているもの）の
       // まとめた丸も返す。そのため、拡大して分かれたあとも前の段の丸（例：7件の丸）が、ばらの
       // ピンと一緒に残ることがあった（香川・山下・往復¥500、PCで実測）。今描いている段の丸だけを
       // 返すqueryRenderedFeatures()（見えない円のレイヤー）で拾う。
+      const items = [];
+      const seenRaw = new Set();
       this.map.queryRenderedFeatures({ layers: [SPOTS_CLUSTER_HIT_LAYER_ID] }).forEach((f) => {
         const id = f.properties.cluster_id;
-        if (seen.has(id)) return; // タイルの境目で同じ丸が2回返ることがある
-        seen.add(id);
-        const count = f.properties.point_count;
+        if (seenRaw.has(id)) return; // タイルの境目で同じ丸が2回返ることがある
+        seenRaw.add(id);
+        const p = this.map.project(f.geometry.coordinates);
+        items.push({ members: [{ clusterId: id, lngLat: f.geometry.coordinates, count: f.properties.point_count }], x: p.x, y: p.y, count: f.properties.point_count });
+      });
+      // 【51本目、Minami決定】数字の丸どうし・数字の丸と1つずつの点が画面上で重なるときは、重ならなく
+      // なるまで1つの丸にまとめる（丸の直径28px以上が、まとめる範囲14より大きいため）。丸に入れた点は
+      // SPOTS_LAYER_IDの絞り込みで描かない。
+      const seenSingle = new Set();
+      this.map.queryRenderedFeatures({ layers: [SPOTS_SINGLE_HIT_LAYER_ID] }).forEach((f) => {
+        const id = f.properties.id;
+        if (seenSingle.has(id)) return;
+        seenSingle.add(id);
+        const p = this.map.project(f.geometry.coordinates);
+        items.push({ members: [{ spotId: id, lngLat: f.geometry.coordinates, count: 1 }], x: p.x, y: p.y, count: 1 });
+      });
+      items.sort((a, b) => (a.x - b.x) || (a.y - b.y));
+      const singleRadius = this._clusterKind === 'orange' ? PIN_ORANGE_RADIUS_WITH_STROKE : PIN_BLUE_RADIUS_WITH_STROKE;
+      mergeOverlappingClusters(items, singleRadius).forEach((group) => {
         const kind = this._clusterKind === 'orange' ? 'orange' : 'blue';
-        const lngLat = f.geometry.coordinates;
+        const count = group.count;
+        // 重なりでまとめ直していない丸は、今までどおりMapLibreのcluster_idで覚える（押したときに分かれる
+        // ズームをMapLibreに聞ける）。まとめ直した丸は、中身から作った名前で覚える。
+        const single = group.members.length === 1 ? group.members[0] : null;
+        const id = single ? single.clusterId : `m:${group.members.map((m) => m.clusterId ?? `s${m.spotId}`).sort().join('+')}`;
+        seen.add(id);
+        group.members.forEach((m) => { if (m.spotId !== undefined) absorbedIds.push(m.spotId); });
+        const lngLat = single ? single.lngLat : [
+          group.members.reduce((sum, m) => sum + m.lngLat[0] * m.count, 0) / count,
+          group.members.reduce((sum, m) => sum + m.lngLat[1] * m.count, 0) / count,
+        ];
         const size = count < 10 ? 28 : count < 50 ? 32 : 38;
         const key = `${count}|${kind}`;
         let entry = this._clusterMarkers.get(id);
@@ -1231,7 +1312,8 @@ export class TerrainMapView {
           el.className = 'map-cluster-wrapper map-cluster-3d';
           el.addEventListener('click', (e) => {
             e.stopPropagation();
-            this._zoomIntoCluster(id, entry.lngLat);
+            if (single) this._zoomIntoCluster(id, entry.lngLat);
+            else this._zoomIntoMergedCluster(entry.lngLat);
           });
           entry = { marker: new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(this.map), el, key: null, lngLat };
           this._clusterMarkers.set(id, entry);
@@ -1252,6 +1334,24 @@ export class TerrainMapView {
       entry.marker.remove();
       this._clusterMarkers.delete(id);
     });
+    // 丸に入れた点を描かない。変わったときだけ絞り込みを設定し直す（設定し直すと描き直し→idle→ここ、と
+    // なるため、同じなら何もしない）。
+    absorbedIds = absorbedIds.sort();
+    const signature = absorbedIds.join(',');
+    if (signature !== (this._absorbedSignature || '') && this.map.getLayer(SPOTS_LAYER_ID)) {
+      this._absorbedSignature = signature;
+      this.map.setFilter(SPOTS_LAYER_ID, absorbedIds.length === 0
+        ? SPOTS_LAYER_BASE_FILTER
+        : ['all', SPOTS_LAYER_BASE_FILTER, ['!', ['in', ['get', 'id'], ['literal', absorbedIds]]]]);
+    }
+  }
+
+  /** 【51本目】重なりでまとめ直した丸を押したときは、その場所へ1段寄る（向き・傾きはそのまま）。 */
+  _zoomIntoMergedCluster(lngLat) {
+    if (!this.map) return;
+    const target = Math.min(PIN_CLUSTER_MAX_ZOOM + 0.1, this.map.getZoom() + 1);
+    this.map.setPadding(CLEAR_PADDING);
+    this.map.easeTo({ center: lngLat, zoom: target, duration: prefersReducedMotion() ? 0 : 600, padding: CLEAR_PADDING });
   }
 
   /** 【43本目B-2】まとめた丸を押したとき、その丸が分かれるズームまで寄る（向き・傾きはそのまま）。 */
@@ -2035,7 +2135,7 @@ export class TerrainMapView {
     }
     // まとめた丸・選んだピン・出発駅の印（HTMLの印）と、地図の部品
     this.map.getContainer().querySelectorAll('.maplibregl-marker').forEach((el) => addRect(el.getBoundingClientRect()));
-    document.querySelectorAll('#map-controls-cluster, #map-dimension-toggle, #mobile-budget-overlay, #spot-info-panel, #map-area .maplibregl-ctrl-attrib, #map-area .maplibregl-ctrl')
+    document.querySelectorAll('#map-controls-cluster, #map-dimension-toggle, #map-legend, #mobile-budget-overlay, #spot-info-panel, #map-area .maplibregl-ctrl-attrib, #map-area .maplibregl-ctrl')
       .forEach((el) => { if (el.offsetParent !== null) addRect(el.getBoundingClientRect()); });
     const hits = (r) => obstacles.some((o) => r.left < o.right + MARGIN && r.right > o.left - MARGIN
       && r.top < o.bottom + MARGIN && r.bottom > o.top - MARGIN);
@@ -2387,6 +2487,7 @@ export class TerrainMapView {
 
   /** 2D切替時・再試行時にWebGLコンテキストを確実に解放する（上限超過による失敗を防ぐ） */
   destroy() {
+    this._absorbedSignature = '';
     this._cancelWaveReveal();
     this._cancelFitCircleToView();
     if (this._circleAnimFrame) {

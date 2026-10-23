@@ -170,6 +170,11 @@ const MAP_REACH_CIRCLE_COLOR = '#2F6FB2';
 // だけにし、重ならないピンは1つずつ点で見せる（ピンは直径9〜10px＋白いふちのため、中心どうしが
 // 14px以内なら重なって見える）。
 const MAP_PIN_CLUSTER_RADIUS_PX = 14;
+// 【51本目】数字の丸と重なるかを見るときの1つずつのピンの直径（白いふちを含む。style.cssの
+// .map-pin-spot・.map-pin-orangeと同じ値）と、丸どうしに残すすき間。
+const MAP_PIN_ORANGE_DIAMETER_PX = 10;
+const MAP_PIN_BLUE_DIAMETER_PX = 13;
+const CLUSTER_OVERLAP_GAP_PX = 1;
 // 【48本目、Minami決定：2】＋（スライダーで金額を上げたときも）で新しく増えたオレンジのピンは、
 // 出発駅から広がる波（MAP_CIRCLE_WAVE_DURATION_MS、ease-out）がその場所の距離を通り過ぎた瞬間に
 // 「ぽん」と出す（小さく出て少しふくらみ元の大きさへ、CSSの.map-pin-pop、0.2秒）。
@@ -765,6 +770,8 @@ export class MapView {
    * する）、紺と灰色はまとめずに小さな点で出す。オレンジがなければ紺だけを紺の丸にまとめ、灰色は
    * まとめない（以前は紺と灰色が同じ丸に入り、数字の意味があいまいだった）。紺の丸の右上の
    * オレンジの点（43本目）はやめた。
+   * 【51本目】まとめたあと、数字の丸どうし・数字の丸と1つずつのピンが重なるものは、重ならなくなるまで
+   * まとめる（mergeOverlappingClusters()）。
    */
   _recluster() {
     if (!this.map || !this._clusterLayer) return;
@@ -785,6 +792,7 @@ export class MapView {
     points.sort((a, b) => (a.spotId < b.spotId ? -1 : a.spotId > b.spotId ? 1 : 0));
     points.forEach((pt) => { pt.px = this.map.latLngToLayerPoint(pt.latlng); });
     const used = new Set();
+    const groups = [];
     for (let i = 0; i < points.length; i++) {
       if (used.has(i)) continue;
       const group = [i];
@@ -794,7 +802,21 @@ export class MapView {
       }
       if (group.length < 2) continue;
       group.forEach((k) => used.add(k));
-      const members = group.map((k) => points[k]);
+      groups.push(group);
+    }
+    // 【51本目】数字の丸は直径28px以上あり、まとめる範囲（14px）より大きい。そのため丸どうし・丸と1つずつの
+    // ピンが画面上で重なることがあった。重なるものは、重ならなくなるまで同じ丸にまとめる。
+    const singleRadius = (kind === 'orange' ? MAP_PIN_ORANGE_DIAMETER_PX : MAP_PIN_BLUE_DIAMETER_PX) / 2;
+    const mergeItems = [
+      ...groups.map((group) => ({
+        members: group,
+        x: group.reduce((sum, k) => sum + points[k].px.x, 0) / group.length,
+        y: group.reduce((sum, k) => sum + points[k].px.y, 0) / group.length,
+      })),
+      ...points.map((pt, i) => ({ members: [i], x: pt.px.x, y: pt.px.y })).filter((it) => !used.has(it.members[0])),
+    ];
+    mergeOverlappingClusters(mergeItems, singleRadius).forEach((merged) => {
+      const members = merged.members.map((k) => points[k]);
       members.forEach((m) => { m.el.dataset.clustered = '1'; this._applyMarkerDisplay(m.el); });
       const lat = members.reduce((sum, m) => sum + m.latlng.lat, 0) / members.length;
       const lng = members.reduce((sum, m) => sum + m.latlng.lng, 0) / members.length;
@@ -807,7 +829,7 @@ export class MapView {
       const memberIds = members.map((m) => m.spotId);
       marker.on('click', () => this._zoomIntoCluster(memberIds));
       this._clusters.push({ marker, members: memberIds, latlng: [lat, lng], kind });
-    }
+    });
   }
 
   /**
@@ -1450,8 +1472,52 @@ function createPinIcon(kind) {
  * 【43本目B-2】まとめた丸のアイコン（数字入りの丸）。中の場所が多いほど少し大きくする。
  * 【47本目】kindが'orange'ならオレンジの丸（.map-cluster-orange）、'blue'なら紺の丸。
  */
+/** まとめた丸の直径（px）。3Dのterrain-map-view.jsも同じ大きさ。 */
+function clusterSizePx(count) {
+  return count < 10 ? 28 : count < 50 ? 32 : 38;
+}
+
+/**
+ * 【2026-10-24、51本目、Minami決定】数字の丸どうし、または数字の丸と1つずつのピンが画面上で重なる
+ * ときは、重ならなくなるまで1つの丸にまとめる（丸の直径28px以上が、まとめる範囲14pxより大きいため）。
+ * 1つずつのピンどうしは見ない（14pxの決まりのまま）。毎回同じ結果になるよう、並び順どおりに調べる。
+ * 3Dのterrain-map-view.jsにも同じ関数がある（読み込み方の都合でimportできないため）。
+ * @param {Array<{members: Array, x: number, y: number, count?: number}>} items 画面上の位置（px）。
+ *   members が2つ以上なら数字の丸、1つなら1つずつのピン。count は丸の中の場所の数（省略時は members.length）
+ * @param {number} singleRadius 1つずつのピンの半径（px、白いふちを含む）
+ * @returns {Array} 数字の丸として出すもの（members・x・y・count）
+ */
+export function mergeOverlappingClusters(items, singleRadius) {
+  const list = items.map((it) => ({ ...it, count: it.count ?? it.members.length }));
+  const isCluster = (it) => it.count >= 2;
+  const radius = (it) => (isCluster(it) ? clusterSizePx(it.count) / 2 : singleRadius);
+  let merged = true;
+  while (merged) {
+    merged = false;
+    for (let i = 0; i < list.length && !merged; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i];
+        const b = list[j];
+        if (!isCluster(a) && !isCluster(b)) continue;
+        if (Math.hypot(a.x - b.x, a.y - b.y) >= radius(a) + radius(b) + CLUSTER_OVERLAP_GAP_PX) continue;
+        const count = a.count + b.count;
+        list[i] = {
+          members: [...a.members, ...b.members],
+          x: (a.x * a.count + b.x * b.count) / count,
+          y: (a.y * a.count + b.y * b.count) / count,
+          count,
+        };
+        list.splice(j, 1);
+        merged = true;
+        break;
+      }
+    }
+  }
+  return list.filter(isCluster);
+}
+
 function createClusterIcon(count, kind) {
-  const size = count < 10 ? 28 : count < 50 ? 32 : 38;
+  const size = clusterSizePx(count);
   return L.divIcon({
     className: 'map-cluster-wrapper',
     html: `<span class="map-cluster${kind === 'orange' ? ' map-cluster-orange' : ''}" style="width:${size}px;height:${size}px"><span class="map-cluster-count">${count}</span></span>`,
