@@ -91,7 +91,9 @@ const MAP_CIRCLE_FIT_DURATION_SEC = 0.45;
 // ＋を押しても円の広がりが小さく見えた（40本目の計測：＋1回で縁が動くのはPCで30px前後、
 // 400×464で15px前後）。地図を合わせたときの円を小さめにして、広がる余地を残す。
 // 金額操作で9割をこえたときも、3.5割を下回ったときも、この0.6に合わせる。
-const MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO = 0.6;
+// 【2026-10-23、47本目、Minami決定：2】0.6→0.85。検索した直後の縮尺では、結局近づいて
+// 確認することになる（Minami・使う人とも）ため、最初からもっと寄る。
+const MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO = 0.85;
 // 【2026-10-19、34本目、Minami決定：B】「全体を見る」・検索直後の全体表示
 // （fitToBudget()、2Dはこの定数を使わず別途maxZoom:16のみで下限なし）は
 // 変えない。円を合わせるとき（fitCircleToView()）だけ、小さいスマホで
@@ -107,9 +109,48 @@ const MAP_CIRCLE_FIT_MIN_ZOOM = 8.5;
 // 上限（0.9）をこえたら0.75へ引き、下限（0.35）を下回ったら0.6へ寄る。
 // その間は地図を動かさず、円だけが広がる・縮む。
 // 【41本目】9割をこえたときの行き先も0.75→0.6（MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO）。
-const MAP_CIRCLE_REFIT_UPPER_RATIO = 0.9;
+// 【47本目、Minami決定：2】合わせる先が0.85になったため、引く境目を0.9→0.95（はみ出しそうな
+// ときだけ引く）、寄る先を0.6→0.85にした。寄る境目（0.35）は変えない。
+const MAP_CIRCLE_REFIT_UPPER_RATIO = 0.95;
 const MAP_CIRCLE_REFIT_LOWER_RATIO = 0.35;
-const MAP_CIRCLE_ZOOM_IN_TARGET_RATIO = 0.6;
+const MAP_CIRCLE_ZOOM_IN_TARGET_RATIO = 0.85;
+// 【47本目、Minami指示】0.85にすると円の縁が地図の上の部品にかかりやすいため、円に合わせるときは
+// 縁が部品（とのすき間MAP_CIRCLE_OBSTACLE_GAP_PX）にかからない大きさまでだけ寄る（かからなければ0.85のまま）。
+// 中心は出発駅のまま動かさない。3D（terrain-map-view.js）も同じ部品を見る。
+// 名前の帯（#spot-info-panel）は見ない：検索した直後・戻るボタンのときは出ておらず、「← 一覧に戻る」の
+// ときだけ選んだ場所の帯が出たままになる。そこで帯を避けると、検索した直後と同じ見え方に戻らなくなる
+// （39本目の決まり。実測：400×464の3Dで0.85→0.67に縮んだ）。
+const MAP_CIRCLE_OBSTACLE_SELECTORS = [
+  '#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle', '#map-dimension-toggle',
+  '#mobile-budget-overlay', '#map-area .leaflet-control-zoom',
+];
+const MAP_CIRCLE_OBSTACLE_GAP_PX = 4;
+
+/** 【47本目】地図の上に見えている部品の形（地図の入れ物の左上を基準にしたpx。丸い部品はround・中心・半径つき）。 */
+function circleObstacleRects(container) {
+  const c = container.getBoundingClientRect();
+  const out = [];
+  MAP_CIRCLE_OBSTACLE_SELECTORS.forEach((sel) => {
+    const el = document.querySelector(sel);
+    if (!el || el.hidden) return;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return;
+    const r = el.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return;
+    if (r.right <= c.left || r.left >= c.right || r.bottom <= c.top || r.top >= c.bottom) return;
+    // 丸い部品（方位磁針・戻るボタン・ハンドル）は丸として扱う（四角で見ると隅の分だけ余計に避ける）。
+    const radius = cs.borderTopLeftRadius;
+    // 大きさは回転（ハンドルはtransform: rotate()で回る）前の幅で見る（回った四角の外枠は大きくなるため）。
+    const w = el.offsetWidth || r.width;
+    const round = Math.abs(w - (el.offsetHeight || r.height)) < 1
+      && (radius.endsWith('%') ? parseFloat(radius) >= 50 : parseFloat(radius) >= w / 2 - 0.5);
+    out.push({
+      left: r.left - c.left, top: r.top - c.top, right: r.right - c.left, bottom: r.bottom - c.top,
+      round, cx: r.left - c.left + r.width / 2, cy: r.top - c.top + r.height / 2, radius: w / 2,
+    });
+  });
+  return out;
+}
 // 【2026-10-20、37本目、Minami決定：B2】＋で円が広がるとき、前の縁から新しい縁へ
 // うすい青の線（波）を1本だけ広げて消す。色は円の縁と同じ青、太さ3px、
 // 0.5秒で、はじめ少し濃く→広がりながらうすくなる。白い光・ぼかし・点滅は使わない。
@@ -126,6 +167,18 @@ const MAP_REACH_CIRCLE_COLOR = '#2F6FB2';
 // このズーム以上ではまとめない（同じ場所に重なっている場所がいつまでも分かれないのを防ぐ）。
 const MAP_PIN_CLUSTER_RADIUS_PX = 36;
 const MAP_PIN_CLUSTER_MAX_ZOOM = 16;
+// 【2026-10-23、47本目、Minami決定：1】ピンの重なり順（上から）：選んだピン → オレンジの丸・
+// オレンジのピン → 出発駅の印 → 紺 → 灰色。Leafletの印の重なりは「画面上の縦位置（px）＋
+// zIndexOffset」で決まるため、段の差は地図の高さ（数千px）より十分大きくする。
+// 紺の丸（オレンジがないとき）は45本目のまま出発駅の印より上。
+const MAP_Z_GRAY = 0;
+const MAP_Z_BLUE = 10000;
+const MAP_Z_DEPARTURE = 20000;
+const MAP_Z_BLUE_CLUSTER = 21000;
+const MAP_Z_ORANGE = 30000;
+const MAP_Z_ORANGE_CLUSTER = 31000;
+const MAP_Z_HOVER = 40000;
+const MAP_Z_SELECTED = 50000;
 
 /**
  * 【2026-10-21、43本目、Minami決定：B-1／C】ピンの色の決まり（2D・3D共通、3Dは
@@ -189,7 +242,7 @@ export class MapView {
     this._needsSearchFit = false; // 【40本目】見えていない間に検索があり、見えたときに検索直後の見え方へ合わせ直す必要がある
     this._liveBudget = null; // 【43本目】今の金額（C：＋−・スライダーで変えた値。検索した直後はlastBudgetと同じ）
     this._clusterLayer = null; // 【43本目B-2】まとめた丸（数字入り）を置くレイヤー
-    this._clusters = []; // 【43本目B-2】今出しているまとめた丸：{marker, members:[spotId], latlng, hasOrange}（検証用にも使う）
+    this._clusters = []; // 【43本目B-2】今出しているまとめた丸：{marker, members:[spotId], latlng, kind}（kindはまとめた色：orange／blue、47本目）（検証用にも使う）
 
     this.onSelectionChange = null; // (spotId) => void … ピン選択と一覧パネルの連動用
   }
@@ -304,6 +357,7 @@ export class MapView {
     this.fareBySpotId.clear();
     this.spotsLatLngById.clear();
     this.selectedSpotId = null;
+    this._hasOrange = false;
     this._lastSpots = spots || [];
     this._departureStation = departureStation || null;
 
@@ -314,7 +368,7 @@ export class MapView {
       // （permanent、ポップアップとは別物）のまま残す。
       L.marker([departureStation.stop_lat, departureStation.stop_lon], {
         icon: createPinIcon('departure'),
-        zIndexOffset: 2000,
+        zIndexOffset: MAP_Z_DEPARTURE,
       })
         .addTo(this.markersLayer)
         .bindTooltip(departureStation.display_name, {
@@ -533,6 +587,13 @@ export class MapView {
   _restyleMarkers() {
     const live = this._liveBudget ?? this.lastBudget;
     const searched = this.lastBudget;
+    // 【47本目、Minami決定：1】オレンジが1つでもあるか（あれば、まとめるのはオレンジだけ・紺は小さな点）。
+    let hasOrange = false;
+    this.fareBySpotId.forEach((fare) => {
+      if (pinCategory(fare, live, searched) === 'orange') hasOrange = true;
+    });
+    this._hasOrange = hasOrange;
+    if (this.map) this.map.getContainer().classList.toggle('map-has-orange', hasOrange);
     this.markersBySpotId.forEach((marker, spotId) => {
       const el = marker.getElement();
       const pin = el && el.querySelector('.map-pin');
@@ -543,7 +604,23 @@ export class MapView {
       pin.classList.toggle('map-pin-orange', cat === 'orange');
       pin.classList.toggle('map-pin-gray', cat === 'gray');
       this._applyMarkerDisplay(el);
+      this._applyMarkerZIndex(spotId);
     });
+  }
+
+  /** 【47本目】ピンの重なり順（MAP_Z_*参照）：選んだピン → ホバー → オレンジ → （出発駅） → 紺 → 灰色。 */
+  _applyMarkerZIndex(spotId) {
+    const marker = this.markersBySpotId.get(spotId);
+    const el = marker && marker.getElement();
+    const pin = el && el.querySelector('.map-pin');
+    if (!pin) return;
+    const cat = el.dataset.cat;
+    const z = pin.classList.contains('map-pin-selected') ? MAP_Z_SELECTED
+      : pin.classList.contains('map-pin-hover') ? MAP_Z_HOVER
+        : cat === 'orange' ? MAP_Z_ORANGE
+          : cat === 'blue' ? MAP_Z_BLUE
+            : MAP_Z_GRAY;
+    if (marker.options.zIndexOffset !== z) marker.setZIndexOffset(z);
   }
 
   /** 予算をこえる場所・まとめた丸に入った場所は出さない（選んだピンはいつも出す）。 */
@@ -558,19 +635,25 @@ export class MapView {
    * （ピンのDOMは消さずにdisplayだけ切り替えるため、選択・ホバー・一覧との連動・検索直後の
    * 波の演出をそのまま使える）。まとめ方：IDの順に1つずつ見て、まだどこにも入っていないピンから
    * MAP_PIN_CLUSTER_RADIUS_PX以内のピンを集める（毎回同じ結果になる決まった順序）。
-   * 選んだピンはまとめない（いつも見える）。オレンジを含む丸には右上に小さなオレンジの点を付ける。
+   * 選んだピンはまとめない（いつも見える）。
+   * 【2026-10-23、47本目、Minami決定：1】まとめるのは1つの色だけにする。オレンジが1つでもあれば
+   * オレンジだけをオレンジの丸にまとめ（新しく行けるようになった場所がどこに・いくつあるかを主役に
+   * する）、紺と灰色はまとめずに小さな点で出す。オレンジがなければ紺だけを紺の丸にまとめ、灰色は
+   * まとめない（以前は紺と灰色が同じ丸に入り、数字の意味があいまいだった）。紺の丸の右上の
+   * オレンジの点（43本目）はやめた。
    */
   _recluster() {
     if (!this.map || !this._clusterLayer) return;
     this._clusterLayer.clearLayers();
     this._clusters = [];
+    const kind = this._hasOrange ? 'orange' : 'blue';
     const points = [];
     this.markersBySpotId.forEach((marker, spotId) => {
       const el = marker.getElement();
       if (!el) return;
       el.dataset.clustered = '0';
       this._applyMarkerDisplay(el);
-      if (el.dataset.cat === undefined || el.dataset.cat === 'hidden' || spotId === this.selectedSpotId) return;
+      if (el.dataset.cat !== kind || spotId === this.selectedSpotId) return;
       points.push({ spotId, el, latlng: marker.getLatLng() });
     });
     if (!this.isContainerVisible() || this.map.getZoom() >= MAP_PIN_CLUSTER_MAX_ZOOM) return;
@@ -590,15 +673,15 @@ export class MapView {
       members.forEach((m) => { m.el.dataset.clustered = '1'; this._applyMarkerDisplay(m.el); });
       const lat = members.reduce((sum, m) => sum + m.latlng.lat, 0) / members.length;
       const lng = members.reduce((sum, m) => sum + m.latlng.lng, 0) / members.length;
-      const hasOrange = members.some((m) => m.el.dataset.cat === 'orange');
-      // 【45本目】まとめた丸は出発駅の印（zIndexOffset 2000）より上に出す。まとめた丸の位置は中の場所の
+      // 【45本目】まとめた丸は出発駅の印より上に出す。まとめた丸の位置は中の場所の
       // 平均のため、出発駅のすぐ近くに場所が集まる駅（香川・山下・往復¥500）では、縮小してできた丸が
       // 出発駅の印の下に隠れ、まとまったことが見えなかった（3Dはあとから足した印が上になるため、もともと上）。
-      const marker = L.marker([lat, lng], { icon: createClusterIcon(members.length, hasOrange), zIndexOffset: 2100 })
+      const zIndexOffset = kind === 'orange' ? MAP_Z_ORANGE_CLUSTER : MAP_Z_BLUE_CLUSTER;
+      const marker = L.marker([lat, lng], { icon: createClusterIcon(members.length, kind), zIndexOffset })
         .addTo(this._clusterLayer);
       const memberIds = members.map((m) => m.spotId);
       marker.on('click', () => this._zoomIntoCluster(memberIds));
-      this._clusters.push({ marker, members: memberIds, latlng: [lat, lng], hasOrange });
+      this._clusters.push({ marker, members: memberIds, latlng: [lat, lng], kind });
     }
   }
 
@@ -1010,6 +1093,24 @@ export class MapView {
         return null;
       }
     }
+    // 【47本目】円の縁が地図の上の部品にかからない大きさまでにとどめる。中心（出発駅）から一番近い
+    // 部品までの距離−すき間を半径の上限にする（2Dの円は真円）。部品が中心にかぶっているときは見ない。
+    const cx = size.x / 2;
+    const cy = size.y / 2;
+    let nearestPx = Infinity;
+    circleObstacleRects(this.map.getContainer()).forEach((r) => {
+      if (r.round) {
+        nearestPx = Math.min(nearestPx, Math.max(0, Math.hypot(r.cx - cx, r.cy - cy) - r.radius));
+        return;
+      }
+      const dx = Math.max(r.left - cx, 0, cx - r.right);
+      const dy = Math.max(r.top - cy, 0, cy - r.bottom);
+      nearestPx = Math.min(nearestPx, Math.hypot(dx, dy));
+    });
+    const maxRatio = Number.isFinite(nearestPx) ? (2 * (nearestPx - MAP_CIRCLE_OBSTACLE_GAP_PX)) / shortSide : Infinity;
+    if (maxRatio > 0 && Number.isFinite(maxRatio)) {
+      targetZoom = Math.min(targetZoom, fitZoom + Math.log2(maxRatio / MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO));
+    }
     const zoom = Math.min(Math.max(targetZoom, MAP_CIRCLE_FIT_MIN_ZOOM), 16);
     // 最低ズーム8.5（または最大16）に張り付いていて、もう動く余地が無いときは動かさない
     // （¥2000付近で＋を押すたびに同じ場所へ飛び直す空の動きを出さない）。
@@ -1191,9 +1292,7 @@ export class MapView {
     const className = kind === 'selected' ? 'map-pin-selected' : 'map-pin-hover';
     pin.classList.toggle(className, on);
 
-    const isSelected = pin.classList.contains('map-pin-selected');
-    const isHover = pin.classList.contains('map-pin-hover');
-    marker.setZIndexOffset(isSelected ? 2000 : isHover ? 1000 : 0);
+    this._applyMarkerZIndex(spotId);
   }
 }
 
@@ -1223,14 +1322,14 @@ function createPinIcon(kind) {
 }
 
 /**
- * 【43本目B-2】まとめた丸のアイコン（数字入りの青い丸）。中の場所が多いほど少し大きくする。
- * オレンジ（金額を変えて新しく入った場所）を含むときは、右上に小さなオレンジの点を付ける。
+ * 【43本目B-2】まとめた丸のアイコン（数字入りの丸）。中の場所が多いほど少し大きくする。
+ * 【47本目】kindが'orange'ならオレンジの丸（.map-cluster-orange）、'blue'なら紺の丸。
  */
-function createClusterIcon(count, hasOrange) {
+function createClusterIcon(count, kind) {
   const size = count < 10 ? 28 : count < 50 ? 32 : 38;
   return L.divIcon({
     className: 'map-cluster-wrapper',
-    html: `<span class="map-cluster" style="width:${size}px;height:${size}px"><span class="map-cluster-count">${count}</span>${hasOrange ? '<span class="map-cluster-orange-dot"></span>' : ''}</span>`,
+    html: `<span class="map-cluster${kind === 'orange' ? ' map-cluster-orange' : ''}" style="width:${size}px;height:${size}px"><span class="map-cluster-count">${count}</span></span>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
   });

@@ -165,6 +165,11 @@ const SPOTS_SOURCE_ID = 'spots';
 const SPOTS_LAYER_ID = 'spots-circle';
 // 【45本目】まとめた丸の位置を「今描いているズームの段」から拾うための、見えない円のレイヤー。
 const SPOTS_CLUSTER_HIT_LAYER_ID = 'spots-cluster-hit';
+// 【47本目、Minami決定：1】まとめない点（オレンジがあるときの紺・いつもの灰色）を描くソースとレイヤー。
+// まとめる機能（cluster）はソース単位でしか効かないため、まとめる点（オレンジがあればオレンジ、
+// なければ紺）はSPOTS_SOURCE_IDに、まとめない点はこちらに分けて入れる。
+const SPOTS_PLAIN_SOURCE_ID = 'spots-plain';
+const SPOTS_PLAIN_LAYER_ID = 'spots-plain-circle';
 const DEM_SOURCE_ID = 'gsi-dem';
 const HILLSHADE_LAYER_ID = 'hillshade-layer';
 // 【2026-10-13、10本目②】予算の到達範囲の円（出発駅中心）。
@@ -213,14 +218,56 @@ const CIRCLE_FIT_DURATION_MS = 450;
 // 【2026-10-21、41本目、Minami決定：C】0.75→0.6（2Dのmap-view.jsと同じ）。金額が大きく
 // なって地図が引いたあと、＋を押しても円の広がりが小さく見えた（40本目の計測）ため、
 // 地図を合わせたときの円を小さめにして広がる余地を残す。
-const CIRCLE_FIT_TARGET_DIAMETER_RATIO = 0.6;
+// 【2026-10-23、47本目、Minami決定：2】0.6→0.85（2Dと同じ）。検索した直後の縮尺では、結局
+// 近づいて確認することになるため、最初からもっと寄る。横方向で測るのは35本目のまま。
+const CIRCLE_FIT_TARGET_DIAMETER_RATIO = 0.85;
 // 【2026-10-20、37本目、Minami決定：A】金額操作のあとは、円の直径÷短辺（3Dは35本目と
 // 同じく横方向で測る）が0.9をこえたときだけ0.75へ引き、0.35を下回ったときだけ0.6へ
 // 寄る。その間は地図を動かさず円だけが広がる・縮む（2Dのmap-view.jsと同じ値）。
 // 【41本目】9割をこえたときの行き先も0.75→0.6（CIRCLE_FIT_TARGET_DIAMETER_RATIO）。
-const CIRCLE_REFIT_UPPER_RATIO = 0.9;
+// 【47本目、Minami決定：2】引く境目0.9→0.95、寄る先0.6→0.85（2Dと同じ）。寄る境目0.35は変えない。
+const CIRCLE_REFIT_UPPER_RATIO = 0.95;
 const CIRCLE_REFIT_LOWER_RATIO = 0.35;
-const CIRCLE_ZOOM_IN_TARGET_RATIO = 0.6;
+const CIRCLE_ZOOM_IN_TARGET_RATIO = 0.85;
+// 【47本目、Minami指示】0.85にすると円の縁が地図の上の部品（方位磁針・戻るボタン・ハンドル等）に
+// かかりやすい（実測：375×667の3Dで、円の右上の縁がハンドルの下を通った）。円に合わせるときは、
+// 縁が部品（とのすき間CIRCLE_OBSTACLE_GAP_PX）にかからないズームまでだけ寄る（2Dのmap-view.jsと同じ部品）。
+// 3Dの円は傾きで上側が縮んだ形に写るため、行き先のカメラ（MapLibreのtransformの複製）で縁の点を
+// 実際に画面へ写して確かめ、かかっていれば少しずつ引く。
+// 名前の帯（#spot-info-panel）は見ない（map-view.jsのMAP_CIRCLE_OBSTACLE_SELECTORSと同じ理由）。
+const CIRCLE_OBSTACLE_SELECTORS = [
+  '#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle', '#map-dimension-toggle',
+  '#mobile-budget-overlay',
+];
+const CIRCLE_OBSTACLE_GAP_PX = 4;
+const CIRCLE_OBSTACLE_ZOOM_STEP = 0.03;
+const CIRCLE_OBSTACLE_MAX_STEPS = 30;
+
+/** 【47本目】地図の上に見えている部品の形（地図の入れ物の左上を基準にしたpx。丸い部品はround・中心・半径つき）。 */
+function circleObstacleRects(container) {
+  const c = container.getBoundingClientRect();
+  const out = [];
+  CIRCLE_OBSTACLE_SELECTORS.forEach((sel) => {
+    const el = document.querySelector(sel);
+    if (!el || el.hidden) return;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return;
+    const r = el.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return;
+    if (r.right <= c.left || r.left >= c.right || r.bottom <= c.top || r.top >= c.bottom) return;
+    // 丸い部品（方位磁針・戻るボタン・ハンドル）は丸として扱う（四角で見ると隅の分だけ余計に避ける）。
+    const radius = cs.borderTopLeftRadius;
+    // 大きさは回転（ハンドルはtransform: rotate()で回る）前の幅で見る（回った四角の外枠は大きくなるため）。
+    const w = el.offsetWidth || r.width;
+    const round = Math.abs(w - (el.offsetHeight || r.height)) < 1
+      && (radius.endsWith('%') ? parseFloat(radius) >= 50 : parseFloat(radius) >= w / 2 - 0.5);
+    out.push({
+      left: r.left - c.left, top: r.top - c.top, right: r.right - c.left, bottom: r.bottom - c.top,
+      round, cx: r.left - c.left + r.width / 2, cy: r.top - c.top + r.height / 2, radius: w / 2,
+    });
+  });
+  return out;
+}
 
 // 【2026-10-21、43本目、Minami決定：B-1】ピンの色（2Dのassets/css/style.cssの.map-pin-blue等と
 // 同じ値）。青＝検索した金額帯で行ける場所（円の青#2F6FB2より濃い紺に近い青）、オレンジ＝金額を
@@ -483,13 +530,15 @@ export class TerrainMapView {
           [SPOTS_SOURCE_ID]: {
             type: 'geojson',
             data: { type: 'FeatureCollection', features: [] },
-            // 【43本目B-2】近いピンをまとめる。まとめた丸に入ったオレンジの数（orange）も数える。
+            // 【43本目B-2】近いピンをまとめる。【47本目】入れるのは1つの色（オレンジがあればオレンジ、
+            // なければ紺）だけのため、まとめた丸に入った色を数える必要はなくなった。
             cluster: true,
             clusterRadius: PIN_CLUSTER_RADIUS,
             clusterMaxZoom: PIN_CLUSTER_MAX_ZOOM,
-            clusterProperties: {
-              orange: ['+', ['case', ['==', ['get', 'cat'], 'orange'], 1, 0]],
-            },
+          },
+          [SPOTS_PLAIN_SOURCE_ID]: {
+            type: 'geojson',
+            data: { type: 'FeatureCollection', features: [] },
           },
           [REACH_CIRCLE_SOURCE_ID]: {
             type: 'geojson',
@@ -548,6 +597,22 @@ export class TerrainMapView {
             type: 'line',
             source: REACH_WAVE_SOURCE_ID,
             paint: { 'line-color': '#2F6FB2', 'line-opacity': 0, 'line-width': CIRCLE_WAVE_WIDTH },
+          },
+          // 【47本目、Minami決定：1】まとめない点（灰色は直径6px、オレンジがあるときの紺は直径10px、
+          // 白いふち）。まとめる点・まとめた丸より下に描き、紺を灰色より上にする。
+          {
+            id: SPOTS_PLAIN_LAYER_ID,
+            type: 'circle',
+            source: SPOTS_PLAIN_SOURCE_ID,
+            layout: { 'circle-sort-key': ['match', ['get', 'cat'], 'gray', 0, 1] },
+            paint: {
+              'circle-radius': ['match', ['get', 'cat'], 'gray', 2, 3.5],
+              'circle-color': ['match', ['get', 'cat'], 'gray', PIN_COLOR_GRAY, PIN_COLOR_BLUE],
+              'circle-opacity': 1,
+              'circle-stroke-width': ['match', ['get', 'cat'], 'gray', 1, 1.5],
+              'circle-stroke-color': '#ffffff',
+              'circle-blur': 0,
+            },
           },
           {
             id: SPOTS_LAYER_ID,
@@ -699,7 +764,9 @@ export class TerrainMapView {
     // 【2026-10-15、11本目①、Minami決定：A】地図の吹き出し（ポップアップ）は
     // 廃止し、地図の下の固定情報枠（main.js側のDOM）に統一した。ここでは
     // ピンの強調（setSelectedSpot）とmain.js連携用のコールバックだけ行う。
-    this.map.on('click', SPOTS_LAYER_ID, (e) => {
+    // 【47本目】まとめない点（SPOTS_PLAIN_LAYER_ID）も同じく押せる（1つの場所はどちらか一方の
+    // ソースにしか入らない）。
+    const onSpotClick = (e) => {
       const feature = e.features && e.features[0];
       if (!feature) return;
       this.setSelectedSpot(feature.properties);
@@ -711,7 +778,9 @@ export class TerrainMapView {
       // （#results-listの高さが0のときはscrollSelectedCardIntoView()が
       // 早期returnする、map-view.jsと同じ仕組み）。
       if (this.onSelectionChange) this.onSelectionChange(feature.properties.id);
-    });
+    };
+    this.map.on('click', SPOTS_LAYER_ID, onSpotClick);
+    this.map.on('click', SPOTS_PLAIN_LAYER_ID, onSpotClick);
     // 【43本目B-2】まとめた丸（HTMLの印）は、地図が動いたとき・データが変わったときに作り直す
     // （間引きあり）。【不具合修正】当初は'render'のたびに作り直していたが、印の位置を設定し直す
     // と次の描画が呼ばれ、地図が止まっていても描画が毎秒約18回続いて'idle'にならない輪になった
@@ -724,8 +793,10 @@ export class TerrainMapView {
     // 何も書き換えないため、idle→描き直し→idleの繰り返しにはならない）。
     this.map.on('idle', () => this._updateClusterMarkers());
     this.map.on('sourcedata', (e) => { if (e.sourceId === SPOTS_SOURCE_ID) this._scheduleClusterMarkerUpdate(); });
-    this.map.on('mouseenter', SPOTS_LAYER_ID, () => { this.map.getCanvas().style.cursor = 'pointer'; });
-    this.map.on('mouseleave', SPOTS_LAYER_ID, () => { this.map.getCanvas().style.cursor = ''; });
+    [SPOTS_LAYER_ID, SPOTS_PLAIN_LAYER_ID].forEach((layerId) => {
+      this.map.on('mouseenter', layerId, () => { this.map.getCanvas().style.cursor = 'pointer'; });
+      this.map.on('mouseleave', layerId, () => { this.map.getCanvas().style.cursor = ''; });
+    });
 
     // 【2026-10-10修正】hillshadeレイヤーを追加したことで、初期表示の時点から
     // 標高タイルも取得されるようになった。標高タイルは地点によって存在しない
@@ -955,18 +1026,30 @@ export class TerrainMapView {
   _rebuildSpotData({ revealKm } = {}) {
     if (!this.map) return;
     const source = this.map.getSource(SPOTS_SOURCE_ID);
-    if (!source) return;
+    const plainSource = this.map.getSource(SPOTS_PLAIN_SOURCE_ID);
+    if (!source || !plainSource) return;
     const searched = this._lastBudget;
     const live = this._liveBudget ?? searched;
+    // 【47本目、Minami決定：1】オレンジが1つでもあれば、まとめるのはオレンジだけ（紺・灰色はまとめない
+    // 小さな点）。なければ紺だけをまとめる（灰色はまとめない）。検索直後の波の途中でも、まとめる色は
+    // 出し終えたときと同じにする（全件で判断する）。
+    const hasOrange = (this._spotFeatures || []).some((f) => pinCategory(f.properties.fare, live, searched) === 'orange');
+    const clusterKind = hasOrange ? 'orange' : 'blue';
+    this._clusterKind = clusterKind;
     const features = [];
+    const clustered = [];
+    const plain = [];
     (this._spotFeatures || []).forEach((f) => {
       if (f.properties.id === this.selectedSpotId) return;
       if (revealKm !== undefined && !(f.properties.distance_km <= revealKm)) return;
       const cat = pinCategory(f.properties.fare, live, searched);
       if (cat === 'hidden') return;
-      features.push({ type: 'Feature', geometry: f.geometry, properties: { ...f.properties, cat } });
+      const feature = { type: 'Feature', geometry: f.geometry, properties: { ...f.properties, cat } };
+      features.push(feature);
+      (cat === clusterKind ? clustered : plain).push(feature);
     });
-    source.setData({ type: 'FeatureCollection', features });
+    source.setData({ type: 'FeatureCollection', features: clustered });
+    plainSource.setData({ type: 'FeatureCollection', features: plain });
     // 検証用（verify-layout.js）：出している点の数と、点ごとの色の決まりの一覧
     this._spotDataCount = features.length;
     this._spotDataSignature = features.map((f) => `${f.properties.id}:${f.properties.cat}`).sort().join(',');
@@ -985,8 +1068,10 @@ export class TerrainMapView {
   /**
    * 【2026-10-21、43本目、Minami決定：B-2】まとめた丸を、数字の入った青い丸（HTMLの印、
    * maplibregl.Marker）で描く。このスタイルは文字の形（glyphs）を持たない（地図は画像タイルのみ）
-   * ため、MapLibreのsymbolレイヤーでは数字を描けない。2Dと同じ見た目のDOM（.map-cluster）を使い、
-   * オレンジを含む丸には右上に小さなオレンジの点を付ける。押すと、その丸が分かれるズームまで寄る。
+   * ため、MapLibreのsymbolレイヤーでは数字を描けない。2Dと同じ見た目のDOM（.map-cluster）を使う。
+   * 押すと、その丸が分かれるズームまで寄る。
+   * 【47本目】まとめているのがオレンジ（_clusterKind）ならオレンジの丸にする（紺の丸の右上の
+   * オレンジの点はやめた）。
    */
   _updateClusterMarkers() {
     if (!this.map) return;
@@ -1004,10 +1089,10 @@ export class TerrainMapView {
         if (seen.has(id)) return; // タイルの境目で同じ丸が2回返ることがある
         seen.add(id);
         const count = f.properties.point_count;
-        const hasOrange = f.properties.orange > 0;
+        const kind = this._clusterKind === 'orange' ? 'orange' : 'blue';
         const lngLat = f.geometry.coordinates;
         const size = count < 10 ? 28 : count < 50 ? 32 : 38;
-        const key = `${count}|${hasOrange ? 1 : 0}`;
+        const key = `${count}|${kind}`;
         let entry = this._clusterMarkers.get(id);
         if (!entry) {
           const el = document.createElement('div');
@@ -1022,11 +1107,11 @@ export class TerrainMapView {
         const moved = !entry.lngLat || entry.lngLat[0] !== lngLat[0] || entry.lngLat[1] !== lngLat[1];
         entry.lngLat = lngLat;
         entry.count = count;
-        entry.hasOrange = hasOrange;
+        entry.kind = kind;
         if (moved) entry.marker.setLngLat(lngLat); // 同じ位置なら設定し直さない（余計な描画を呼ばない）
         if (entry.key !== key) {
           entry.key = key;
-          entry.el.innerHTML = `<span class="map-cluster" style="width:${size}px;height:${size}px"><span class="map-cluster-count">${count}</span>${hasOrange ? '<span class="map-cluster-orange-dot"></span>' : ''}</span>`;
+          entry.el.innerHTML = `<span class="map-cluster${kind === 'orange' ? ' map-cluster-orange' : ''}" style="width:${size}px;height:${size}px"><span class="map-cluster-count">${count}</span></span>`;
         }
       });
     }
@@ -1364,7 +1449,10 @@ export class TerrainMapView {
       if (ratio > CIRCLE_REFIT_UPPER_RATIO) targetRatio = CIRCLE_FIT_TARGET_DIAMETER_RATIO;
       else if (ratio < CIRCLE_REFIT_LOWER_RATIO) targetRatio = CIRCLE_ZOOM_IN_TARGET_RATIO;
       else return null;
-      const zoom = Math.min(Math.max(effectiveZoom + Math.log2(targetRatio / ratio), CIRCLE_FIT_MIN_ZOOM), 22);
+      const zoom = this._capCircleZoomForObstacles(
+        dep, radiusKm, Math.min(Math.max(effectiveZoom + Math.log2(targetRatio / ratio), CIRCLE_FIT_MIN_ZOOM), 22),
+        this.map.getPitch(), bearingNow
+      );
       // 最低ズーム8.5に張り付いていて、もう動く余地が無いときは動かさない
       // （¥2000付近で＋を押すたびに同じ場所へ飛び直す空の動きを出さない）。
       if (Math.abs(zoom - effectiveZoom) < 0.02) return null;
@@ -1418,9 +1506,50 @@ export class TerrainMapView {
     const bearing = this.map.getBearing();
     const camera = this.map.cameraForBounds(bounds, { padding, pitch, bearing });
     if (!camera) return null;
-    const zoom = Math.max(camera.zoom, CIRCLE_FIT_MIN_ZOOM);
+    const zoom = this._capCircleZoomForObstacles(dep, radiusKm, Math.max(camera.zoom, CIRCLE_FIT_MIN_ZOOM), pitch, bearing);
     this._easeToCircle(dep, zoom, pitch, bearing, (prefersReducedMotion() || !animate) ? 0 : durationMs);
     return zoom;
+  }
+
+  /**
+   * 【47本目】出発駅を中心に、ズームzoom・傾きpitch・向きbearingにしたとき、半径radiusKmの円の縁が
+   * 地図の上の部品にかかるなら、かからなくなるまで少しずつ引いたズームを返す（最低ズーム8.5まで）。
+   * 行き先のカメラはMapLibreのtransformを複製して作る（地図そのものは動かさない）。複製できない版では
+   * 何もしない（zoomのまま）。
+   */
+  _capCircleZoomForObstacles(dep, radiusKm, zoom, pitch, bearing) {
+    const rects = circleObstacleRects(this.map.getContainer());
+    if (rects.length === 0) return zoom;
+    let tr;
+    try {
+      tr = this.map.transform.clone();
+      tr.setPadding(CLEAR_PADDING);
+      tr.setCenter(new maplibregl.LngLat(dep.stop_lon, dep.stop_lat));
+      tr.setPitch(pitch);
+      tr.setBearing(bearing);
+    } catch {
+      return zoom;
+    }
+    const edge = [];
+    for (let i = 0; i < 72; i++) {
+      const p = destinationPoint(dep.stop_lat, dep.stop_lon, i * 5, radiusKm);
+      edge.push(new maplibregl.LngLat(p.lon, p.lat));
+    }
+    const g = CIRCLE_OBSTACLE_GAP_PX;
+    let z = zoom;
+    for (let step = 0; step <= CIRCLE_OBSTACLE_MAX_STEPS; step++) {
+      tr.setZoom(z);
+      const hit = edge.some((ll) => {
+        const pt = tr.locationToScreenPoint(ll);
+        return rects.some((r) => (r.round
+          ? Math.hypot(pt.x - r.cx, pt.y - r.cy) < r.radius + g
+          : pt.x > r.left - g && pt.x < r.right + g && pt.y > r.top - g && pt.y < r.bottom + g));
+      });
+      if (!hit) return z;
+      if (z <= CIRCLE_FIT_MIN_ZOOM) return CIRCLE_FIT_MIN_ZOOM;
+      z = Math.max(z - CIRCLE_OBSTACLE_ZOOM_STEP, CIRCLE_FIT_MIN_ZOOM);
+    }
+    return z;
   }
 
   /** fitCircleToView()の実際のカメラ移動。動いている間は行き先のズームを
@@ -1763,7 +1892,7 @@ export class TerrainMapView {
     // ピン（円のレイヤー）。画面上の位置から、白いふちを含めた大きさの四角にする。
     const mapRect = this.map.getContainer().getBoundingClientRect();
     try {
-      this.map.queryRenderedFeatures({ layers: [SPOTS_LAYER_ID] }).forEach((f) => {
+      this.map.queryRenderedFeatures({ layers: [SPOTS_LAYER_ID, SPOTS_PLAIN_LAYER_ID] }).forEach((f) => {
         const p = this.map.project(f.geometry.coordinates);
         const x = mapRect.left + p.x;
         const y = mapRect.top + p.y;

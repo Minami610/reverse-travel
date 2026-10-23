@@ -1441,12 +1441,23 @@ header p {
   background-color: #ff6b2b;
 }
 
+/* 【47本目】灰色は紺よりさらに小さな点（7px→6px）。まとめた丸には入れない。 */
 .map-pin-spot.map-pin-gray {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   background-color: #8e959e;
   border-width: 1px;
   box-shadow: none;
+}
+
+/* 【2026-10-23、47本目、Minami決定：1】オレンジが1つでもあるとき（地図の入れ物に.map-has-orange）、
+   主役はオレンジ（13pxの丸・オレンジの丸）。紺はまとめずに小さな点（9px、白いふち）にする。
+   選んだピン・ホバー中のピンは下の決まりのまま大きく出す。 */
+.map-has-orange .map-pin-spot.map-pin-blue:not(.map-pin-selected):not(.map-pin-hover) {
+  width: 9px;
+  height: 9px;
+  border-width: 1.5px;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
 }
 
 /* ホバーと選択は独立した状態として扱う（選択を後ろに置き、両方付いたときは選択の見た目を優先）。 */
@@ -1479,9 +1490,10 @@ header p {
   z-index: 2;
 }
 
-/* 【43本目、Minami決定：B-2】近いピンをまとめた丸（数字入りの青い丸）。オレンジ（金額を
-   変えて新しく入った場所）を含むときは、右上に小さなオレンジの点（.map-cluster-orange-dot）。
-   大きさ（28〜38px）はJSが中の件数に応じてstyleで指定する。 */
+/* 【43本目、Minami決定：B-2】近いピンをまとめた丸（数字入りの紺の丸）。
+   大きさ（28〜38px）はJSが中の件数に応じてstyleで指定する。
+   【47本目、Minami決定：1】オレンジがあるときはオレンジだけをまとめたオレンジの丸
+   （.map-cluster-orange）にする。紺の丸の右上の小さなオレンジの点（43本目）はやめた。 */
 .map-cluster-wrapper {
   background: none;
   border: none;
@@ -1505,16 +1517,13 @@ header p {
   transition: transform 0.3s ease, opacity 0.3s ease;
 }
 
-.map-cluster-orange-dot {
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
+.map-cluster.map-cluster-orange {
   background-color: #ff6b2b;
-  border: 1.5px solid white;
-  box-sizing: border-box;
+}
+
+/* 【47本目】3Dのまとめた丸（HTMLの印）は出発駅の印より上、選んだピンの印（z-index:2）より下。 */
+.map-cluster-3d {
+  z-index: 1;
 }
 
 /* 検索直後の波の演出（下の.pin-wave-hidden）を、まとめた丸にも同じように効かせる。 */

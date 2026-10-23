@@ -320,7 +320,7 @@ class ReverseTravel {
     // 【2026-10-15、11本目①】地図の下の固定情報枠の閉じるボタン（Minami決定：A）。
     this.elements.spotInfoClose?.addEventListener('click', () => this.hideSpotInfoPanel());
     // 【2026-10-21、41本目、Minami決定】最初の見え方に戻るボタン（地図の右上、方位磁針の
-    // すぐ下。2Dは右上）。検索した直後と同じ見え方（円が短辺の0.6、3Dは傾き45°・向きは
+    // すぐ下。2Dは右上）。検索した直後と同じ見え方（円が短辺の0.85（47本目）、3Dは傾き45°・向きは
     // 変えない）へなめらかに戻す。以前の「全体を見る」（寄っているときだけ出る文字ボタン）の
     // 役目を引き継ぎ、いつでも押せるようにした（一度も検索していないときは出さない）。
     this.elements.mapResetViewBtn?.addEventListener('click', () => {
@@ -1402,7 +1402,7 @@ class ReverseTravel {
       // 予算によっては円がごく一部にしか見えない／画面からはみ出すことがあった
       // （Minami実機確認：富山駅前・往復¥500で円が小さすぎる、¥1,500ではみ出す）。
       // 【41本目】最初の見え方に戻るボタン・「← 一覧に戻る」と同じreturnToSearchView()
-      // （円が短辺の0.6、傾き45°、向きは変えない）を使う。3Dが見えていない（2D表示中）
+      // （円が短辺の0.85（47本目）、傾き45°、向きは変えない）を使う。3Dが見えていない（2D表示中）
       // ときは、3Dに切り替えたとき（resize()）に合わせる。
       this.terrainMapView.returnToSearchView({ durationMs: 0 });
     }
@@ -1478,7 +1478,7 @@ class ReverseTravel {
       if (this.currentDepartureStationId) {
         this.terrainMapView.render(station, this.currentAllSpots, this.currentBudget);
         // 【2026-10-21、43本目、Minami決定：A-2】検索したあとに初めて3Dへ切り替えたときも、
-        // 検索した直後と同じ見え方（円が短辺の0.6、傾き45°、向きは北）にする。以前は
+        // 検索した直後と同じ見え方（円が短辺の0.85（47本目）、傾き45°、向きは北）にする。以前は
         // ズーム9・傾き57°のまま（下の11本目②の判断でカメラを触らなかった）だった。
         // 2回目以降の切り替えでは、3Dで見ていた位置のまま（見えていない間に検索が
         // あったときだけ、returnToSearchView()の保留→resize()で合わせ直される）。
