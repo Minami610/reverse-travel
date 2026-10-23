@@ -1437,8 +1437,26 @@ header p {
   background-color: #1f3c88;
 }
 
+/* 【48本目、Minami決定：1】オレンジも紺と同じくらいの小さな点（直径10px、白いふち）。紺（9px）より
+   ひと回りだけ大きく、影を少し濃くして、わずかに目立たせる。選んだピン・ホバーは下の決まりで大きくなる。 */
 .map-pin-spot.map-pin-orange {
+  width: 10px;
+  height: 10px;
   background-color: #ff6b2b;
+  border-width: 1.5px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+/* 【48本目、Minami決定：2】＋で新しく増えたオレンジが、波に合わせて「ぽん」と出る（小さく出て、
+   少しふくらんで元の大きさに。0.2秒）。動きを減らす設定のときはJS側がこのクラスを付けない。 */
+.map-pin-spot.map-pin-pop {
+  animation: map-pin-pop 0.2s ease-out;
+}
+
+@keyframes map-pin-pop {
+  0% { transform: scale(0.3); }
+  60% { transform: scale(1.3); }
+  100% { transform: scale(1); }
 }
 
 /* 【47本目】灰色は紺よりさらに小さな点（7px→6px）。まとめた丸には入れない。 */

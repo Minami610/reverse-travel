@@ -6593,9 +6593,9 @@ async function checkPinColorsAndClusters(browser, baseUrl, savedPaths) {
             });
             const colorStr = JSON.stringify(paint.color);
             record(
-              `${label} 点の色は、青＝#1F3C88・オレンジ＝#FF6B2B・灰色＝#8E959E、直径は青・オレンジ13px・灰色7px、ぼかしなし`,
+              `${label} 点の色は、青＝#1F3C88・オレンジ＝#FF6B2B・灰色＝#8E959E、直径は青13px・オレンジ11px（48本目）・灰色7px、ぼかしなし`,
               colorStr.includes('#1F3C88') && colorStr.includes('#FF6B2B') && colorStr.includes('#8E959E')
-                && JSON.stringify(paint.radius) === JSON.stringify(['match', ['get', 'cat'], 'gray', 3.5, 6.5]) && paint.blur === 0,
+                && JSON.stringify(paint.radius) === JSON.stringify(['match', ['get', 'cat'], 'gray', 3.5, 'orange', 4, 6.5]) && paint.blur === 0,
               JSON.stringify(paint)
             );
             record(`${label} 選んだピンはひと回り大きく（直径20px）、白い太いふち`, paint.selRadius === 10 && paint.selStroke >= 3, JSON.stringify(paint));
@@ -6735,6 +6735,12 @@ async function checkPinColorsAndClusters(browser, baseUrl, savedPaths) {
  * 期待値（テスト側で同じ規則を独立に計算）を比べるための材料を集める。
  */
 async function readPinCategories(page, dim) {
+  // 【48本目】＋で新しく増えたオレンジは、波に合わせて「ぽん」と出し終えるまで（0.5秒＋0.2秒）いつもの
+  // データに入らない。出そろってから読む。
+  await page.waitForFunction((dim) => {
+    const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
+    return !view || !view._pinPop;
+  }, dim, { timeout: 5000 }).catch(() => {});
   return page.evaluate((dim) => {
     const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
     const searched = dim === '3d' ? view._lastBudget : view.lastBudget;
@@ -7085,11 +7091,19 @@ async function checkRound45(browser, baseUrl, savedPaths) {
       const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
       return !(top && el.contains(top));
     }).length;
+    // 【48本目】まとめる色（オレンジがなければ紺）で1つずつ出ているピンのうち、隣から14px以内（重なる）の組の数。
+    // 重なるピンはまとまっているはずなので、ふつうは0。
+    const kind = mv._hasOrange ? 'orange' : 'blue';
+    const loose = [];
+    mv.markersBySpotId.forEach((m) => { const el = m.getElement(); if (el && el.style.display !== 'none' && el.dataset.cat === kind) loose.push(mv.map.latLngToContainerPoint(m.getLatLng())); });
+    let overlapPairs = 0;
+    for (let i = 0; i < loose.length; i++) for (let j = i + 1; j < loose.length; j++) if (loose[i].distanceTo(loose[j]) <= 14) overlapPairs++;
     return {
       zoom: +mv.map.getZoom().toFixed(2),
       clusters: mv._clusters.length,
       pins: visible,
       covered,
+      overlapPairs,
       signature: mv._clusters.map((c) => c.members.length).sort().join(','),
     };
   }, dim);
@@ -7130,8 +7144,10 @@ async function checkRound45(browser, baseUrl, savedPaths) {
       await step(1);
       const s2 = await clusterState(page, dim);
       record(
-        `${label} 検索した直後から2段縮小すると、ピンがまとまる（まとめた丸に入った場所が増え、ばらのピンが減る）`,
-        inClusters(s1) > inClusters(s0) && s1.pins < s0.pins,
+        // 【48本目】まとめるのはピン同士が重なるときだけ（14px）になったため、2段縮小しても重ならなければ
+        // まとまらないのが正しい（山下・¥500のPC・2Dは7か所が重ならないまま）。重なる組が残っていないことで見る。
+        `${label} 検索した直後から2段縮小すると、重なるピンはまとまる（まとめた丸に入った場所が増え、ばらのピンが減る。2Dで重なる組が無いときは、まとまらないのが正しい）`,
+        (inClusters(s1) > inClusters(s0) && s1.pins < s0.pins) || (dim === '2d' && s1.overlapPairs === 0),
         JSON.stringify({ before: s0, after: s1 })
       );
       if (dim === '2d') {
@@ -7651,6 +7667,244 @@ async function checkRound47(browser, baseUrl, savedPaths) {
       }
     }
   }
+}
+
+/** 【48本目】出発駅の候補を、駅名がちょうど一致するもので選んで検索する（「岡」で「岡山…」を選ばないように）。 */
+async function searchExactStation(page, stationName, budget, isMobile) {
+  await ensureFormExpanded(page);
+  await page.fill('#departure-input', '');
+  await page.fill('#departure-input', stationName);
+  await page.waitForTimeout(500);
+  await page.locator(`.suggestion-item[data-station-name="${stationName}"]`).first().click();
+  await setBudgetSlider(page, budget);
+  const before = await page.evaluate(() => window.__maxBudgetPrefetchAppliedCount || 0);
+  await page.click('#search-btn');
+  await page.waitForSelector('.spot-card, .no-results', { timeout: 15000, state: 'attached' });
+  await page.waitForFunction((n) => (window.__maxBudgetPrefetchAppliedCount || 0) > n, before, { timeout: 20000 }).catch(() => {});
+  await page.waitForTimeout(300);
+  if (isMobile) {
+    await page.click('.tab-btn[data-tab="map"]');
+    await page.waitForTimeout(400);
+  }
+}
+
+/** 【48本目】今の数字の丸の数・丸の中の場所の数・1つずつ出ているオレンジの数（2D・3D）。 */
+async function readClusterSummary(page, dim) {
+  return page.evaluate((dim) => {
+    if (dim === '3d') {
+      const tv = window.__terrainViewForDebug;
+      const m = window.__terrainMapForDebug;
+      const sizes = [...(tv._clusterMarkers || new Map()).values()].map((e) => e.count);
+      const singles = m.queryRenderedFeatures({ layers: ['spots-circle', 'spots-plain-circle'] }).filter((f) => f.properties.cat === 'orange').length;
+      return { clusters: sizes.length, inClusters: sizes.reduce((a, b) => a + b, 0), orangeSingles: singles };
+    }
+    const mv = window.__mapViewForDebug;
+    let singles = 0;
+    mv.markersBySpotId.forEach((mk) => { const el = mk.getElement(); if (el && el.dataset.cat === 'orange' && el.style.display !== 'none') singles++; });
+    return { clusters: mv._clusters.length, inClusters: mv._clusters.reduce((a, c) => a + c.members.length, 0), orangeSingles: singles };
+  }, dim);
+}
+
+/**
+ * 【2026-10-23、48本目、Minami決定】ピンはなるべくまとめず1つずつ見せる・＋のとき波に合わせて
+ * オレンジのピンが現れる。岡・¥500で検索→＋を7回（¥1,200）、PCと400×464、2Dと3D。
+ * 1. まとめる範囲が「ピン同士が重なるくらい」（14px）：2Dは、隣のオレンジから14pxより遠いオレンジが
+ *    必ず1つずつ点で出ている（数字の丸に入っていない）。3Dはまとめる範囲が14。数字の丸の数を記録する。
+ * 2. オレンジのピンの大きさが紺とほぼ同じ（2Dは画面上の直径の差が2px以内、3Dは半径の式）。
+ * 3. ＋を押した直後の0.1秒にはまだ出ていない遠い場所の新しいオレンジが、0.55秒後には出ている。
+ * 4. コンソールにエラーが出ない（国土地理院の標高タイルの404を除く）。
+ * スクリーンショット：¥1,200まで上げたあと（PCと400×464、2Dと3D、地図の読み込み後）。
+ * 動画（WebM）：400×464の3Dで、岡・¥500から＋を4回押したところ。
+ */
+async function checkRound48(browser, baseUrl, savedPaths) {
+  console.log('\n=== 48本目：ピンはなるべくまとめず1つずつ見せる・波に合わせてオレンジが現れる ===');
+  const viewports = { pc: VIEWPORTS.pc, own: { width: 400, height: 464 } };
+  for (const [vLabel, viewport] of Object.entries(viewports)) {
+    const isMobile = vLabel !== 'pc';
+    const incId = isMobile ? 'mobile-budget-increment' : 'budget-increment';
+    for (const dim of ['2d', '3d']) {
+      const label = `[48/${vLabel}/${dim}]`;
+      const context = await browser.newContext({ viewport });
+      await context.addInitScript(() => { try { localStorage.setItem('reverse-travel-rotate-hint-seen', 'true'); } catch { /* 無視 */ } });
+      const page = await context.newPage();
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+      page.on('console', (msg) => {
+        if (msg.type() === 'error' && !isKnownAcceptableConsoleMessage(msg.text())) errors.push(msg.text());
+      });
+      try {
+        await page.goto(baseUrl, { waitUntil: 'load' });
+        await page.waitForSelector('#departure-input');
+        await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+        await searchExactStation(page, '岡', 500, isMobile);
+        if (dim === '3d') {
+          await page.click('#map-dimension-toggle');
+          const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+          record(`${label} 3D化（検証の前提）`, ok);
+          if (!ok) continue;
+          await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+          await waitForTerrainCameraIdle(page);
+          await waitForTerrainTilesLoaded(page);
+          await page.waitForTimeout(500);
+        } else {
+          await waitForWaveRevealSettled(page);
+          await page.waitForTimeout(300);
+        }
+
+        // --- 3. 波に合わせて出る。遠い場所に新しいオレンジが増える＋まで順に押し、その回の
+        //     押した直後0.1秒と0.55秒の様子を見る（¥1,200までの7回のうちに必ず1回はある）。 ---
+        let timing = null;
+        let presses = 0;
+        while (presses < 7) {
+        presses++;
+        timing = await page.evaluate(({ dim, incId }) => new Promise((resolve) => {
+          const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
+          const prev = view._liveBudget;
+          document.getElementById(incId).click();
+          const live = view._liveBudget;
+          const totalKm = view.computeReachRadiusKm(live);
+          const spots = (view._lastSpots || []).filter((s) => s.source_round_trip_fare > prev && s.source_round_trip_fare <= live);
+          const dep = dim === '3d' ? view._lastDepartureStation : view._departureStation;
+          const toRad = (d) => (d * Math.PI) / 180;
+          const km = (s) => {
+            const dLat = toRad(s.latitude - dep.stop_lat); const dLon = toRad(s.longitude - dep.stop_lon);
+            const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(dep.stop_lat)) * Math.cos(toRad(s.latitude)) * Math.sin(dLon / 2) ** 2;
+            return 2 * 6371 * Math.asin(Math.sqrt(a));
+          };
+          // 0.1秒の時点で波が届いている半径は全体の36%（ease-out）。その2倍より遠い新しいオレンジを見る。
+          const far = spots.map((s) => ({ id: s.id, km: km(s) })).filter((x) => x.km > totalKm * 0.6);
+          const shown = (id) => {
+            if (dim === '3d') {
+              const p = view._pinPop;
+              if (p && p.pending.has(id)) return false;
+              if (p && p.shown.has(id)) return true;
+              return (view._spotDataSignature || '').split(',').some((x) => x.startsWith(`${id}:`));
+            }
+            const el = view.markersBySpotId.get(id)?.getElement();
+            return !!el && el.style.display !== 'none' && el.dataset.pop !== 'pending';
+          };
+          const t0 = performance.now();
+          const at = (ms) => new Promise((r) => { const tick = () => (performance.now() - t0 >= ms ? r() : requestAnimationFrame(tick)); tick(); });
+          (async () => {
+            await at(100);
+            const at100 = far.map((x) => shown(x.id));
+            await at(550);
+            const at550 = far.map((x) => shown(x.id));
+            resolve({ prev, live, far: far.length, totalKm, hiddenAt100: at100.filter((v) => !v).length, shownAt550: at550.filter(Boolean).length });
+          })();
+        }), { dim, incId });
+        if (timing.far > 0) break;
+        await page.waitForTimeout(900);
+        }
+        record(
+          `${label} ＋を押した直後の0.1秒にはまだ出ていない遠い場所のオレンジが、0.55秒後には出ている（波に合わせて出る）`,
+          timing.far > 0 && timing.hiddenAt100 === timing.far && timing.shownAt550 === timing.far,
+          JSON.stringify(timing)
+        );
+
+        // --- ＋を合わせて7回（¥1,200）になるまで ---
+        await page.waitForTimeout(900);
+        for (let i = presses; i < 7; i++) {
+          await page.evaluate((id) => document.getElementById(id).click(), incId);
+          await page.waitForTimeout(150);
+        }
+        await waitForCircleSettled(page, dim);
+        if (dim === '3d') await waitForTerrainCameraIdle(page);
+        await page.waitForTimeout(900); // 波（0.5秒）と「ぽん」（0.2秒）が終わり、まとめ直されるまで
+        const live = await page.evaluate((dim) => (dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug)._liveBudget, dim);
+        const sum = await readClusterSummary(page, dim);
+        console.log(`  ${label} ¥${live}：数字の丸${sum.clusters}個（中の場所${sum.inClusters}か所）・1つずつのオレンジ${sum.orangeSingles}か所`);
+
+        // --- 1. 本当に重なるときだけまとめる ---
+        if (dim === '2d') {
+          const lonely = await page.evaluate(() => {
+            const mv = window.__mapViewForDebug;
+            const pts = [];
+            mv.markersBySpotId.forEach((m, id) => { const el = m.getElement(); if (el && el.dataset.cat === 'orange' && id !== mv.selectedSpotId) pts.push({ id, p: mv.map.latLngToContainerPoint(m.getLatLng()), el }); });
+            const far = pts.filter((a) => pts.every((b) => b === a || a.p.distanceTo(b.p) > 14));
+            return { orange: pts.length, far: far.length, farHidden: far.filter((x) => x.el.style.display === 'none').length };
+          });
+          record(
+            `${label} ¥1,200：隣のオレンジから14pxより遠い（重ならない）オレンジは、すべて1つずつ点で出ている`,
+            live === 1200 && lonely.orange > 0 && lonely.farHidden === 0,
+            JSON.stringify({ live, ...lonely, ...sum })
+          );
+        } else {
+          const radius = await page.evaluate(() => window.__terrainMapForDebug.getSource('spots')?._options?.clusterRadius ?? window.__terrainMapForDebug.getStyle().sources.spots.clusterRadius);
+          record(`${label} ¥1,200：まとめる範囲が、ピン同士が重なるくらい（14）`, live === 1200 && radius === 14, JSON.stringify({ live, radius, ...sum }));
+        }
+
+        // --- 2. オレンジのピンの大きさが紺とほぼ同じ ---
+        if (dim === '2d') {
+          const sizes = await page.evaluate(() => {
+            const w = (cat) => [...document.querySelectorAll(`#spots-map .map-pin-spot.map-pin-${cat}`)]
+              .filter((el) => el.closest('.leaflet-marker-icon').style.display !== 'none' && !el.classList.contains('map-pin-selected') && !el.classList.contains('map-pin-hover'))
+              .map((el) => el.getBoundingClientRect().width);
+            return { orange: w('orange'), blue: w('blue') };
+          });
+          const o = Math.max(...sizes.orange); const b = Math.max(...sizes.blue);
+          record(`${label} オレンジのピンの大きさが紺とほぼ同じ（直径の差が2px以内）`, sizes.orange.length > 0 && sizes.blue.length > 0 && Math.abs(o - b) <= 2, JSON.stringify({ orange: o, blue: b }));
+        } else {
+          const paint = await page.evaluate(() => ({
+            main: window.__terrainMapForDebug.getPaintProperty('spots-circle', 'circle-radius'),
+            plain: window.__terrainMapForDebug.getPaintProperty('spots-plain-circle', 'circle-radius'),
+          }));
+          record(
+            `${label} オレンジのピンの大きさが紺とほぼ同じ（オレンジ半径4、まとめない紺の半径3.5）`,
+            JSON.stringify(paint.main) === JSON.stringify(['match', ['get', 'cat'], 'gray', 3.5, 'orange', 4, 6.5])
+              && JSON.stringify(paint.plain) === JSON.stringify(['match', ['get', 'cat'], 'gray', 2, 3.5]),
+            JSON.stringify(paint)
+          );
+        }
+
+        await waitForBaseMapLoaded(page, dim);
+        const shot = path.join(screenshotDir, `round48-1200-${dim}-${vLabel}.png`);
+        await page.screenshot({ path: shot, clip: await page.locator('#map-area').boundingBox() });
+        savedPaths.push(shot);
+        record(`${label} コンソールにエラーが出ていない（標高タイルの404を除く）`, errors.length === 0, errors.join(' / '));
+      } catch (e) {
+        record(`${label} 検証中にクラッシュしない`, false, e.message);
+      } finally {
+        await context.close();
+      }
+    }
+  }
+
+  // --- 動画：400×464の3Dで、岡・¥500から＋を4回 ---
+  const videoDir = path.join(screenshotDir, 'round48-video-tmp');
+  fs.mkdirSync(videoDir, { recursive: true });
+  const context = await browser.newContext({ viewport: { width: 400, height: 464 }, recordVideo: { dir: videoDir, size: { width: 400, height: 464 } } });
+  await context.addInitScript(() => { try { localStorage.setItem('reverse-travel-rotate-hint-seen', 'true'); } catch { /* 無視 */ } });
+  const page = await context.newPage();
+  let video = null;
+  try {
+    video = page.video();
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await searchExactStation(page, '岡', 500, true);
+    await page.click('#map-dimension-toggle');
+    await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 });
+    await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+    await waitForTerrainCameraIdle(page);
+    await waitForTerrainTilesLoaded(page);
+    await page.waitForTimeout(800);
+    for (let i = 0; i < 4; i++) {
+      await page.click('#mobile-budget-increment');
+      await page.waitForTimeout(1300);
+    }
+    await page.waitForTimeout(800);
+  } catch (e) {
+    record('[48/video] 動画の撮影中にクラッシュしない', false, e.message);
+  } finally {
+    await context.close();
+  }
+  if (video) {
+    const src = await video.path();
+    const dest = path.join(screenshotDir, 'round48-plus4-3d-own.webm');
+    fs.copyFileSync(src, dest);
+    savedPaths.push(dest);
+  }
+  fs.rmSync(videoDir, { recursive: true, force: true });
 }
 
 /**
@@ -8614,6 +8868,7 @@ async function main() {
     await runWithFreshBrowser(checkVectorBaseMap, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound45, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound47, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkRound48, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBreadcrumbTrail, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBudgetSlider, baseUrl, savedPaths);
     await runWithFreshBrowser(checkWaveRevealAndCircleScreenshots, baseUrl, savedPaths);

@@ -279,8 +279,23 @@ const PIN_COLOR_GRAY = '#8E959E';
 const COLOR_SELECTED = PIN_COLOR_BLUE;
 // 【43本目、Minami決定：B-2】近いピンを数字の入った丸にまとめる（MapLibreのGeoJSONソースの
 // cluster機能）。このズームより寄るとまとめない（場所に寄ったとき＝ズーム14では1つずつ見える）。
-const PIN_CLUSTER_RADIUS = 40;
+// 【2026-10-23、48本目、Minami決定：1】40→14（2Dのmap-view.jsと同じ考え方）。まとめるのはピン同士が
+// 重なるときだけにし、重ならないピンは1つずつ点で見せる（MapLibreのclusterRadiusは、タイルの幅を
+// 512とした単位で、ズームの整数の段ではちょうど画面のpx）。
+const PIN_CLUSTER_RADIUS = 14;
 const PIN_CLUSTER_MAX_ZOOM = 13;
+// 【48本目、Minami決定：2】＋で新しく増えたオレンジを、波（CIRCLE_WAVE_DURATION_MS、ease-out）が
+// その場所の距離を通り過ぎた瞬間に「ぽん」と出す（小さく出て少しふくらみ元の大きさへ、0.2秒。
+// 2DのCSS .map-pin-popと同じ動き）。出している間はまとめないソース（SPOTS_POP_SOURCE_ID）に入れ、
+// 出そろって「ぽん」が終わってから、いつものソースへ戻してまとめ直す。
+const SPOTS_POP_SOURCE_ID = 'spots-pop';
+const SPOTS_POP_LAYER_ID = 'spots-pop-circle';
+const PIN_POP_DURATION_MS = 200;
+/** 「ぽん」の大きさ（経過時間ms→倍率）：0.3倍で出て、6割の時点で1.3倍、最後に1倍。 */
+function pinPopScale(ageMs) {
+  const t = Math.min(1, Math.max(0, ageMs / PIN_POP_DURATION_MS));
+  return t < 0.6 ? 0.3 + (1.3 - 0.3) * (t / 0.6) : 1.3 - 0.3 * ((t - 0.6) / 0.4);
+}
 // まとめた丸（数字入り、HTMLの印）の位置・数字を更新する間隔の下限（描画のたびに作り直さない）。
 const PIN_CLUSTER_UPDATE_INTERVAL_MS = 100;
 
@@ -540,6 +555,10 @@ export class TerrainMapView {
             type: 'geojson',
             data: { type: 'FeatureCollection', features: [] },
           },
+          [SPOTS_POP_SOURCE_ID]: {
+            type: 'geojson',
+            data: { type: 'FeatureCollection', features: [] },
+          },
           [REACH_CIRCLE_SOURCE_ID]: {
             type: 'geojson',
             data: { type: 'FeatureCollection', features: [] },
@@ -621,11 +640,27 @@ export class TerrainMapView {
             // 【43本目】まとめた丸（point_countを持つ点）はHTMLの印で描くため、ここでは描かない。
             filter: ['!', ['has', 'point_count']],
             paint: {
-              // 青・オレンジは直径13px（半径6.5）＋白いふち2px、灰色は小さな点（半径3.5、ふち1px）。
-              'circle-radius': ['match', ['get', 'cat'], 'gray', 3.5, 6.5],
+              // 青は直径13px（半径6.5）＋白いふち2px、灰色は小さな点（半径3.5、ふち1px）。
+              // 【48本目、Minami決定：1】オレンジは紺の点（まとめない点のレイヤー、直径10px）と同じくらいに
+              // 小さくし（半径4＋白いふち1.5px＝直径11px）、紺よりひと回りだけ大きくして少し目立たせる。
+              'circle-radius': ['match', ['get', 'cat'], 'gray', 3.5, 'orange', 4, 6.5],
               'circle-color': ['match', ['get', 'cat'], 'orange', PIN_COLOR_ORANGE, 'gray', PIN_COLOR_GRAY, PIN_COLOR_BLUE],
               'circle-opacity': 1,
-              'circle-stroke-width': ['match', ['get', 'cat'], 'gray', 1, 2],
+              'circle-stroke-width': ['match', ['get', 'cat'], 'gray', 1, 'orange', 1.5, 2],
+              'circle-stroke-color': '#ffffff',
+              'circle-blur': 0,
+            },
+          },
+          // 【48本目】「ぽん」と出しているオレンジ（まとめない）。大きさは点ごとの倍率（s）で変える。
+          {
+            id: SPOTS_POP_LAYER_ID,
+            type: 'circle',
+            source: SPOTS_POP_SOURCE_ID,
+            paint: {
+              'circle-radius': ['*', 4, ['get', 's']],
+              'circle-color': PIN_COLOR_ORANGE,
+              'circle-opacity': 1,
+              'circle-stroke-width': ['*', 1.5, ['get', 's']],
               'circle-stroke-color': '#ffffff',
               'circle-blur': 0,
             },
@@ -781,6 +816,7 @@ export class TerrainMapView {
     };
     this.map.on('click', SPOTS_LAYER_ID, onSpotClick);
     this.map.on('click', SPOTS_PLAIN_LAYER_ID, onSpotClick);
+    this.map.on('click', SPOTS_POP_LAYER_ID, onSpotClick); // 【48本目】
     // 【43本目B-2】まとめた丸（HTMLの印）は、地図が動いたとき・データが変わったときに作り直す
     // （間引きあり）。【不具合修正】当初は'render'のたびに作り直していたが、印の位置を設定し直す
     // と次の描画が呼ばれ、地図が止まっていても描画が毎秒約18回続いて'idle'にならない輪になった
@@ -793,7 +829,7 @@ export class TerrainMapView {
     // 何も書き換えないため、idle→描き直し→idleの繰り返しにはならない）。
     this.map.on('idle', () => this._updateClusterMarkers());
     this.map.on('sourcedata', (e) => { if (e.sourceId === SPOTS_SOURCE_ID) this._scheduleClusterMarkerUpdate(); });
-    [SPOTS_LAYER_ID, SPOTS_PLAIN_LAYER_ID].forEach((layerId) => {
+    [SPOTS_LAYER_ID, SPOTS_PLAIN_LAYER_ID, SPOTS_POP_LAYER_ID].forEach((layerId) => {
       this.map.on('mouseenter', layerId, () => { this.map.getCanvas().style.cursor = 'pointer'; });
       this.map.on('mouseleave', layerId, () => { this.map.getCanvas().style.cursor = ''; });
     });
@@ -904,6 +940,8 @@ export class TerrainMapView {
     // （setFilter）では、出さない点もまとめた丸の数に入ってしまう。全件はここで覚えておき、
     // 出す点・色の決まり（cat）を付けたデータを_rebuildSpotData()で毎回作り直して渡す。
     this._spotFeatures = features;
+    this._spotFeatureById = new Map(features.map((f) => [f.properties.id, f])); // 【48本目】「ぽん」で使う
+    this._cancelPinPop();
 
     this.applyBudget(budget ?? 2000, { reveal });
     this.updateReachCircle(budget ?? 2000, { style: 'settled' });
@@ -969,6 +1007,7 @@ export class TerrainMapView {
    * @returns {number} 帯内の件数
    */
   applyBudget(budget, { reveal = false } = {}) {
+    this._cancelPinPop(); // 【48本目】検索したら「ぽん」はやめる（オレンジは紺になる）
     this._lastBudget = budget;
     this._liveBudget = budget; // 【43本目】検索したときは、今の金額＝検索した金額（オレンジは青になる）
     const count = (this._lastSpots || []).filter(
@@ -1005,8 +1044,21 @@ export class TerrainMapView {
    * 検索直後の波の演出の途中なら、波のほうが最後にデータを作り直す（ここでは作り直さない）。
    * @param {number} budget 今の金額
    */
-  setLiveBudget(budget) {
+  setLiveBudget(budget, { pop = false } = {}) {
+    const prevLive = this._liveBudget ?? this._lastBudget;
     this._liveBudget = budget;
+    // 【48本目、Minami決定：2】金額を上げたとき（pop:true、main.jsが波を出すときと同じ判断）は、
+    // 新しく増えたオレンジをいったん出さず、波に合わせて1つずつ「ぽん」と出す（2Dと同じ）。
+    // 続けて押されたら、まだ出ていないものも新しい波に合わせて出し直す。下げたとき・動きを
+    // 減らす設定のとき・地図が見えていないときは、すぐ出す・消す。
+    const container = this.map && this.map.getContainer();
+    const visible = !!container && container.clientWidth > 0 && container.clientHeight > 0;
+    if (pop && visible && !prefersReducedMotion() && this._lastBudget != null && prevLive != null && budget > prevLive) {
+      this._addPinPopPending(prevLive, budget);
+      this._startPinPop(budget);
+    } else {
+      this._cancelPinPop();
+    }
     if (this._liveRebuildScheduled) return;
     this._liveRebuildScheduled = true;
     requestAnimationFrame(() => {
@@ -1014,6 +1066,77 @@ export class TerrainMapView {
       if (this._waveFrame) return;
       this._rebuildSpotData();
     });
+  }
+
+  /** 【48本目】前の金額（prevLive）をこえて今の金額（budget）までに届く新しいオレンジを「まだ出していない」にする。 */
+  _addPinPopPending(prevLive, budget) {
+    if (!this._pinPop) this._pinPop = { pending: new Map(), shown: new Map(), frame: null };
+    (this._spotFeatures || []).forEach((f) => {
+      const { id, fare, distance_km: km } = f.properties;
+      if (!(fare > prevLive && fare <= budget && fare > this._lastBudget)) return;
+      if (id === this.selectedSpotId || this._pinPop.shown.has(id)) return;
+      this._pinPop.pending.set(id, km);
+    });
+  }
+
+  /**
+   * 【48本目】波と同じ速さ（0.5秒、ease-out）で広がる半径を毎コマ計算し、その半径を通り過ぎた
+   * まだ出していないオレンジを「ぽん」と出す（SPOTS_POP_SOURCE_IDに倍率sつきで入れる）。
+   * 全部出して「ぽん」が終わったら、いつものソースへ戻してまとめ直す。呼ばれるたびに時間を
+   * 0からやり直す（続けて押したときは新しい波に合わせる）。
+   */
+  _startPinPop(budget) {
+    const state = this._pinPop;
+    if (!state || !this.map) return;
+    if (state.frame) cancelAnimationFrame(state.frame);
+    const totalKm = this.computeReachRadiusKm(budget);
+    const startTime = performance.now();
+    const step = (now) => {
+      if (this._pinPop !== state || !this.map) return;
+      const progress = Math.min(1, Math.max(0, (now - startTime) / CIRCLE_WAVE_DURATION_MS));
+      const radiusKm = totalKm * (1 - (1 - progress) * (1 - progress));
+      state.pending.forEach((km, id) => {
+        if (progress < 1 && km > radiusKm) return;
+        state.pending.delete(id);
+        state.shown.set(id, now);
+      });
+      const popping = [...state.shown.values()].some((t) => now - t < PIN_POP_DURATION_MS);
+      if (state.pending.size === 0 && !popping) {
+        state.frame = null;
+        this._pinPop = null;
+        this._rebuildSpotData(); // 出そろってから、本当に重なるものだけまとめる
+        return;
+      }
+      this._paintPinPop(now);
+      state.frame = requestAnimationFrame(step);
+    };
+    state.frame = requestAnimationFrame(step);
+  }
+
+  /** 【48本目】「ぽん」と出しているオレンジを、経過時間に合わせた倍率で描く。 */
+  _paintPinPop(now = performance.now()) {
+    const source = this.map && this.map.getSource(SPOTS_POP_SOURCE_ID);
+    if (!source) return;
+    const state = this._pinPop;
+    const features = [];
+    if (state) {
+      const byId = this._spotFeatureById || new Map();
+      state.shown.forEach((t, id) => {
+        const f = byId.get(id);
+        if (!f || id === this.selectedSpotId) return;
+        features.push({ type: 'Feature', geometry: f.geometry, properties: { ...f.properties, cat: 'orange', s: pinPopScale(now - t) } });
+      });
+    }
+    source.setData({ type: 'FeatureCollection', features });
+    this._popDataCount = features.length; // 検証用（verify-layout.js）
+  }
+
+  /** 【48本目】「ぽん」を止める（呼び出し元がデータを作り直すと、まだ出していないピンもすぐ出る）。 */
+  _cancelPinPop() {
+    const state = this._pinPop;
+    if (!state) return;
+    this._pinPop = null;
+    if (state.frame) cancelAnimationFrame(state.frame);
   }
 
   /**
@@ -1039,8 +1162,11 @@ export class TerrainMapView {
     const features = [];
     const clustered = [];
     const plain = [];
+    const pinPop = this._pinPop;
     (this._spotFeatures || []).forEach((f) => {
       if (f.properties.id === this.selectedSpotId) return;
+      // 【48本目】波を待っている・「ぽん」と出している最中のオレンジは、いつものソースに入れない。
+      if (pinPop && (pinPop.pending.has(f.properties.id) || pinPop.shown.has(f.properties.id))) return;
       if (revealKm !== undefined && !(f.properties.distance_km <= revealKm)) return;
       const cat = pinCategory(f.properties.fare, live, searched);
       if (cat === 'hidden') return;
@@ -1050,6 +1176,7 @@ export class TerrainMapView {
     });
     source.setData({ type: 'FeatureCollection', features: clustered });
     plainSource.setData({ type: 'FeatureCollection', features: plain });
+    this._paintPinPop(); // 【48本目】「ぽん」が無いときは空にする
     // 検証用（verify-layout.js）：出している点の数と、点ごとの色の決まりの一覧
     this._spotDataCount = features.length;
     this._spotDataSignature = features.map((f) => `${f.properties.id}:${f.properties.cat}`).sort().join(',');

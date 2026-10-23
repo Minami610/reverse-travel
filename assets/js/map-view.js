@@ -165,7 +165,16 @@ const MAP_REACH_CIRCLE_COLOR = '#2F6FB2';
 // 【2026-10-21、43本目、Minami決定：B】近いピンを数字の入った丸にまとめる。画面上で
 // この距離（px）以内のピン同士を1つの丸にする（ピンの直径13px＋まとめた丸の大きさを見込んだ値）。
 // このズーム以上ではまとめない（同じ場所に重なっている場所がいつまでも分かれないのを防ぐ）。
-const MAP_PIN_CLUSTER_RADIUS_PX = 36;
+// 【2026-10-23、48本目、Minami決定：1】36px→14px。スマホの小さい地図で引いていると、少し離れた
+// 場所まで1つの丸になっていた（まとまりすぎ）。まとめるのは仕方ないとき（ピン同士が重なるとき）
+// だけにし、重ならないピンは1つずつ点で見せる（ピンは直径9〜10px＋白いふちのため、中心どうしが
+// 14px以内なら重なって見える）。
+const MAP_PIN_CLUSTER_RADIUS_PX = 14;
+// 【48本目、Minami決定：2】＋（スライダーで金額を上げたときも）で新しく増えたオレンジのピンは、
+// 出発駅から広がる波（MAP_CIRCLE_WAVE_DURATION_MS、ease-out）がその場所の距離を通り過ぎた瞬間に
+// 「ぽん」と出す（小さく出て少しふくらみ元の大きさへ、CSSの.map-pin-pop、0.2秒）。
+// 数字の丸は、出そろって「ぽん」が終わってからまとめ直す。
+const MAP_PIN_POP_DURATION_MS = 200;
 const MAP_PIN_CLUSTER_MAX_ZOOM = 16;
 // 【2026-10-23、47本目、Minami決定：1】ピンの重なり順（上から）：選んだピン → オレンジの丸・
 // オレンジのピン → 出発駅の印 → 紺 → 灰色。Leafletの印の重なりは「画面上の縦位置（px）＋
@@ -350,6 +359,7 @@ export class MapView {
     this.ensureMap();
     this._cancelWaveReveal();
     this._cancelFitCircleToView(); // 新しい検索で、前の予算操作から保留中の地図合わせは無効化する
+    this._cancelPinPop(); // 【48本目】
     this.markersLayer.clearLayers();
     this._clusterLayer.clearLayers();
     this._clusters = [];
@@ -509,6 +519,7 @@ export class MapView {
    * @returns {number} 帯内の件数
    */
   applyBudget(budget) {
+    this._cancelPinPop(); // 【48本目】検索したら「ぽん」はやめる（オレンジは紺になる）
     this.lastBudget = budget;
     // 【43本目】検索したときは、今の金額＝検索した金額（オレンジは青になる）。
     this._liveBudget = budget;
@@ -546,11 +557,103 @@ export class MapView {
    * 地図が見えていないときは、見えたとき（handleShown()）に今の金額で塗り直される。
    * @param {number} budget 今の金額
    */
-  setLiveBudget(budget) {
+  setLiveBudget(budget, { pop = false } = {}) {
+    const prevLive = this._liveBudget ?? this.lastBudget;
     this._liveBudget = budget;
-    if (this.lastBudget == null || !this.isContainerVisible()) return;
+    if (this.lastBudget == null || !this.isContainerVisible()) {
+      this._cancelPinPop();
+      return;
+    }
+    // 【48本目、Minami決定：2】金額を上げたとき（pop:true、main.jsが波を出すときと同じ判断）は、
+    // 新しく増えたオレンジ（前の金額をこえて今の金額までに届く・検索した金額をこえる場所）を
+    // いったん隠し、波に合わせて1つずつ出す。前の波の途中で続けて押されたら、まだ出ていない
+    // ピンも新しい波に合わせて出し直す（出そこねるピンがないように）。下げたとき・動きを減らす
+    // 設定のときは、すぐ出す・消す。
+    if (pop && !reachPrefersReducedMotion() && prevLive != null && budget > prevLive) {
+      this._addPinPopPending(prevLive, budget);
+    } else {
+      this._cancelPinPop();
+    }
     this._restyleMarkers();
     this._recluster();
+    if (this._pinPop) this._startPinPop(budget);
+  }
+
+  /** 【48本目】前の金額（prevLive）をこえて今の金額（budget）までに届く新しいオレンジを「まだ出していない」にする。 */
+  _addPinPopPending(prevLive, budget) {
+    if (!this.departureLatLng) return;
+    if (!this._pinPop) this._pinPop = { pending: new Map(), frame: null, endTimer: null };
+    const [lat, lon] = this.departureLatLng;
+    this.fareBySpotId.forEach((fare, spotId) => {
+      if (!(fare > prevLive && fare <= budget && fare > this.lastBudget)) return;
+      if (spotId === this.selectedSpotId) return;
+      const ll = this.spotsLatLngById.get(spotId);
+      if (!ll) return;
+      this._pinPop.pending.set(spotId, reachHaversineKm(lat, lon, ll[0], ll[1]));
+      const el = this.markersBySpotId.get(spotId)?.getElement();
+      if (el) el.dataset.pop = 'pending';
+    });
+  }
+
+  /**
+   * 【48本目】波と同じ速さ（0.5秒、ease-out）で広がる半径を毎コマ計算し、その半径を通り過ぎた
+   * まだ出していないオレンジを「ぽん」と出す。全部出して「ぽん」が終わったらまとめ直す。
+   * 呼ばれるたびに時間を0からやり直す（続けて押したときは新しい波に合わせる）。
+   */
+  _startPinPop(budget) {
+    const state = this._pinPop;
+    if (!state) return;
+    if (state.frame) cancelAnimationFrame(state.frame);
+    if (state.endTimer) clearTimeout(state.endTimer);
+    state.endTimer = null;
+    const totalKm = this.computeReachRadiusKm(budget);
+    const startTime = performance.now();
+    const step = (now) => {
+      if (this._pinPop !== state) return;
+      const progress = Math.min(1, Math.max(0, (now - startTime) / MAP_CIRCLE_WAVE_DURATION_MS));
+      const radiusKm = totalKm * (1 - (1 - progress) * (1 - progress));
+      state.pending.forEach((km, spotId) => {
+        if (progress < 1 && km > radiusKm) return;
+        state.pending.delete(spotId);
+        const el = this.markersBySpotId.get(spotId)?.getElement();
+        if (!el) return;
+        delete el.dataset.pop;
+        this._applyMarkerDisplay(el);
+        const pin = el.querySelector('.map-pin');
+        if (pin) {
+          pin.classList.remove('map-pin-pop');
+          void pin.offsetWidth; // 続けて出すときも、はじめから動かす
+          pin.classList.add('map-pin-pop');
+        }
+      });
+      if (state.pending.size > 0) {
+        state.frame = requestAnimationFrame(step);
+        return;
+      }
+      state.frame = null;
+      state.endTimer = setTimeout(() => {
+        if (this._pinPop !== state) return;
+        this._pinPop = null;
+        this.markersBySpotId.forEach((marker) => marker.getElement()?.querySelector('.map-pin-pop')?.classList.remove('map-pin-pop'));
+        this._recluster(); // 出そろってから、本当に重なるものだけまとめる
+      }, MAP_PIN_POP_DURATION_MS);
+    };
+    state.frame = requestAnimationFrame(step);
+  }
+
+  /** 【48本目】「ぽん」を止め、まだ出していないピンをすぐ出す（下げたとき・検索し直したとき等）。 */
+  _cancelPinPop() {
+    const state = this._pinPop;
+    if (!state) return;
+    this._pinPop = null;
+    if (state.frame) cancelAnimationFrame(state.frame);
+    if (state.endTimer) clearTimeout(state.endTimer);
+    this.markersBySpotId.forEach((marker) => {
+      const el = marker.getElement();
+      if (!el) return;
+      if (el.dataset.pop) { delete el.dataset.pop; this._applyMarkerDisplay(el); }
+      el.querySelector('.map-pin-pop')?.classList.remove('map-pin-pop');
+    });
   }
 
   /**
@@ -623,9 +726,11 @@ export class MapView {
     if (marker.options.zIndexOffset !== z) marker.setZIndexOffset(z);
   }
 
-  /** 予算をこえる場所・まとめた丸に入った場所は出さない（選んだピンはいつも出す）。 */
+  /** 予算をこえる場所・まとめた丸に入った場所・波を待っている新しいオレンジ（48本目）は出さない。 */
   _applyMarkerDisplay(el) {
-    el.style.display = (el.dataset.cat === 'hidden' || el.dataset.clustered === '1') ? 'none' : '';
+    const hide = el.dataset.cat === 'hidden' || el.dataset.clustered === '1'
+      || (el.dataset.pop === 'pending' && el.dataset.cat === 'orange');
+    el.style.display = hide ? 'none' : '';
   }
 
   /**
@@ -653,7 +758,8 @@ export class MapView {
       if (!el) return;
       el.dataset.clustered = '0';
       this._applyMarkerDisplay(el);
-      if (el.dataset.cat !== kind || spotId === this.selectedSpotId) return;
+      // 【48本目】波を待っている新しいオレンジは、まだまとめない（出そろってからまとめ直す）。
+      if (el.dataset.cat !== kind || spotId === this.selectedSpotId || el.dataset.pop === 'pending') return;
       points.push({ spotId, el, latlng: marker.getLatLng() });
     });
     if (!this.isContainerVisible() || this.map.getZoom() >= MAP_PIN_CLUSTER_MAX_ZOOM) return;

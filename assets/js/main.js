@@ -802,8 +802,9 @@ class ReverseTravel {
     const raised = userTouch && this._liveMapBudget != null && budget > this._liveMapBudget;
     this._liveMapBudget = budget;
     // 【43本目C】ピンを今の金額に合わせて塗り直す（裏取得・フォームを閉じて元に戻すときも同じ）。
-    this.mapView.setLiveBudget(budget);
-    this.terrainMapView?.setLiveBudget(budget);
+    // 【48本目、Minami決定：2】上げたとき（波を出すときと同じ判断）は、新しく増えたオレンジを波に合わせて「ぽん」と出す。
+    this.mapView.setLiveBudget(budget, { pop: raised });
+    this.terrainMapView?.setLiveBudget(budget, { pop: raised });
     this.mapView.updateReachCircle(budget, { style: 'live', wave: raised });
     this.terrainMapView?.updateReachCircle(budget, { style: 'live', wave: raised });
     if (userTouch) {
