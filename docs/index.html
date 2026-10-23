@@ -3,7 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>逆引き旅行アプリ - 予算から行き先を探す</title>
+  <!-- 【2026-10-24、51本目、Minami決定】アプリの名前は「みちどころ」（「未知」「道」「見どころ」を合わせた造語）。
+       見出し・ブラウザのタブ・共有したときに出る説明文をそろえる。公開URL（reverse-travel）は変えない。 -->
+  <title>みちどころ ―近くの未知の場所を探そう―</title>
+  <meta name="description" content="みちどころ ―近くの未知の場所を探そう―。出発駅と往復の交通費を入れると、電車とバスで日帰りで行ける、あまり知られていない場所が見つかります。">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="みちどころ">
+  <meta property="og:title" content="みちどころ ―近くの未知の場所を探そう―">
+  <meta property="og:description" content="出発駅と往復の交通費を入れると、電車とバスで日帰りで行ける、あまり知られていない場所が見つかります。">
+  <meta property="og:url" content="https://minami610.github.io/reverse-travel/">
+  <meta name="twitter:card" content="summary">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚌</text></svg>">
   <style>
 /* required styles */
@@ -754,8 +763,19 @@ header {
   white-space: nowrap;
 }
 
+/* 【2026-10-24、51本目、Minami決定】アプリの名前「みちどころ」と副題「―近くの未知の場所を探そう―」。
+   PCは1行に並べ、スマホ幅では名前の下に副題を小さく出す（下の@media）。 */
+.app-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
 header h1 {
-  font-size: 1rem;
+  font-size: 1.1rem;
+  letter-spacing: 0.08em;
   flex: 0 0 auto;
 }
 
@@ -3093,7 +3113,15 @@ header p {
 }
 
 .howto-pin-spot {
-  background-color: var(--color-main);
+  background-color: #1f3c88;
+  border: 1.5px solid white;
+  outline: 1px solid var(--color-border);
+  border-radius: 50%;
+}
+
+/* 【51本目】「NEW」（オレンジのピン）。地図のピンと同じ色。 */
+.howto-pin-new {
+  background-color: #ff6b2b;
   border: 1.5px solid white;
   outline: 1px solid var(--color-border);
   border-radius: 50%;
@@ -3175,8 +3203,26 @@ header p {
      「予…」のように省略記号で切れていた。幅を削り合う形（text-overflow:
      ellipsis）では、タイトル・マイリストボタンを両方は入りきらないため、
      スマホ幅では説明文自体を表示しない（タイトルとマイリストボタンだけ残す）。 */
-  header p {
-    display: none;
+  /* 【51本目】副題は省略せずに出す。名前の下に小さく2段にする（1行では、名前・副題・マイリストが
+     375px幅に収まらないため）。 */
+  header {
+    align-items: center;
+  }
+
+  .app-title {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+  }
+
+  header h1 {
+    line-height: 1.2;
+  }
+
+  header p.app-subtitle {
+    font-size: 0.68rem;
+    line-height: 1.2;
+    overflow: visible;
   }
 
   .form-row {
@@ -3373,12 +3419,97 @@ header p {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
 }
 
+/* ========================================
+   【2026-10-24、51本目、Minami決定】ピンの色の説明と「NEW +8」の札
+   紺のピンは「みちどころ」、オレンジのピンは「NEW」。地図の上の中央に出す（左上・右上の部品と
+   重ならない）。地図をつかんで動かす操作のじゃまをしないよう、押せないようにする。
+   ======================================== */
+.map-legend {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  color: #333;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.map-legend[hidden] {
+  display: none;
+}
+
+.map-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.map-legend-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid white;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
+.map-legend-dot-blue {
+  background-color: #1f3c88;
+}
+
+.map-legend-dot-orange {
+  background-color: #ff6b2b;
+}
+
+/* オレンジ地に白い文字の小さな札（地図の「NEW +8」と、一覧のカードの「NEW」で共通） */
+.new-tag {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 4px;
+  background-color: #ff6b2b;
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.new-tag[hidden] {
+  display: none;
+}
+
+/* 一覧のカードの「NEW」は、写真の左上に重ねる（右上は☆・共有ボタン） */
+.spot-card-new {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  z-index: 2;
+  font-size: 12px;
+  line-height: 20px;
+  padding: 0 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
 </style>
 </head>
 <body>
   <header>
-    <h1>🚌 いけるとこまで旅行</h1>
-    <p>予算を入れたら、行ける場所が出てくる。地方の知られていない景勝地を発見しよう！</p>
+    <div class="app-title">
+      <h1>みちどころ</h1>
+      <p class="app-subtitle">―近くの未知の場所を探そう―</p>
+    </div>
     <button type="button" id="mylist-btn" aria-label="マイリストを開く"><span class="icon icon-star" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></span> マイリスト <span id="mylist-count">0</span></button>
   </header>
 
@@ -3609,6 +3740,14 @@ header p {
         <button type="button" id="spot-info-close" class="spot-info-close" aria-label="閉じる">×</button>
         <div id="spot-info-content" class="spot-info-content"></div>
       </div>
+      <!-- 【2026-10-24、51本目、Minami決定】ピンの色の説明。紺のピンは「みちどころ」、オレンジのピンは「NEW」。
+           横の札（オレンジ地に白い文字）に、今オレンジで出ている場所の数を「NEW +8」の形で出す
+           （0のときは出さない。main.jsのupdateNewSpotMarks()）。一度検索したら出す。 -->
+      <div id="map-legend" class="map-legend" hidden>
+        <span class="map-legend-item"><span class="map-legend-dot map-legend-dot-blue" aria-hidden="true"></span>みちどころ</span>
+        <span class="map-legend-item"><span class="map-legend-dot map-legend-dot-orange" aria-hidden="true"></span>NEW</span>
+        <span id="map-new-count" class="new-tag" hidden></span>
+      </div>
       <!-- 【41本目】寄っているときだけ出していた「全体を見る」ボタン（11本目②）は、
            いつでも出ている最初の見え方に戻るボタン（#map-reset-view-btn）に置き換えた。 -->
     </div>
@@ -3661,7 +3800,10 @@ header p {
         地図上の <span class="howto-pin howto-pin-departure" aria-hidden="true"></span>
         （オレンジのひし形）が出発駅、
         <span class="howto-pin howto-pin-spot" aria-hidden="true"></span>
-        （緑の丸）がスポットです。ピンをクリックすると一覧の対応するカードがハイライトされ、
+        （紺の丸）が「みちどころ」、
+        <span class="howto-pin howto-pin-new" aria-hidden="true"></span>
+        （オレンジの丸）が「NEW」です。「NEW」は、予算を上げて新しく行けるようになった場所です。
+        ピンをクリックすると一覧の対応するカードがハイライトされ、
         一覧のカードをクリックするとスポットの詳細画面が開きます。
       </p>
 
@@ -5202,6 +5344,11 @@ const MAP_REACH_CIRCLE_COLOR = '#2F6FB2';
 // だけにし、重ならないピンは1つずつ点で見せる（ピンは直径9〜10px＋白いふちのため、中心どうしが
 // 14px以内なら重なって見える）。
 const MAP_PIN_CLUSTER_RADIUS_PX = 14;
+// 【51本目】数字の丸と重なるかを見るときの1つずつのピンの直径（白いふちを含む。style.cssの
+// .map-pin-spot・.map-pin-orangeと同じ値）と、丸どうしに残すすき間。
+const MAP_PIN_ORANGE_DIAMETER_PX = 10;
+const MAP_PIN_BLUE_DIAMETER_PX = 13;
+const CLUSTER_OVERLAP_GAP_PX = 1;
 // 【48本目、Minami決定：2】＋（スライダーで金額を上げたときも）で新しく増えたオレンジのピンは、
 // 出発駅から広がる波（MAP_CIRCLE_WAVE_DURATION_MS、ease-out）がその場所の距離を通り過ぎた瞬間に
 // 「ぽん」と出す（小さく出て少しふくらみ元の大きさへ、CSSの.map-pin-pop、0.2秒）。
@@ -5797,6 +5944,8 @@ class MapView {
    * する）、紺と灰色はまとめずに小さな点で出す。オレンジがなければ紺だけを紺の丸にまとめ、灰色は
    * まとめない（以前は紺と灰色が同じ丸に入り、数字の意味があいまいだった）。紺の丸の右上の
    * オレンジの点（43本目）はやめた。
+   * 【51本目】まとめたあと、数字の丸どうし・数字の丸と1つずつのピンが重なるものは、重ならなくなるまで
+   * まとめる（mergeOverlappingClusters()）。
    */
   _recluster() {
     if (!this.map || !this._clusterLayer) return;
@@ -5817,6 +5966,7 @@ class MapView {
     points.sort((a, b) => (a.spotId < b.spotId ? -1 : a.spotId > b.spotId ? 1 : 0));
     points.forEach((pt) => { pt.px = this.map.latLngToLayerPoint(pt.latlng); });
     const used = new Set();
+    const groups = [];
     for (let i = 0; i < points.length; i++) {
       if (used.has(i)) continue;
       const group = [i];
@@ -5826,7 +5976,21 @@ class MapView {
       }
       if (group.length < 2) continue;
       group.forEach((k) => used.add(k));
-      const members = group.map((k) => points[k]);
+      groups.push(group);
+    }
+    // 【51本目】数字の丸は直径28px以上あり、まとめる範囲（14px）より大きい。そのため丸どうし・丸と1つずつの
+    // ピンが画面上で重なることがあった。重なるものは、重ならなくなるまで同じ丸にまとめる。
+    const singleRadius = (kind === 'orange' ? MAP_PIN_ORANGE_DIAMETER_PX : MAP_PIN_BLUE_DIAMETER_PX) / 2;
+    const mergeItems = [
+      ...groups.map((group) => ({
+        members: group,
+        x: group.reduce((sum, k) => sum + points[k].px.x, 0) / group.length,
+        y: group.reduce((sum, k) => sum + points[k].px.y, 0) / group.length,
+      })),
+      ...points.map((pt, i) => ({ members: [i], x: pt.px.x, y: pt.px.y })).filter((it) => !used.has(it.members[0])),
+    ];
+    mergeOverlappingClusters(mergeItems, singleRadius).forEach((merged) => {
+      const members = merged.members.map((k) => points[k]);
       members.forEach((m) => { m.el.dataset.clustered = '1'; this._applyMarkerDisplay(m.el); });
       const lat = members.reduce((sum, m) => sum + m.latlng.lat, 0) / members.length;
       const lng = members.reduce((sum, m) => sum + m.latlng.lng, 0) / members.length;
@@ -5839,7 +6003,7 @@ class MapView {
       const memberIds = members.map((m) => m.spotId);
       marker.on('click', () => this._zoomIntoCluster(memberIds));
       this._clusters.push({ marker, members: memberIds, latlng: [lat, lng], kind });
-    }
+    });
   }
 
   /**
@@ -6482,8 +6646,52 @@ function createPinIcon(kind) {
  * 【43本目B-2】まとめた丸のアイコン（数字入りの丸）。中の場所が多いほど少し大きくする。
  * 【47本目】kindが'orange'ならオレンジの丸（.map-cluster-orange）、'blue'なら紺の丸。
  */
+/** まとめた丸の直径（px）。3Dのterrain-map-view.jsも同じ大きさ。 */
+function clusterSizePx(count) {
+  return count < 10 ? 28 : count < 50 ? 32 : 38;
+}
+
+/**
+ * 【2026-10-24、51本目、Minami決定】数字の丸どうし、または数字の丸と1つずつのピンが画面上で重なる
+ * ときは、重ならなくなるまで1つの丸にまとめる（丸の直径28px以上が、まとめる範囲14pxより大きいため）。
+ * 1つずつのピンどうしは見ない（14pxの決まりのまま）。毎回同じ結果になるよう、並び順どおりに調べる。
+ * 3Dのterrain-map-view.jsにも同じ関数がある（読み込み方の都合でimportできないため）。
+ * @param {Array<{members: Array, x: number, y: number, count?: number}>} items 画面上の位置（px）。
+ *   members が2つ以上なら数字の丸、1つなら1つずつのピン。count は丸の中の場所の数（省略時は members.length）
+ * @param {number} singleRadius 1つずつのピンの半径（px、白いふちを含む）
+ * @returns {Array} 数字の丸として出すもの（members・x・y・count）
+ */
+function mergeOverlappingClusters(items, singleRadius) {
+  const list = items.map((it) => ({ ...it, count: it.count ?? it.members.length }));
+  const isCluster = (it) => it.count >= 2;
+  const radius = (it) => (isCluster(it) ? clusterSizePx(it.count) / 2 : singleRadius);
+  let merged = true;
+  while (merged) {
+    merged = false;
+    for (let i = 0; i < list.length && !merged; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i];
+        const b = list[j];
+        if (!isCluster(a) && !isCluster(b)) continue;
+        if (Math.hypot(a.x - b.x, a.y - b.y) >= radius(a) + radius(b) + CLUSTER_OVERLAP_GAP_PX) continue;
+        const count = a.count + b.count;
+        list[i] = {
+          members: [...a.members, ...b.members],
+          x: (a.x * a.count + b.x * b.count) / count,
+          y: (a.y * a.count + b.y * b.count) / count,
+          count,
+        };
+        list.splice(j, 1);
+        merged = true;
+        break;
+      }
+    }
+  }
+  return list.filter(isCluster);
+}
+
 function createClusterIcon(count, kind) {
-  const size = count < 10 ? 28 : count < 50 ? 32 : 38;
+  const size = clusterSizePx(count);
   return L.divIcon({
     className: 'map-cluster-wrapper',
     html: `<span class="map-cluster${kind === 'orange' ? ' map-cluster-orange' : ''}" style="width:${size}px;height:${size}px"><span class="map-cluster-count">${count}</span></span>`,
@@ -7149,7 +7357,7 @@ function buildOnwardCandidates(context, currentSpot) {
 
 // ----- main.js -----
 /**
- * main.js - 逆引き旅行アプリ UIロジック
+ * main.js - みちどころ UIロジック
  * 検索画面、結果表示、スポット詳細を管理
  */
 
@@ -7185,6 +7393,14 @@ const WAVE_REVEAL_SAFE_DELAY_MS = 1200;
 /** 予算→帯の表示ラベル（例: budget=1000 → "¥801〜¥1000"） */
 function formatBandLabel(budget) {
   return `¥${budget - BAND_WIDTH + 1}〜¥${budget}`;
+}
+
+/**
+ * 【2026-10-24、51本目、Minami決定】一覧の上の見出し（例: budget=800・12件 → "¥601〜¥800 の場所　12か所"）。
+ * 一覧に今出ている金額帯と、その中の数。
+ */
+function formatBandHeading(budget, count) {
+  return `¥${formatThousands(budget - BAND_WIDTH + 1)}〜¥${formatThousands(budget)} の場所　${count}か所`;
 }
 
 /** 数字を3桁区切りにする（例: 1740 → "1,740"。「この先へ」の運賃表記用） */
@@ -7329,6 +7545,8 @@ class ReverseTravel {
       sortSelect: document.getElementById('sort-select'),
       departureGuidance: document.getElementById('departure-guidance'),
       bandHeading: document.getElementById('results-band-heading'),
+      mapLegend: document.getElementById('map-legend'),
+      mapNewCount: document.getElementById('map-new-count'),
       resultsList: document.getElementById('results-list'),
       detailContent: document.getElementById('detail-content'),
       detailContainer: document.getElementById('detail-container'),
@@ -7952,6 +8170,7 @@ class ReverseTravel {
     // 【48本目、Minami決定：2】上げたとき（波を出すときと同じ判断）は、新しく増えたオレンジを波に合わせて「ぽん」と出す。
     this.mapView.setLiveBudget(budget, { pop: raised });
     this.terrainMapView?.setLiveBudget(budget, { pop: raised });
+    this.updateNewSpotMarks(budget);
     this.mapView.updateReachCircle(budget, { style: 'live', wave: raised });
     this.terrainMapView?.updateReachCircle(budget, { style: 'live', wave: raised });
     if (userTouch) {
@@ -7968,6 +8187,32 @@ class ReverseTravel {
     }
     const { bandSpots } = this.filterBandFromAllSpots(this.currentAllSpots, budget);
     this.updateBudgetBandPreview(budget, bandSpots.length);
+  }
+
+  /**
+   * 【2026-10-24、51本目、Minami決定】紺のピンを「みちどころ」、オレンジのピンを「NEW」と呼ぶ。
+   * 地図の色の説明の横に、今オレンジで出ている場所の数を「NEW +8」の形で出す（0のときは出さない）。
+   * 一覧のカードにも、地図でオレンジになっている場所には「NEW」の印を付ける（地図の色と同じ決まり：
+   * map-view.jsのpinCategory()。金額を＋−するたびに、地図のピンと一緒に入れ替わる）。
+   * @param {number} liveBudget 今の金額（＋−・スライダーで変えた値）
+   */
+  updateNewSpotMarks(liveBudget) {
+    const spots = this.currentAllSpots || [];
+    const searched = this.currentBudget;
+    const prev = this._mapPrevSearchedBudget ?? searched;
+    const isNew = (spot) => pinCategory(spot.source_round_trip_fare, liveBudget, searched, prev) === 'orange';
+    const newCount = spots.filter((s) => isFiniteNumber(s.latitude) && isFiniteNumber(s.longitude) && isNew(s)).length;
+    const tag = this.elements.mapNewCount;
+    if (tag) {
+      tag.textContent = `NEW +${newCount}`;
+      tag.hidden = newCount === 0;
+    }
+    const spotById = new Map(spots.map((s) => [s.id, s]));
+    this.elements.resultsList.querySelectorAll('.spot-card').forEach((card) => {
+      const spot = spotById.get(card.getAttribute('data-spot-id'));
+      const mark = card.querySelector('.spot-card-new');
+      if (mark) mark.hidden = !(spot && isNew(spot));
+    });
   }
 
   updateBudgetBandPreview(budget, count) {
@@ -8505,7 +8750,8 @@ class ReverseTravel {
     // 帯の見出し（「往復¥801〜¥1000で行ける場所」）。0件のときも、何の帯を
     // 検索した結果が0件なのかが分かるよう常に表示する。
     if (this.elements.bandHeading) {
-      this.elements.bandHeading.textContent = `往復${formatBandLabel(budget)}で行ける場所`;
+      // 【51本目、Minami決定】「¥601〜¥800 の場所　12か所」（一覧に今出ている金額帯と、その中の数）。
+      this.elements.bandHeading.textContent = formatBandHeading(budget, spots.length);
       this.elements.bandHeading.hidden = false;
     }
 
@@ -8550,6 +8796,9 @@ class ReverseTravel {
     this.mapView.render(departureStation, this.currentAllSpots, budget, { reveal: true });
     // 【41本目】最初の見え方に戻るボタンは、一度検索したら出す。
     if (this.elements.mapResetViewBtn) this.elements.mapResetViewBtn.hidden = false;
+    // 【51本目】色の説明・「NEW +◯」も、一度検索したら出す。
+    if (this.elements.mapLegend) this.elements.mapLegend.hidden = false;
+    this.updateNewSpotMarks(budget);
     // 3D地図は3D切替が一度も行われるまでインスタンス自体が無い（遅延読込、4本目②）。
     // 作成済みならrender()を呼ぶ（未初期化でも座標だけ保持する設計のため、
     // activateTerrainMap()が後から呼ばれたときに自動で反映される）。
@@ -9308,6 +9557,7 @@ class ReverseTravel {
             <button type="button" class="favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}" aria-label="${fav ? 'マイリストから外す' : 'マイリストに保存'}">${starIconHtml(fav)}</button>
             <button type="button" class="share-btn" data-spot-id="${spot.id}" aria-label="共有">${shareIconHtml()}</button>
           </div>
+          <span class="new-tag spot-card-new" hidden>NEW</span>
           ${renderSpotImageHtml(spot, 'spot-image')}
           <h3>${spot.name}</h3>
           <p class="spot-description">${this.formatDescription(spot)}</p>
@@ -9321,6 +9571,8 @@ class ReverseTravel {
       .join('');
 
     this.elements.resultsList.innerHTML = html;
+    // 【51本目】地図でオレンジになっている場所に「NEW」の印を付ける。
+    this.updateNewSpotMarks(parseInt(this.elements.budgetInput.value, 10));
 
     // 一覧の再描画でカードのDOMが作り直されるため、選択中のスポットが
     // あれば（アプリ全体で1つだけ持つthis.selectedSpotIdを正として）

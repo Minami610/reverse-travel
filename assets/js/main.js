@@ -1,5 +1,5 @@
 /**
- * main.js - 逆引き旅行アプリ UIロジック
+ * main.js - みちどころ UIロジック
  * 検索画面、結果表示、スポット詳細を管理
  */
 
@@ -9,7 +9,7 @@ import { SpotFinder } from './spot-finder.js';
 import { RouteFormatter } from './route-formatter.js';
 import { estimateTripFrequency, formatDayLabel, operatorLabelWord, sameRouteWord } from './route-duration.js';
 import { buildOnwardCandidates } from './onward-candidates.js';
-import { MapView, isFiniteNumber, formatReachRadiusKm } from './map-view.js';
+import { MapView, isFiniteNumber, formatReachRadiusKm, pinCategory } from './map-view.js';
 import { isWebglLikelySupported, loadTerrainModule, preloadTerrainModuleWhenIdle } from './terrain-loader.js';
 import { LayoutController } from './layout-controller.js';
 import {
@@ -40,6 +40,14 @@ const WAVE_REVEAL_SAFE_DELAY_MS = 1200;
 /** 予算→帯の表示ラベル（例: budget=1000 → "¥801〜¥1000"） */
 function formatBandLabel(budget) {
   return `¥${budget - BAND_WIDTH + 1}〜¥${budget}`;
+}
+
+/**
+ * 【2026-10-24、51本目、Minami決定】一覧の上の見出し（例: budget=800・12件 → "¥601〜¥800 の場所　12か所"）。
+ * 一覧に今出ている金額帯と、その中の数。
+ */
+function formatBandHeading(budget, count) {
+  return `¥${formatThousands(budget - BAND_WIDTH + 1)}〜¥${formatThousands(budget)} の場所　${count}か所`;
 }
 
 /** 数字を3桁区切りにする（例: 1740 → "1,740"。「この先へ」の運賃表記用） */
@@ -184,6 +192,8 @@ class ReverseTravel {
       sortSelect: document.getElementById('sort-select'),
       departureGuidance: document.getElementById('departure-guidance'),
       bandHeading: document.getElementById('results-band-heading'),
+      mapLegend: document.getElementById('map-legend'),
+      mapNewCount: document.getElementById('map-new-count'),
       resultsList: document.getElementById('results-list'),
       detailContent: document.getElementById('detail-content'),
       detailContainer: document.getElementById('detail-container'),
@@ -807,6 +817,7 @@ class ReverseTravel {
     // 【48本目、Minami決定：2】上げたとき（波を出すときと同じ判断）は、新しく増えたオレンジを波に合わせて「ぽん」と出す。
     this.mapView.setLiveBudget(budget, { pop: raised });
     this.terrainMapView?.setLiveBudget(budget, { pop: raised });
+    this.updateNewSpotMarks(budget);
     this.mapView.updateReachCircle(budget, { style: 'live', wave: raised });
     this.terrainMapView?.updateReachCircle(budget, { style: 'live', wave: raised });
     if (userTouch) {
@@ -823,6 +834,32 @@ class ReverseTravel {
     }
     const { bandSpots } = this.filterBandFromAllSpots(this.currentAllSpots, budget);
     this.updateBudgetBandPreview(budget, bandSpots.length);
+  }
+
+  /**
+   * 【2026-10-24、51本目、Minami決定】紺のピンを「みちどころ」、オレンジのピンを「NEW」と呼ぶ。
+   * 地図の色の説明の横に、今オレンジで出ている場所の数を「NEW +8」の形で出す（0のときは出さない）。
+   * 一覧のカードにも、地図でオレンジになっている場所には「NEW」の印を付ける（地図の色と同じ決まり：
+   * map-view.jsのpinCategory()。金額を＋−するたびに、地図のピンと一緒に入れ替わる）。
+   * @param {number} liveBudget 今の金額（＋−・スライダーで変えた値）
+   */
+  updateNewSpotMarks(liveBudget) {
+    const spots = this.currentAllSpots || [];
+    const searched = this.currentBudget;
+    const prev = this._mapPrevSearchedBudget ?? searched;
+    const isNew = (spot) => pinCategory(spot.source_round_trip_fare, liveBudget, searched, prev) === 'orange';
+    const newCount = spots.filter((s) => isFiniteNumber(s.latitude) && isFiniteNumber(s.longitude) && isNew(s)).length;
+    const tag = this.elements.mapNewCount;
+    if (tag) {
+      tag.textContent = `NEW +${newCount}`;
+      tag.hidden = newCount === 0;
+    }
+    const spotById = new Map(spots.map((s) => [s.id, s]));
+    this.elements.resultsList.querySelectorAll('.spot-card').forEach((card) => {
+      const spot = spotById.get(card.getAttribute('data-spot-id'));
+      const mark = card.querySelector('.spot-card-new');
+      if (mark) mark.hidden = !(spot && isNew(spot));
+    });
   }
 
   updateBudgetBandPreview(budget, count) {
@@ -1360,7 +1397,8 @@ class ReverseTravel {
     // 帯の見出し（「往復¥801〜¥1000で行ける場所」）。0件のときも、何の帯を
     // 検索した結果が0件なのかが分かるよう常に表示する。
     if (this.elements.bandHeading) {
-      this.elements.bandHeading.textContent = `往復${formatBandLabel(budget)}で行ける場所`;
+      // 【51本目、Minami決定】「¥601〜¥800 の場所　12か所」（一覧に今出ている金額帯と、その中の数）。
+      this.elements.bandHeading.textContent = formatBandHeading(budget, spots.length);
       this.elements.bandHeading.hidden = false;
     }
 
@@ -1405,6 +1443,9 @@ class ReverseTravel {
     this.mapView.render(departureStation, this.currentAllSpots, budget, { reveal: true });
     // 【41本目】最初の見え方に戻るボタンは、一度検索したら出す。
     if (this.elements.mapResetViewBtn) this.elements.mapResetViewBtn.hidden = false;
+    // 【51本目】色の説明・「NEW +◯」も、一度検索したら出す。
+    if (this.elements.mapLegend) this.elements.mapLegend.hidden = false;
+    this.updateNewSpotMarks(budget);
     // 3D地図は3D切替が一度も行われるまでインスタンス自体が無い（遅延読込、4本目②）。
     // 作成済みならrender()を呼ぶ（未初期化でも座標だけ保持する設計のため、
     // activateTerrainMap()が後から呼ばれたときに自動で反映される）。
@@ -2163,6 +2204,7 @@ class ReverseTravel {
             <button type="button" class="favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}" aria-label="${fav ? 'マイリストから外す' : 'マイリストに保存'}">${starIconHtml(fav)}</button>
             <button type="button" class="share-btn" data-spot-id="${spot.id}" aria-label="共有">${shareIconHtml()}</button>
           </div>
+          <span class="new-tag spot-card-new" hidden>NEW</span>
           ${renderSpotImageHtml(spot, 'spot-image')}
           <h3>${spot.name}</h3>
           <p class="spot-description">${this.formatDescription(spot)}</p>
@@ -2176,6 +2218,8 @@ class ReverseTravel {
       .join('');
 
     this.elements.resultsList.innerHTML = html;
+    // 【51本目】地図でオレンジになっている場所に「NEW」の印を付ける。
+    this.updateNewSpotMarks(parseInt(this.elements.budgetInput.value, 10));
 
     // 一覧の再描画でカードのDOMが作り直されるため、選択中のスポットが
     // あれば（アプリ全体で1つだけ持つthis.selectedSpotIdを正として）

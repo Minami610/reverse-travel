@@ -74,8 +74,19 @@ header {
   white-space: nowrap;
 }
 
+/* 【2026-10-24、51本目、Minami決定】アプリの名前「みちどころ」と副題「―近くの未知の場所を探そう―」。
+   PCは1行に並べ、スマホ幅では名前の下に副題を小さく出す（下の@media）。 */
+.app-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
 header h1 {
-  font-size: 1rem;
+  font-size: 1.1rem;
+  letter-spacing: 0.08em;
   flex: 0 0 auto;
 }
 
@@ -2413,7 +2424,15 @@ header p {
 }
 
 .howto-pin-spot {
-  background-color: var(--color-main);
+  background-color: #1f3c88;
+  border: 1.5px solid white;
+  outline: 1px solid var(--color-border);
+  border-radius: 50%;
+}
+
+/* 【51本目】「NEW」（オレンジのピン）。地図のピンと同じ色。 */
+.howto-pin-new {
+  background-color: #ff6b2b;
   border: 1.5px solid white;
   outline: 1px solid var(--color-border);
   border-radius: 50%;
@@ -2495,8 +2514,26 @@ header p {
      「予…」のように省略記号で切れていた。幅を削り合う形（text-overflow:
      ellipsis）では、タイトル・マイリストボタンを両方は入りきらないため、
      スマホ幅では説明文自体を表示しない（タイトルとマイリストボタンだけ残す）。 */
-  header p {
-    display: none;
+  /* 【51本目】副題は省略せずに出す。名前の下に小さく2段にする（1行では、名前・副題・マイリストが
+     375px幅に収まらないため）。 */
+  header {
+    align-items: center;
+  }
+
+  .app-title {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+  }
+
+  header h1 {
+    line-height: 1.2;
+  }
+
+  header p.app-subtitle {
+    font-size: 0.68rem;
+    line-height: 1.2;
+    overflow: visible;
   }
 
   .form-row {
@@ -2691,4 +2728,87 @@ header p {
   text-overflow: ellipsis;
   z-index: 2100;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+/* ========================================
+   【2026-10-24、51本目、Minami決定】ピンの色の説明と「NEW +8」の札
+   紺のピンは「みちどころ」、オレンジのピンは「NEW」。地図の上の中央に出す（左上・右上の部品と
+   重ならない）。地図をつかんで動かす操作のじゃまをしないよう、押せないようにする。
+   ======================================== */
+.map-legend {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  color: #333;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.map-legend[hidden] {
+  display: none;
+}
+
+.map-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.map-legend-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid white;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
+.map-legend-dot-blue {
+  background-color: #1f3c88;
+}
+
+.map-legend-dot-orange {
+  background-color: #ff6b2b;
+}
+
+/* オレンジ地に白い文字の小さな札（地図の「NEW +8」と、一覧のカードの「NEW」で共通） */
+.new-tag {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 4px;
+  background-color: #ff6b2b;
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.new-tag[hidden] {
+  display: none;
+}
+
+/* 一覧のカードの「NEW」は、写真の左上に重ねる（右上は☆・共有ボタン） */
+.spot-card-new {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  z-index: 2;
+  font-size: 12px;
+  line-height: 20px;
+  padding: 0 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }

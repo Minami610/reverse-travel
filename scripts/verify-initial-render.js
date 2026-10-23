@@ -201,6 +201,10 @@ const MAX_BUDGET_FOR_CHECK = 2000;
 function formatBandLabel(budget) {
   return `¥${budget - BAND_WIDTH + 1}〜¥${budget}`;
 }
+/** 【51本目】main.jsのformatBandHeading()と同じ規則（例: budget=800・12件 → "¥601〜¥800 の場所　12か所"） */
+function formatBandHeading(budget, count) {
+  return `¥${(budget - BAND_WIDTH + 1).toLocaleString('ja-JP')}〜¥${budget.toLocaleString('ja-JP')} の場所　${count}か所`;
+}
 
 function stubMatchMedia(window, matches) {
   window.matchMedia = (query) => ({
@@ -579,10 +583,11 @@ async function checkResultCards(html) {
 
   // 【2026-10-06 帯表示】結果の見出し（#results-band-heading）が
   // 「往復¥801〜¥1000で行ける場所」の形式で表示されているかを確認する。
+  // 【51本目】見出しを「¥801〜¥1,000 の場所　12か所」（金額帯と、一覧に出ているカードの数）に変えた。
   const searchedBudget = 1000; // この検索で使った予算（budget-input.valueと一致させること）
   const bandHeadingEl = doc.getElementById('results-band-heading');
   const bandHeadingText = bandHeadingEl?.textContent || '';
-  const expectedBandHeading = `往復${formatBandLabel(searchedBudget)}で行ける場所`;
+  const expectedBandHeading = formatBandHeading(searchedBudget, cards.length);
   const bandHeadingOk = !bandHeadingEl?.hidden && bandHeadingText === expectedBandHeading;
   console.log(
     bandHeadingOk
@@ -614,10 +619,32 @@ async function checkResultCards(html) {
   // 見つかりません」とだけ出て終わる画面は不親切なため、「ここからは往復¥Xから
   // 行けます」という案内を出すようにした（main.jsのbuildNoResultsMessage()）。
   // この組み合わせで実際に案内文が出ることを常設検証する。
+  // 【2026-10-24、51本目】アプリの名前「みちどころ」（見出し・副題・タブ・説明文）と、地図の色の説明
+  // （「● みちどころ」「● NEW」）・「NEW +◯」の札。検索した直後は今の金額＝検索した金額のため、
+  // オレンジ（NEW）は0か所で札は出ない（初めての検索）。
+  const nameChecks = {
+    h1: doc.querySelector('header h1')?.textContent.trim() === 'みちどころ',
+    subtitle: doc.querySelector('header .app-subtitle')?.textContent.trim() === '―近くの未知の場所を探そう―',
+    title: doc.title === 'みちどころ ―近くの未知の場所を探そう―',
+    description: (doc.querySelector('meta[name="description"]')?.getAttribute('content') || '').startsWith('みちどころ ―近くの未知の場所を探そう―'),
+    ogTitle: doc.querySelector('meta[property="og:title"]')?.getAttribute('content') === 'みちどころ ―近くの未知の場所を探そう―',
+    legendShown: doc.getElementById('map-legend')?.hidden === false,
+    legendText: (doc.getElementById('map-legend')?.textContent || '').replace(/\s+/g, '').startsWith('みちどころNEW'),
+    newTagHidden: doc.getElementById('map-new-count')?.hidden === true,
+    cardsNewHidden: [...doc.querySelectorAll('.spot-card .spot-card-new')].length === cards.length
+      && [...doc.querySelectorAll('.spot-card .spot-card-new')].every((el) => el.hidden),
+  };
+  const nameOk = Object.values(nameChecks).every(Boolean);
+  console.log(
+    nameOk
+      ? `✅ 名前「みちどころ」（見出し・副題・タブ・説明文）と、地図の色の説明（みちどころ／NEW）が出ています（検索直後のNEWは0か所で札なし）`
+      : `❌ 名前・色の説明の表示が想定と異なります: ${JSON.stringify(nameChecks)}`
+  );
+
   const noResultsOk = await checkNoResultsMessage(doc, window);
 
   window.close();
-  return ok && bandHeadingOk && bandRangeOk && noResultsOk;
+  return ok && bandHeadingOk && bandRangeOk && nameOk && noResultsOk;
 }
 
 /**
@@ -672,7 +699,7 @@ async function checkNoResultsMessage(doc, window) {
 
   // 帯の見出しは0件でも表示されたままのはず
   const bandHeadingText = doc.getElementById('results-band-heading')?.textContent || '';
-  const expectedBandHeading = `往復${formatBandLabel(noResultsBudget)}で行ける場所`;
+  const expectedBandHeading = formatBandHeading(noResultsBudget, 0); // 【51本目】新しい見出しの形
   const bandHeadingOk = bandHeadingText === expectedBandHeading;
 
   const noResultsText = resultsList.querySelector('.no-results')?.textContent || '';
