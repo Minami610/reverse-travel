@@ -783,6 +783,8 @@ class ReverseTravel {
    * でも、ピンの色が変わることで変化が見えるようにするため。一覧（カード）は今までどおり
    * 「¥◯で探す」「この条件で検索」を押したときに更新し、そのときオレンジは青になる。
    * 金額を検索した金額に戻すと、ピンも検索した直後と同じ状態に戻る。
+   * 【49本目、Minami決定】灰色はやめ、紺とオレンジの2色にした（決まりはmap-view.jsのpinCategory()）。
+   * 検索し直したときも、直前の検索から新しく増えた場所はオレンジのまま残る。
    * まだ検索していない（this.currentAllSpotsが空）ときは円・件数プレビューとも出さない。
    * 【2026-10-15、11本目②、Minami決定：C】実際にユーザーが予算を触った
    * （userTouch:true、既定）ときだけ、情報枠を閉じる・寄っていれば全体に戻す。
@@ -1389,6 +1391,17 @@ class ReverseTravel {
     // 出発駅から近い順に点が波のように広がって出る演出を行う（Minami指示）。
     const departureStation = this.data.stations?.[departureStationId];
     this._liveMapBudget = budget; // 【41本目】＋の波の「上げたか」の基準（updateMapBudgetLive()参照）
+    // 【2026-10-23、49本目、Minami決定】地図のピンは紺とオレンジの2色。検索し直したとき（同じ出発駅）は、
+    // 直前の検索から新しく増えた場所をオレンジのまま残すため、直前の検索の金額（小さい方）を紺の上限に
+    // 渡す。初めての検索・出発駅を変えたときは、検索した金額までがすべて紺。裏取得の描き直し・3Dの
+    // 初回切り替えでは変えない（ここ＝実際に検索した結果を出すときだけ決める）。
+    const prevSearch = this._lastMapSearch;
+    this._mapPrevSearchedBudget = prevSearch && prevSearch.stationId === departureStationId
+      ? Math.min(prevSearch.budget, budget)
+      : budget;
+    this._lastMapSearch = { stationId: departureStationId, budget };
+    this.mapView.setPrevSearchedBudget(this._mapPrevSearchedBudget);
+    this.terrainMapView?.setPrevSearchedBudget(this._mapPrevSearchedBudget);
     this.mapView.render(departureStation, this.currentAllSpots, budget, { reveal: true });
     // 【41本目】最初の見え方に戻るボタンは、一度検索したら出す。
     if (this.elements.mapResetViewBtn) this.elements.mapResetViewBtn.hidden = false;
@@ -1477,6 +1490,8 @@ class ReverseTravel {
       // 場合にしか効かない（TerrainMapView自体がここで初めて生成されるこの経路では
       // 効かない）。検索済みなら、今の帯・allSpotsをここで明示的に反映する。
       if (this.currentDepartureStationId) {
+        // 【49本目】あとから作った3Dにも、直前の検索の金額（紺の上限）を渡しておく。
+        if (this._mapPrevSearchedBudget != null) this.terrainMapView.setPrevSearchedBudget(this._mapPrevSearchedBudget);
         this.terrainMapView.render(station, this.currentAllSpots, this.currentBudget);
         // 【2026-10-21、43本目、Minami決定：A-2】検索したあとに初めて3Dへ切り替えたときも、
         // 検索した直後と同じ見え方（円が短辺の0.85（47本目）、傾き45°、向きは北）にする。以前は

@@ -180,7 +180,7 @@ const MAP_PIN_CLUSTER_MAX_ZOOM = 16;
 // オレンジのピン → 出発駅の印 → 紺 → 灰色。Leafletの印の重なりは「画面上の縦位置（px）＋
 // zIndexOffset」で決まるため、段の差は地図の高さ（数千px）より十分大きくする。
 // 紺の丸（オレンジがないとき）は45本目のまま出発駅の印より上。
-const MAP_Z_GRAY = 0;
+// 【49本目】灰色はやめた（紺とオレンジの2色）。
 const MAP_Z_BLUE = 10000;
 const MAP_Z_DEPARTURE = 20000;
 const MAP_Z_BLUE_CLUSTER = 21000;
@@ -203,15 +203,27 @@ const MAP_Z_SELECTED = 50000;
  * オレンジ、それより安い場所を灰色にしていたため、＋を続けて押すと前のオレンジが灰色に戻った
  * （Coworkの指示の書き方の誤り。Minamiの意図は「検索した金額の場所だけが紺、増えたものはすべて
  * オレンジ」）。今の金額帯ではなく、最後に検索した金額を基準に塗り分ける。
+ * 【2026-10-23、49本目、Minami決定】灰色をやめ、紺とオレンジの2色にした（灰色は見にくく、小さすぎた）。
+ * 上の'gray'の決まりはこれに置き換わった。地図には今の金額までのすべての場所を出す（一覧は今までどおり
+ * 金額帯の場所だけ）。
+ * - 'blue'  ：紺の上限（blueLimit）以下の場所
+ * - 'orange'：紺の上限をこえて、今の金額までに届く場所
+ * - 'hidden'：今の金額をこえる場所（−で下げたとき、届かなくなった場所は出さない）
+ * 紺の上限は、今の金額が最後に検索した金額より大きい（＋で上げた）ときは最後に検索した金額、そうでない
+ * ときは直前の検索の金額（prevSearchedBudget）。直前の検索の金額は、同じ出発駅で検索し直したときだけ
+ * 前の検索の金額（小さい方）になり、それ以外（初めての検索・出発駅を変えた）は検索した金額そのもの
+ * （main.jsが検索したときに決めてsetPrevSearchedBudget()で渡す）。例：¥500で検索（¥500までが紺）→
+ * ＋で¥800（¥501〜¥800がオレンジ）→ ¥800で再検索（¥500までが紺、¥501〜¥800はオレンジのまま）→
+ * ＋で¥1,000（¥800までが紺、¥801〜¥1,000がオレンジ）。
  * @param {number} fare 往復運賃
  * @param {number} liveBudget 今の金額（＋−・スライダーで変えた値）
  * @param {number} searchedBudget 最後に検索した金額
+ * @param {number} [prevSearchedBudget] 直前の検索の金額（省略時は最後に検索した金額）
  */
-export function pinCategory(fare, liveBudget, searchedBudget) {
+export function pinCategory(fare, liveBudget, searchedBudget, prevSearchedBudget = searchedBudget) {
   if (!(fare <= liveBudget)) return 'hidden';
-  if (fare > searchedBudget) return 'orange';
-  if (fare > searchedBudget - MAP_BAND_WIDTH) return 'blue';
-  return 'gray';
+  const blueLimit = liveBudget > searchedBudget ? searchedBudget : Math.min(prevSearchedBudget, searchedBudget);
+  return fare > blueLimit ? 'orange' : 'blue';
 }
 
 export function formatReachRadiusKm(km) {
@@ -557,6 +569,15 @@ export class MapView {
    * 地図が見えていないときは、見えたとき（handleShown()）に今の金額で塗り直される。
    * @param {number} budget 今の金額
    */
+  /**
+   * 【49本目】直前の検索の金額（pinCategory()の紺の上限に使う）。main.jsが検索したときに、
+   * render()より前に渡す。裏取得の描き直し（render()）では変えない。
+   * @param {number} budget
+   */
+  setPrevSearchedBudget(budget) {
+    this._prevSearchedBudget = budget;
+  }
+
   setLiveBudget(budget, { pop = false } = {}) {
     const prevLive = this._liveBudget ?? this.lastBudget;
     this._liveBudget = budget;
@@ -685,7 +706,7 @@ export class MapView {
    * 【2026-10-21、43本目、Minami決定：B-1】ピンの色と大きさを、今の金額（_liveBudget）と
    * 検索した金額（lastBudget）から塗り分ける（pinCategory()参照）。青・オレンジは直径13pxの
    * くっきりした丸に白いふち、灰色は小さな点。以前の光のにじみ（box-shadowのぼかし）はやめた。
-   * 予算をこえる場所は出さない。見た目はCSSのクラス（map-pin-blue／-orange／-gray）で決める。
+   * 予算をこえる場所は出さない。見た目はCSSのクラス（map-pin-blue／-orange）で決める（49本目で灰色はやめた）。
    */
   _restyleMarkers() {
     const live = this._liveBudget ?? this.lastBudget;
@@ -693,7 +714,7 @@ export class MapView {
     // 【47本目、Minami決定：1】オレンジが1つでもあるか（あれば、まとめるのはオレンジだけ・紺は小さな点）。
     let hasOrange = false;
     this.fareBySpotId.forEach((fare) => {
-      if (pinCategory(fare, live, searched) === 'orange') hasOrange = true;
+      if (pinCategory(fare, live, searched, this._prevSearchedBudget) === 'orange') hasOrange = true;
     });
     this._hasOrange = hasOrange;
     if (this.map) this.map.getContainer().classList.toggle('map-has-orange', hasOrange);
@@ -701,11 +722,10 @@ export class MapView {
       const el = marker.getElement();
       const pin = el && el.querySelector('.map-pin');
       if (!pin) return;
-      const cat = pinCategory(this.fareBySpotId.get(spotId), live, searched);
+      const cat = pinCategory(this.fareBySpotId.get(spotId), live, searched, this._prevSearchedBudget);
       el.dataset.cat = cat;
       pin.classList.toggle('map-pin-blue', cat === 'blue');
       pin.classList.toggle('map-pin-orange', cat === 'orange');
-      pin.classList.toggle('map-pin-gray', cat === 'gray');
       this._applyMarkerDisplay(el);
       this._applyMarkerZIndex(spotId);
     });
@@ -721,8 +741,7 @@ export class MapView {
     const z = pin.classList.contains('map-pin-selected') ? MAP_Z_SELECTED
       : pin.classList.contains('map-pin-hover') ? MAP_Z_HOVER
         : cat === 'orange' ? MAP_Z_ORANGE
-          : cat === 'blue' ? MAP_Z_BLUE
-            : MAP_Z_GRAY;
+          : MAP_Z_BLUE;
     if (marker.options.zIndexOffset !== z) marker.setZIndexOffset(z);
   }
 

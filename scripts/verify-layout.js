@@ -3669,10 +3669,12 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       // （33本目で人の操作速度を模した10回の実機相当検証で確認：
       // 修正後の条件は10/10成功、修正前の条件は10/10「クリックしても
       // 情報枠が開かない」で失敗し続けた）。
-      // 【43本目】薄い（灰色の）点：金額帯より安い点（cat==='gray'）。まとめた丸に入っていれば寄ってから。
+      // 【43本目】薄い（灰色の）点：金額帯より安い点。まとめた丸に入っていれば寄ってから。
+      // 【49本目】灰色はやめた（紺の点になった）。金額帯より安い場所の点（まとめない紺の点）を選ぶ。
       let paleScreenPos = await page.evaluate(() => {
         const map = window.__terrainMapForDebug;
-        const f = map.querySourceFeatures('spots-plain').find((x) => !x.properties.cluster && x.properties.cat === 'gray');
+        const budget = window.__terrainViewForDebug._lastBudget;
+        const f = map.querySourceFeatures('spots-plain').find((x) => !x.properties.cluster && x.properties.fare <= budget - 200);
         if (!f) return null;
         const p = map.project(f.geometry.coordinates);
         return { x: p.x, y: p.y };
@@ -3690,7 +3692,7 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
         await page.mouse.click(mapBox3dPale.x + paleScreenPos.x, mapBox3dPale.y + paleScreenPos.y);
         await page.waitForTimeout(300);
       }
-      record(`[${label}/3D] 薄いピンを選ぶ操作がある`, !!paleScreenPos);
+      record(`[${label}/3D] 金額帯より安い場所のピン（49本目から紺）を選ぶ操作がある`, !!paleScreenPos);
 
       // 「この金額で探す」を押すと点・一覧が変わる（地図タブ表示中は一覧タブ
       // パネルがdisplay:noneのため、可視状態を待つのではなく件数の変化を待つ）。
@@ -6563,7 +6565,7 @@ async function checkPinColorsAndClusters(browser, baseUrl, savedPaths) {
             // --- 2Dの色と大きさ（実際に計算されたCSS） ---
             const styles = await page.evaluate(() => {
               const out = {};
-              for (const cat of ['blue', 'gray']) {
+              for (const cat of ['blue']) {
                 const pin = [...document.querySelectorAll(`.map-pin-spot.map-pin-${cat}`)].find((el) => el.closest('.leaflet-marker-icon').style.display !== 'none');
                 if (!pin) continue;
                 const cs = getComputedStyle(pin);
@@ -6577,9 +6579,9 @@ async function checkPinColorsAndClusters(browser, baseUrl, savedPaths) {
                 && !/\d+px \d+px (?:[5-9]|\d{2,})px/.test(styles.blue.shadow),
               JSON.stringify(styles.blue)
             );
-            if (styles.gray) {
-              record(`${label} 灰色のピン：小さな点（直径8px以下）・灰色`, styles.gray.bg === 'rgb(142, 149, 158)' && styles.gray.w <= 8, JSON.stringify(styles.gray));
-            }
+            // 【49本目】灰色のピンは無い
+            const grayCount = await page.evaluate(() => document.querySelectorAll('.map-pin-gray').length);
+            record(`${label} 灰色のピンが1つも出ていない（49本目）`, grayCount === 0, JSON.stringify({ grayCount }));
           } else {
             const paint = await page.evaluate(() => {
               const m = window.__terrainMapForDebug;
@@ -6593,9 +6595,9 @@ async function checkPinColorsAndClusters(browser, baseUrl, savedPaths) {
             });
             const colorStr = JSON.stringify(paint.color);
             record(
-              `${label} 点の色は、青＝#1F3C88・オレンジ＝#FF6B2B・灰色＝#8E959E、直径は青13px・オレンジ11px（48本目）・灰色7px、ぼかしなし`,
-              colorStr.includes('#1F3C88') && colorStr.includes('#FF6B2B') && colorStr.includes('#8E959E')
-                && JSON.stringify(paint.radius) === JSON.stringify(['match', ['get', 'cat'], 'gray', 3.5, 'orange', 4, 6.5]) && paint.blur === 0,
+              `${label} 点の色は、青＝#1F3C88・オレンジ＝#FF6B2B（49本目で灰色はやめた）、直径は青13px・オレンジ11px（48本目）、ぼかしなし`,
+              colorStr.includes('#1F3C88') && colorStr.includes('#FF6B2B') && !colorStr.includes('#8E959E')
+                && JSON.stringify(paint.radius) === JSON.stringify(['match', ['get', 'cat'], 'orange', 4, 6.5]) && paint.blur === 0,
               JSON.stringify(paint)
             );
             record(`${label} 選んだピンはひと回り大きく（直径20px）、白い太いふち`, paint.selRadius === 10 && paint.selStroke >= 3, JSON.stringify(paint));
@@ -6624,7 +6626,7 @@ async function checkPinColorsAndClusters(browser, baseUrl, savedPaths) {
               const rect = map.getContainer().getBoundingClientRect();
               return map.queryRenderedFeatures({ layers: ['spots-circle', 'spots-plain-circle'] }).map((f) => {
                 const p = map.project(f.geometry.coordinates);
-                const r = f.properties.cat === 'gray' ? 3.5 : 8.5;
+                const r = 8.5;
                 return { x: rect.left + p.x - r, y: rect.top + p.y - r, width: 2 * r, height: 2 * r };
               });
             }
@@ -6745,13 +6747,13 @@ async function readPinCategories(page, dim) {
     const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
     const searched = dim === '3d' ? view._lastBudget : view.lastBudget;
     const live = view._liveBudget;
-    const bandWidth = 200;
+    const prev = view._prevSearchedBudget ?? searched;
+    // 【49本目】紺とオレンジの2色。紺の上限は、＋で上げているときは最後に検索した金額、そうでないときは
+    // 直前の検索の金額（本番のpinCategory()とは別に、テスト側で同じ決まりを書く）。
     const expect = (fare) => {
       if (!(fare <= live)) return 'hidden';
-      // 【45本目】最後に検索した金額を基準に塗り分ける（増えた分はすべてオレンジ）
-      if (fare > searched) return 'orange';
-      if (fare > searched - bandWidth) return 'blue';
-      return 'gray';
+      const blueLimit = live > searched ? searched : Math.min(prev, searched);
+      return fare > blueLimit ? 'orange' : 'blue';
     };
     const actual = {};
     if (dim === '3d') {
@@ -6764,14 +6766,14 @@ async function readPinCategories(page, dim) {
     }
     const spots = (view._lastSpots || []).filter((s) => Number.isFinite(s.latitude) && s.id !== view.selectedSpotId);
     const mismatches = [];
-    const counts = { blue: 0, orange: 0, gray: 0, hidden: 0 };
+    const counts = { blue: 0, orange: 0, hidden: 0 };
     spots.forEach((s) => {
       const e = expect(s.source_round_trip_fare);
       counts[e]++;
       const a = dim === '3d' ? (actual[s.id] ?? 'hidden') : actual[s.id];
       if (a !== e) mismatches.push({ id: s.id, fare: s.source_round_trip_fare, expected: e, actual: a });
     });
-    // 【47本目】まとめ方：オレンジが1つでもあればオレンジだけ、なければ紺だけをまとめる（灰色はまとめない）。
+    // 【47本目】まとめ方：オレンジが1つでもあればオレンジだけ、なければ紺だけをまとめる。
     // まとめた丸の色がその決まりどおりか・丸の中に別の色が入っていないか・紺の丸の右上のオレンジの点
     // （43本目、廃止）が残っていないかを数える。
     const expectedKind = counts.orange > 0 ? 'orange' : 'blue';
@@ -6802,8 +6804,11 @@ async function readPinCategories(page, dim) {
     });
     const orangeDots = document.querySelectorAll('.map-cluster-orange-dot').length;
     const signature = spots.map((s) => `${s.id}:${dim === '3d' ? (actual[s.id] ?? 'hidden') : actual[s.id]}`).sort().join(',');
+    // 【49本目】灰色の点（.map-pin-gray・3Dのcat==='gray'）は1つも無いこと
+    const grayDots = document.querySelectorAll('.map-pin-gray').length
+      + (dim === '3d' ? (view._spotDataSignature || '').split(',').filter((x) => x.endsWith(':gray')).length : 0);
     return {
-      searched, live, counts, mismatches: mismatches.slice(0, 5), mismatchCount: mismatches.length,
+      searched, live, prev, counts, grayDots, mismatches: mismatches.slice(0, 5), mismatchCount: mismatches.length,
       expectedKind, clusterCount, clusterKindMismatch, foreignInCluster, colorMismatch, orangeDots,
       signature, radiusKm: view._reachCircleTargetKm,
     };
@@ -6877,13 +6882,13 @@ async function checkLiveBudgetPins(browser, baseUrl, savedPaths) {
           await page.waitForTimeout(400);
           const s1 = await readPinCategories(page, dim);
           record(
-            `${label} ＋を3回押すと、検索した金額をこえて届く場所がオレンジ、検索した金額帯の場所は紺、それより安い場所は灰色、予算をこえる場所は出ない`,
-            s1.live === 900 && s1.searched === 600 && s1.counts.orange > 0 && s1.mismatchCount === 0,
+            `${label} ＋を3回押すと、検索した金額をこえて届く場所がオレンジ、検索した金額までの場所は紺（49本目で灰色はやめた）、予算をこえる場所は出ない`,
+            s1.live === 900 && s1.searched === 600 && s1.counts.orange > 0 && s1.mismatchCount === 0 && s1.grayDots === 0,
             JSON.stringify({ live: s1.live, searched: s1.searched, counts: s1.counts, mismatches: s1.mismatches })
           );
           // 【47本目】43本目の「オレンジを含む丸に小さなオレンジの点」は廃止。オレンジだけをオレンジの丸にまとめる。
           record(
-            `${label} オレンジがあるときは、オレンジだけがオレンジの丸にまとまり、紺・灰色は丸に入らない（オレンジの点は出ない）`,
+            `${label} オレンジがあるときは、オレンジだけがオレンジの丸にまとまり、紺は丸に入らない（オレンジの点は出ない）`,
             s1.expectedKind === 'orange' && s1.clusterKindMismatch === 0 && s1.foreignInCluster === 0 && s1.colorMismatch === 0 && s1.orangeDots === 0,
             JSON.stringify({ clusters: s1.clusterCount, kindMismatch: s1.clusterKindMismatch, foreign: s1.foreignInCluster, color: s1.colorMismatch, dots: s1.orangeDots })
           );
@@ -6921,9 +6926,11 @@ async function checkLiveBudgetPins(browser, baseUrl, savedPaths) {
           const s3 = await readPinCategories(page, dim);
           const cardsAfter = await page.evaluate(() => [...document.querySelectorAll('.spot-card')].map((c) => c.dataset.spotId).join(','));
           record(
-            `${label} 検索すると、オレンジのピンは青になり、一覧も新しい金額で更新される`,
-            s3.searched === 900 && s3.live === 900 && s3.counts.orange === 0 && s3.mismatchCount === 0 && cardsAfter !== cardsBefore,
-            JSON.stringify({ searched: s3.searched, live: s3.live, counts: s3.counts })
+            // 【49本目】検索し直すと、直前の検索（¥600）から新しく増えた場所（¥601〜¥900）はオレンジのまま、
+            // もともとあった場所は紺。一覧は新しい金額で更新される。
+            `${label} 検索し直すと、直前の検索から増えた場所はオレンジのまま・もともとの場所は紺で、一覧も新しい金額で更新される`,
+            s3.searched === 900 && s3.live === 900 && s3.prev === 600 && s3.counts.orange > 0 && s3.mismatchCount === 0 && cardsAfter !== cardsBefore,
+            JSON.stringify({ searched: s3.searched, live: s3.live, prev: s3.prev, counts: s3.counts, mismatches: s3.mismatches })
           );
 
           // 円が同じ大きさの区間でも、ピンの色は変わる（大池・PCで1回だけ見る）
@@ -7190,11 +7197,11 @@ async function checkRound45(browser, baseUrl, savedPaths) {
       };
       // 金額帯ごとの色を、テスト側で運賃から直接確かめる
       const bands = (st) => {
-        const ids = { orange: [], blue: [], gray: [] };
+        const ids = { orange: [], blue: [] };
         st.list.forEach((x) => { if (ids[x.cat]) ids[x.cat].push(x); });
         return ids;
       };
-      const readList = () => page.evaluate((dim) => {
+      const readList = async () => { await page.waitForFunction((dim) => !(dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug)._pinPop, dim, { timeout: 5000 }).catch(() => {}); return page.evaluate((dim) => {
         const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
         const actual = {};
         if (dim === '3d') {
@@ -7208,30 +7215,30 @@ async function checkRound45(browser, baseUrl, savedPaths) {
           list: (view._lastSpots || []).filter((s) => Number.isFinite(s.latitude) && s.id !== view.selectedSpotId)
             .map((s) => ({ id: s.id, fare: s.source_round_trip_fare, cat: actual[s.id] ?? 'hidden' })),
         };
-      }, dim);
+      }, dim); };
       await press(3);
       const a = await readList();
-      const wrongA = a.list.filter((x) => (x.fare > 800 ? x.cat !== 'hidden' : x.fare > 500 ? x.cat !== 'orange' : x.fare > 300 ? x.cat !== 'blue' : x.cat !== 'gray'));
+      const wrongA = a.list.filter((x) => (x.fare > 800 ? x.cat !== 'hidden' : x.fare > 500 ? x.cat !== 'orange' : x.cat !== 'blue'));
       const orangeA = bands(a).orange.map((x) => x.id);
       record(
-        `${label} ¥500で検索→＋を3回（¥800）：¥501〜¥800はすべてオレンジ、¥301〜¥500は紺、¥300以下は灰色、¥801以上は出ない`,
+        `${label} ¥500で検索→＋を3回（¥800）：¥501〜¥800はすべてオレンジ、¥500以下は紺（49本目で灰色はやめた）、¥801以上は出ない`,
         a.searched === 500 && a.live === 800 && orangeA.length > 0 && wrongA.length === 0,
-        JSON.stringify({ searched: a.searched, live: a.live, orange: orangeA.length, blue: bands(a).blue.length, gray: bands(a).gray.length, wrong: wrongA.slice(0, 5) })
+        JSON.stringify({ searched: a.searched, live: a.live, orange: orangeA.length, blue: bands(a).blue.length, wrong: wrongA.slice(0, 5) })
       );
       await press(2);
       const b = await readList();
       const catB = Object.fromEntries(b.list.map((x) => [x.id, x.cat]));
       const lostOrange = orangeA.filter((id) => catB[id] !== 'orange');
-      const wrongB = b.list.filter((x) => (x.fare > 1000 ? x.cat !== 'hidden' : x.fare > 500 ? x.cat !== 'orange' : x.fare > 300 ? x.cat !== 'blue' : x.cat !== 'gray'));
+      const wrongB = b.list.filter((x) => (x.fare > 1000 ? x.cat !== 'hidden' : x.fare > 500 ? x.cat !== 'orange' : x.cat !== 'blue'));
       record(
-        `${label} さらに＋を2回（¥1,000）押しても、前のオレンジは紺・灰色に戻らない（増えた分はすべてオレンジのまま）`,
+        `${label} さらに＋を2回（¥1,000）押しても、前のオレンジは紺に戻らない（増えた分はすべてオレンジのまま）`,
         b.live === 1000 && lostOrange.length === 0 && wrongB.length === 0 && bands(b).orange.length > orangeA.length,
         JSON.stringify({ live: b.live, orangeBefore: orangeA.length, orangeNow: bands(b).orange.length, lostOrange: lostOrange.slice(0, 5), wrong: wrongB.slice(0, 5) })
       );
       const dots = await readPinCategories(page, dim);
       // 【47本目】43本目の「オレンジを含む丸に小さなオレンジの点」は廃止。オレンジだけをオレンジの丸にまとめる。
       record(
-        `${label} オレンジだけがオレンジの丸にまとまり、紺・灰色は丸に入らない（オレンジの点は出ない）`,
+        `${label} オレンジだけがオレンジの丸にまとまり、紺は丸に入らない（オレンジの点は出ない）`,
         dots.expectedKind === 'orange' && dots.clusterKindMismatch === 0 && dots.foreignInCluster === 0 && dots.colorMismatch === 0 && dots.orangeDots === 0,
         JSON.stringify({ clusters: dots.clusterCount, kind: dots.clusterKindMismatch, foreign: dots.foreignInCluster, color: dots.colorMismatch, dots: dots.orangeDots })
       );
@@ -7247,11 +7254,12 @@ async function checkRound45(browser, baseUrl, savedPaths) {
       await page.waitForTimeout(1500);
       if (dim === '3d') await waitForTerrainCameraIdle(page);
       const c = await readList();
-      const wrongC = c.list.filter((x) => (x.fare > 1000 ? x.cat !== 'hidden' : x.fare > 800 ? x.cat !== 'blue' : x.cat !== 'gray'));
+      // 【49本目】検索し直すと、直前の検索（¥500）から増えた場所（¥501〜¥1,000）はオレンジのまま、¥500までは紺。
+      const wrongC = c.list.filter((x) => (x.fare > 1000 ? x.cat !== 'hidden' : x.fare > 500 ? x.cat !== 'orange' : x.cat !== 'blue'));
       record(
-        `${label} 「この条件で検索」（¥1,000）で、¥801〜¥1,000が紺、それより安い場所が灰色になり、オレンジは無くなる`,
-        c.searched === 1000 && bands(c).orange.length === 0 && bands(c).blue.length > 0 && wrongC.length === 0,
-        JSON.stringify({ searched: c.searched, blue: bands(c).blue.length, gray: bands(c).gray.length, wrong: wrongC.slice(0, 5) })
+        `${label} 「この条件で検索」（¥1,000）で、¥500までが紺、¥501〜¥1,000はオレンジのまま（49本目）`,
+        c.searched === 1000 && bands(c).orange.length > 0 && bands(c).blue.length > 0 && wrongC.length === 0,
+        JSON.stringify({ searched: c.searched, blue: bands(c).blue.length, orange: bands(c).orange.length, wrong: wrongC.slice(0, 5) })
       );
       record(`${label} コンソールにエラーが出ていない`, errors.length === 0, errors.join(' / '));
     } catch (e) {
@@ -7491,8 +7499,8 @@ async function checkRound47(browser, baseUrl, savedPaths) {
         record(`${label} 検索した直後、円の直径が短辺の0.85前後（0.80〜0.90、3Dは横方向）`, ratioOk(s0) || s0.zoom <= 8.55, JSON.stringify({ ratio: s0.ratio, zoom: s0.zoom }));
         const c0 = await readPinCategories(page, dim);
         record(
-          `${label} 検索した直後（オレンジなし）は、紺だけが紺の丸にまとまり、灰色は丸に入らない`,
-          c0.counts.orange === 0 && c0.expectedKind === 'blue' && c0.clusterCount > 0 && c0.clusterKindMismatch === 0
+          `${label} 検索した直後（オレンジなし）は、紺だけが紺の丸にまとまる（灰色の点は無い）`,
+          c0.counts.orange === 0 && c0.grayDots === 0 && c0.expectedKind === 'blue' && c0.clusterCount > 0 && c0.clusterKindMismatch === 0
             && c0.foreignInCluster === 0 && c0.colorMismatch === 0 && c0.orangeDots === 0,
           JSON.stringify({ counts: c0.counts, clusters: c0.clusterCount, kind: c0.clusterKindMismatch, foreign: c0.foreignInCluster, color: c0.colorMismatch, dots: c0.orangeDots })
         );
@@ -7512,7 +7520,7 @@ async function checkRound47(browser, baseUrl, savedPaths) {
         await page.waitForTimeout(400);
         const c1 = await readPinCategories(page, dim);
         record(
-          `${label} ＋を4回（¥1,400）：オレンジだけがオレンジの丸にまとまり、紺・灰色は丸に入らない。紺の丸の右上のオレンジの点は出ない`,
+          `${label} ＋を4回（¥1,400）：オレンジだけがオレンジの丸にまとまり、紺は丸に入らない。紺の丸の右上のオレンジの点は出ない`,
           c1.live === 1400 && c1.searched === 1000 && c1.counts.orange > 0 && c1.mismatchCount === 0 && c1.expectedKind === 'orange'
             && c1.clusterCount > 0 && c1.clusterKindMismatch === 0 && c1.foreignInCluster === 0 && c1.colorMismatch === 0 && c1.orangeDots === 0,
           JSON.stringify({ live: c1.live, counts: c1.counts, clusters: c1.clusterCount, kind: c1.clusterKindMismatch, foreign: c1.foreignInCluster, color: c1.colorMismatch, dots: c1.orangeDots })
@@ -7528,31 +7536,30 @@ async function checkRound47(browser, baseUrl, savedPaths) {
               return { w: pin.getBoundingClientRect().width, border: cs.borderTopWidth, borderColor: cs.borderTopColor, z: Number(el.style.zIndex) };
             };
             const blue = visible('blue').map(size);
-            const gray = visible('gray').map(size);
             const orange = visible('orange').map(size);
             const dep = document.querySelector('#spots-map .map-pin-departure')?.closest('.leaflet-marker-icon');
             const orangeCluster = mv._clusters.map((c) => Number(c.marker.getElement().style.zIndex));
             return {
-              blueCount: blue.length, grayCount: gray.length, orangeCount: orange.length,
+              blueCount: blue.length, orangeCount: orange.length,
               blueW: [Math.min(...blue.map((x) => x.w)), Math.max(...blue.map((x) => x.w))],
-              grayW: [Math.min(...gray.map((x) => x.w)), Math.max(...gray.map((x) => x.w))],
               blueBorder: blue[0] && blue[0].borderColor,
-              zBlueMax: Math.max(...blue.map((x) => x.z)), zGrayMax: Math.max(...gray.map((x) => x.z)),
+              zBlueMax: Math.max(...blue.map((x) => x.z)),
               zBlueMin: Math.min(...blue.map((x) => x.z)),
               zOrangeMin: Math.min(...orange.map((x) => x.z), ...orangeCluster), zDep: dep ? Number(dep.style.zIndex) : null,
-              countsInBlueOrGray: [...document.querySelectorAll('#spots-map .map-pin-blue .map-cluster-count, #spots-map .map-pin-gray .map-cluster-count')].length,
+              countsInBlue: [...document.querySelectorAll('#spots-map .map-pin-blue .map-cluster-count')].length,
+              grayCount: document.querySelectorAll('#spots-map .map-pin-gray').length,
             };
           });
           record(
-            `${label} ＋を4回：紺は数字のない小さな点（直径8〜10px・白いふち）、灰色は紺よりさらに小さな点（5〜6px）`,
+            `${label} ＋を4回：紺は数字のない小さな点（直径8〜10px・白いふち）、灰色の点は無い（49本目）`,
             look.blueCount > 0 && look.blueW[0] >= 8 && look.blueW[1] <= 10 && look.blueBorder === 'rgb(255, 255, 255)'
-              && (look.grayCount === 0 || (look.grayW[0] >= 5 && look.grayW[1] <= 6.5)) && look.countsInBlueOrGray === 0,
+              && look.grayCount === 0 && look.countsInBlue === 0,
             JSON.stringify(look)
           );
           record(
-            `${label} 重なり順：オレンジの丸・オレンジのピン → 出発駅の印 → 紺 → 灰色`,
-            look.zDep !== null && look.zOrangeMin > look.zDep && look.zDep > look.zBlueMax && (look.grayCount === 0 || look.zBlueMin > look.zGrayMax),
-            JSON.stringify({ zOrangeMin: look.zOrangeMin, zDep: look.zDep, zBlue: [look.zBlueMin, look.zBlueMax], zGrayMax: look.zGrayMax })
+            `${label} 重なり順：オレンジの丸・オレンジのピン → 出発駅の印 → 紺`,
+            look.zDep !== null && look.zOrangeMin > look.zDep && look.zDep > look.zBlueMax,
+            JSON.stringify({ zOrangeMin: look.zOrangeMin, zDep: look.zDep, zBlue: [look.zBlueMin, look.zBlueMax] })
           );
         } else {
           const look = await page.evaluate(() => {
@@ -7561,7 +7568,6 @@ async function checkRound47(browser, baseUrl, savedPaths) {
             const layers = m.getStyle().layers.map((l) => l.id);
             return {
               plainBlue: plain.filter((f) => f.properties.cat === 'blue').length,
-              plainGray: plain.filter((f) => f.properties.cat === 'gray').length,
               radius: m.getPaintProperty('spots-plain-circle', 'circle-radius'),
               stroke: m.getPaintProperty('spots-plain-circle', 'circle-stroke-color'),
               plainBelow: layers.indexOf('spots-plain-circle') < layers.indexOf('spots-circle'),
@@ -7569,8 +7575,8 @@ async function checkRound47(browser, baseUrl, savedPaths) {
             };
           });
           record(
-            `${label} ＋を4回：紺・灰色はまとめない点のレイヤーに入り、数字のない小さな点（紺は直径10px・灰色は6px・白いふち）で、オレンジより下に描かれる`,
-            look.plainBlue > 0 && look.drawnPlain > 0 && JSON.stringify(look.radius) === JSON.stringify(['match', ['get', 'cat'], 'gray', 2, 3.5])
+            `${label} ＋を4回：紺はまとめない点のレイヤーに入り、数字のない小さな点（直径10px・白いふち）で、オレンジより下に描かれる`,
+            look.plainBlue > 0 && look.drawnPlain > 0 && look.radius === 3.5
               && look.stroke === '#ffffff' && look.plainBelow,
             JSON.stringify(look)
           );
@@ -7622,7 +7628,8 @@ async function checkRound47(browser, baseUrl, savedPaths) {
           record(`${label} 押せるオレンジの丸がある（検証の前提）`, false);
         }
 
-        // --- 4. 「この条件で検索」でオレンジがなくなると、紺をまとめる形に戻る ---
+        // --- 4. 「この条件で検索」で検索し直す。【49本目】直前の検索（¥1,000）から増えた場所（¥1,001〜¥1,400）は
+        //     オレンジのまま。紺をまとめる形に戻るのは、−で¥1,000まで下げてオレンジがなくなったとき（下で見る）。 ---
         const prefetchBefore = await page.evaluate(() => window.__maxBudgetPrefetchAppliedCount || 0);
         await clickElementChecked(page, searchBtnId, `${label} ${isMobile ? '「¥◯で探す」' : '「この条件で検索」'}`);
         await page.waitForFunction((n) => (window.__maxBudgetPrefetchAppliedCount || 0) > n, prefetchBefore, { timeout: 20000 }).catch(() => {});
@@ -7632,20 +7639,13 @@ async function checkRound47(browser, baseUrl, savedPaths) {
         await page.waitForTimeout(400);
         const c2 = await readPinCategories(page, dim);
         record(
-          `${label} 「${isMobile ? '¥◯で探す' : 'この条件で検索'}」でオレンジがなくなると、紺がまとまった丸に戻り、灰色は丸に入らない`,
-          c2.searched === 1400 && c2.counts.orange === 0 && c2.expectedKind === 'blue' && c2.clusterCount > 0 && c2.clusterKindMismatch === 0
-            && c2.foreignInCluster === 0 && c2.colorMismatch === 0 && c2.orangeDots === 0,
+          `${label} 「${isMobile ? '¥◯で探す' : 'この条件で検索'}」で検索し直すと、直前の検索から増えた場所はオレンジのまま（オレンジだけがまとまる、49本目）`,
+          c2.searched === 1400 && c2.prev === 1000 && c2.counts.orange > 0 && c2.mismatchCount === 0 && c2.expectedKind === 'orange' && c2.clusterKindMismatch === 0
+            && c2.foreignInCluster === 0 && c2.colorMismatch === 0 && c2.orangeDots === 0 && c2.grayDots === 0,
           JSON.stringify({ searched: c2.searched, counts: c2.counts, clusters: c2.clusterCount, kind: c2.clusterKindMismatch, foreign: c2.foreignInCluster, color: c2.colorMismatch })
         );
         const s2 = await measureCircleState(page, dim);
         record(`${label} 検索し直した直後も、円の直径が短辺の0.85前後`, ratioOk(s2) || s2.zoom <= 8.55, JSON.stringify({ ratio: s2.ratio, zoom: s2.zoom }));
-        if (dim === '2d') {
-          const small = await page.evaluate(() => {
-            const pin = [...document.querySelectorAll('#spots-map .map-pin-spot.map-pin-blue')].find((el) => el.closest('.leaflet-marker-icon').style.display !== 'none');
-            return { hasOrangeClass: document.getElementById('spots-map').classList.contains('map-has-orange'), w: pin ? pin.getBoundingClientRect().width : null };
-          });
-          record(`${label} オレンジがなくなると、紺のピンは元の大きさ（13px）に戻る`, !small.hasOrangeClass && (small.w === null || Math.abs(small.w - 13) <= 1), JSON.stringify(small));
-        }
 
         // 寄ってから最初の見え方に戻るボタン → 0.85前後
         await page.evaluate((dim) => {
@@ -7659,6 +7659,172 @@ async function checkRound47(browser, baseUrl, savedPaths) {
         await page.waitForTimeout(300);
         const s3 = await measureCircleState(page, dim);
         record(`${label} 最初の見え方に戻るボタンで、円の直径が短辺の0.85前後に戻る`, ratioOk(s3) || s3.zoom <= 8.55, JSON.stringify({ ratio: s3.ratio, zoom: s3.zoom }));
+
+        // 【49本目】−を4回（¥1,000＝直前の検索の金額）でオレンジがなくなると、紺をまとめる形に戻る
+        const decId = isMobile ? 'mobile-budget-decrement' : 'budget-decrement';
+        for (let i = 0; i < 4; i++) {
+          await page.evaluate((id) => document.getElementById(id).click(), decId);
+          await page.waitForTimeout(120);
+        }
+        await waitForCircleSettled(page, dim);
+        if (dim === '3d') await waitForTerrainCameraIdle(page);
+        await page.waitForTimeout(400);
+        const c4 = await readPinCategories(page, dim);
+        record(
+          `${label} −で¥1,000（直前の検索の金額）まで下げてオレンジがなくなると、紺がまとまった丸に戻る（灰色の点は無い）`,
+          c4.live === 1000 && c4.counts.orange === 0 && c4.mismatchCount === 0 && c4.expectedKind === 'blue' && c4.clusterKindMismatch === 0
+            && c4.foreignInCluster === 0 && c4.colorMismatch === 0 && c4.grayDots === 0,
+          JSON.stringify({ live: c4.live, counts: c4.counts, clusters: c4.clusterCount, kind: c4.clusterKindMismatch, foreign: c4.foreignInCluster })
+        );
+        if (dim === '2d') {
+          const small = await page.evaluate(() => {
+            const pin = [...document.querySelectorAll('#spots-map .map-pin-spot.map-pin-blue')].find((el) => el.closest('.leaflet-marker-icon').style.display !== 'none');
+            return { hasOrangeClass: document.getElementById('spots-map').classList.contains('map-has-orange'), w: pin ? pin.getBoundingClientRect().width : null };
+          });
+          record(`${label} オレンジがなくなると、紺のピンは元の大きさ（13px）に戻る`, !small.hasOrangeClass && (small.w === null || Math.abs(small.w - 13) <= 1), JSON.stringify(small));
+        }
+        record(`${label} コンソールにエラーが出ていない（標高タイルの404を除く）`, errors.length === 0, errors.join(' / '));
+      } catch (e) {
+        record(`${label} 検証中にクラッシュしない`, false, e.message);
+      } finally {
+        await context.close();
+      }
+    }
+  }
+}
+
+/**
+ * 【49本目】地図のピンの色を運賃から直接確かめる。blueMax以下は紺・liveまではオレンジ（blueMaxをこえる
+ * 場所）・liveをこえる場所は出ない。灰色の点が無いことも見る。2Dは各ピンのdata-cat、3Dは点のデータ。
+ */
+async function checkTwoColorPins(page, dim, { blueMax, live }) {
+  await page.waitForFunction((dim) => !(dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug)._pinPop, dim, { timeout: 5000 }).catch(() => {});
+  return page.evaluate(({ dim, blueMax, live }) => {
+    const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
+    const actual = {};
+    if (dim === '3d') {
+      (view._spotDataSignature || '').split(',').filter(Boolean).forEach((x) => { const i = x.lastIndexOf(':'); actual[x.slice(0, i)] = x.slice(i + 1); });
+    } else {
+      view.markersBySpotId.forEach((m, id) => { const el = m.getElement(); actual[id] = el && el.style.display === 'none' && el.dataset.clustered !== '1' ? 'hidden' : el?.dataset.cat; });
+    }
+    const counts = { blue: 0, orange: 0, hidden: 0 };
+    const wrong = [];
+    (view._lastSpots || []).filter((s) => Number.isFinite(s.latitude) && s.id !== view.selectedSpotId).forEach((s) => {
+      const f = s.source_round_trip_fare;
+      const e = f > live ? 'hidden' : f > blueMax ? 'orange' : 'blue';
+      counts[e]++;
+      const a = actual[s.id] ?? 'hidden';
+      if (a !== e) wrong.push({ id: s.id, fare: f, expected: e, actual: a });
+    });
+    const grayDots = document.querySelectorAll('.map-pin-gray').length + Object.values(actual).filter((c) => c === 'gray').length;
+    return { live: view._liveBudget, searched: dim === '3d' ? view._lastBudget : view.lastBudget, counts, wrong: wrong.slice(0, 5), wrongCount: wrong.length, grayDots };
+  }, { dim, blueMax, live });
+}
+
+/**
+ * 【2026-10-23、49本目、Minami決定】ピンの色を紺とオレンジの2色にする（灰色をやめる）。
+ * 富山駅前で（岡は¥501〜¥800の場所が無く、例の②③が成り立たないため。富山駅前はどの金額帯にも場所がある）、
+ * ¥500で検索（¥500までが紺）→ ＋で¥800（¥501〜¥800がオレンジ）→ ¥800で再検索（¥500までが紺、
+ * ¥501〜¥800はオレンジのまま）→ ＋で¥1,000（¥800までが紺、¥801〜¥1,000がオレンジ）→ ＋で¥1,200
+ * （¥801〜¥1,200がオレンジ）→ −で¥400（¥401〜¥500の場所も消える）。各段階で紺とオレンジが決まりどおりで、
+ * 灰色の点が出ないこと（2D・3D、PCと400×464）。一覧（カード）は検索した金額帯の場所だけ。
+ * スクリーンショット：例の4段階（PCの2D）、¥1,200（PCと400×464、2Dと3D）。地図の読み込み後。
+ */
+async function checkRound49(browser, baseUrl, savedPaths) {
+  console.log('\n=== 49本目：ピンの色を紺とオレンジの2色にする（灰色をやめる） ===');
+  const viewports = { pc: VIEWPORTS.pc, own: { width: 400, height: 464 } };
+  for (const [vLabel, viewport] of Object.entries(viewports)) {
+    const isMobile = vLabel !== 'pc';
+    const incId = isMobile ? 'mobile-budget-increment' : 'budget-increment';
+    const decId = isMobile ? 'mobile-budget-decrement' : 'budget-decrement';
+    const searchBtnId = isMobile ? 'mobile-budget-search-btn' : 'search-btn';
+    for (const dim of ['2d', '3d']) {
+      const label = `[49/${vLabel}/${dim}]`;
+      const context = await browser.newContext({ viewport });
+      await context.addInitScript(() => { try { localStorage.setItem('reverse-travel-rotate-hint-seen', 'true'); } catch { /* 無視 */ } });
+      const page = await context.newPage();
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+      page.on('console', (msg) => {
+        if (msg.type() === 'error' && !isKnownAcceptableConsoleMessage(msg.text())) errors.push(msg.text());
+      });
+      const press = async (id, n) => {
+        for (let i = 0; i < n; i++) {
+          await page.evaluate((x) => document.getElementById(x).click(), id);
+          await page.waitForTimeout(150);
+        }
+        await waitForCircleSettled(page, dim);
+        if (dim === '3d') await waitForTerrainCameraIdle(page);
+        await page.waitForTimeout(500);
+      };
+      const shot = async (name) => {
+        await waitForBaseMapLoaded(page, dim);
+        const file = path.join(screenshotDir, name);
+        await page.screenshot({ path: file, clip: await page.locator('#map-area').boundingBox() });
+        savedPaths.push(file);
+      };
+      const stage = async (title, expect, shotName) => {
+        const r = await checkTwoColorPins(page, dim, expect);
+        record(
+          `${label} ${title}`,
+          r.live === expect.live && r.wrongCount === 0 && r.grayDots === 0 && (expect.blueMax >= expect.live ? r.counts.orange === 0 : r.counts.orange > 0) && r.counts.blue > 0,
+          JSON.stringify(r)
+        );
+        if (shotName) await shot(shotName);
+        return r;
+      };
+      try {
+        await page.goto(baseUrl, { waitUntil: 'load' });
+        await page.waitForSelector('#departure-input');
+        await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+        await searchExactStation(page, '富山駅前', 500, isMobile);
+        if (dim === '3d') {
+          await page.click('#map-dimension-toggle');
+          const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+          record(`${label} 3D化（検証の前提）`, ok);
+          if (!ok) continue;
+          await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+          await waitForTerrainCameraIdle(page);
+          await waitForTerrainTilesLoaded(page);
+          await page.waitForTimeout(500);
+        } else {
+          await waitForWaveRevealSettled(page);
+          await page.waitForTimeout(300);
+        }
+        const four = vLabel === 'pc' && dim === '2d';
+        await stage('①¥500で検索：¥500までがすべて紺（オレンジ・灰色なし）', { blueMax: 500, live: 500 }, four ? 'round49-1-search500-2d-pc.png' : null);
+        await press(incId, 3);
+        await stage('②＋で¥800：¥501〜¥800がオレンジ、¥500までは紺', { blueMax: 500, live: 800 }, four ? 'round49-2-plus800-2d-pc.png' : null);
+
+        const prefetchBefore = await page.evaluate(() => window.__maxBudgetPrefetchAppliedCount || 0);
+        await clickElementChecked(page, searchBtnId, `${label} ${isMobile ? '「¥◯で探す」' : '「この条件で検索」'}（¥800）`);
+        await page.waitForFunction((n) => (window.__maxBudgetPrefetchAppliedCount || 0) > n, prefetchBefore, { timeout: 20000 }).catch(() => {});
+        await page.waitForTimeout(1500);
+        if (dim === '3d') { await waitForTerrainCameraIdle(page); await waitForTerrainTilesLoaded(page); } else await waitForWaveRevealSettled(page);
+        await page.waitForTimeout(400);
+        await stage('③¥800で再検索：¥500までが紺、¥501〜¥800はオレンジのまま', { blueMax: 500, live: 800 }, four ? 'round49-3-research800-2d-pc.png' : null);
+        // 一覧（カード）は、検索した金額帯（¥601〜¥800）の場所だけ
+        const cards = await page.evaluate((dim) => {
+          const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
+          const fare = new Map((view._lastSpots || []).map((s) => [s.id, s.source_round_trip_fare]));
+          const fares = [...document.querySelectorAll('.spot-card')].map((c) => fare.get(c.getAttribute('data-spot-id')));
+          return { count: fares.length, outOfBand: fares.filter((f) => !(f > 600 && f <= 800)).length };
+        }, dim);
+        record(`${label} 再検索のあとも、一覧（カード）は金額帯（¥601〜¥800）の場所だけ`, cards.count > 0 && cards.outOfBand === 0, JSON.stringify(cards));
+
+        await press(incId, 2);
+        await stage('④＋で¥1,000：¥800までが紺、¥801〜¥1,000がオレンジ', { blueMax: 800, live: 1000 }, four ? 'round49-4-plus1000-2d-pc.png' : null);
+        await press(incId, 2);
+        await stage('＋で¥1,200：¥800までが紺、¥801〜¥1,200がオレンジ', { blueMax: 800, live: 1200 }, `round49-1200-${dim}-${vLabel}.png`);
+
+        // −で¥400：¥401〜¥500の場所も消える
+        await press(decId, 8);
+        const r = await stage('−で¥400：¥400までが紺、¥401以上（¥401〜¥500を含む）は出ない', { blueMax: 800, live: 400 }, null);
+        const gone = await page.evaluate((dim) => {
+          const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
+          return (view._lastSpots || []).filter((s) => s.source_round_trip_fare > 400 && s.source_round_trip_fare <= 500).length;
+        }, dim);
+        record(`${label} −で¥400にしたとき、¥401〜¥500の場所（${gone}か所）が消える`, gone > 0 && r.wrongCount === 0, JSON.stringify({ gone, wrong: r.wrong }));
         record(`${label} コンソールにエラーが出ていない（標高タイルの404を除く）`, errors.length === 0, errors.join(' / '));
       } catch (e) {
         record(`${label} 検証中にクラッシュしない`, false, e.message);
@@ -7851,8 +8017,7 @@ async function checkRound48(browser, baseUrl, savedPaths) {
           }));
           record(
             `${label} オレンジのピンの大きさが紺とほぼ同じ（オレンジ半径4、まとめない紺の半径3.5）`,
-            JSON.stringify(paint.main) === JSON.stringify(['match', ['get', 'cat'], 'gray', 3.5, 'orange', 4, 6.5])
-              && JSON.stringify(paint.plain) === JSON.stringify(['match', ['get', 'cat'], 'gray', 2, 3.5]),
+            JSON.stringify(paint.main) === JSON.stringify(['match', ['get', 'cat'], 'orange', 4, 6.5]) && paint.plain === 3.5,
             JSON.stringify(paint)
           );
         }
@@ -8869,6 +9034,7 @@ async function main() {
     await runWithFreshBrowser(checkRound45, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound47, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound48, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkRound49, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBreadcrumbTrail, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBudgetSlider, baseUrl, savedPaths);
     await runWithFreshBrowser(checkWaveRevealAndCircleScreenshots, baseUrl, savedPaths);

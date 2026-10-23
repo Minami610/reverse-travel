@@ -165,7 +165,7 @@ const SPOTS_SOURCE_ID = 'spots';
 const SPOTS_LAYER_ID = 'spots-circle';
 // 【45本目】まとめた丸の位置を「今描いているズームの段」から拾うための、見えない円のレイヤー。
 const SPOTS_CLUSTER_HIT_LAYER_ID = 'spots-cluster-hit';
-// 【47本目、Minami決定：1】まとめない点（オレンジがあるときの紺・いつもの灰色）を描くソースとレイヤー。
+// 【47本目、Minami決定：1】まとめない点（オレンジがあるときの紺）を描くソースとレイヤー（49本目で灰色はやめた）。
 // まとめる機能（cluster）はソース単位でしか効かないため、まとめる点（オレンジがあればオレンジ、
 // なければ紺）はSPOTS_SOURCE_IDに、まとめない点はこちらに分けて入れる。
 const SPOTS_PLAIN_SOURCE_ID = 'spots-plain';
@@ -271,11 +271,10 @@ function circleObstacleRects(container) {
 
 // 【2026-10-21、43本目、Minami決定：B-1】ピンの色（2Dのassets/css/style.cssの.map-pin-blue等と
 // 同じ値）。青＝検索した金額帯で行ける場所（円の青#2F6FB2より濃い紺に近い青）、オレンジ＝金額を
-// 変えて新しく金額帯に入った場所、灰色＝金額帯より安く行ける場所（小さな点）。選んだピンは青で
-// ひと回り大きく、白い太いふちと影。以前の光のにじみ（circle-blur）はやめた。
+// 変えて新しく金額帯に入った場所。選んだピンは青でひと回り大きく、白い太いふちと影。以前の光の
+// にじみ（circle-blur）はやめた。【49本目】灰色（金額帯より安く行ける場所）はやめた（紺とオレンジの2色）。
 const PIN_COLOR_BLUE = '#1F3C88';
 const PIN_COLOR_ORANGE = '#FF6B2B';
-const PIN_COLOR_GRAY = '#8E959E';
 const COLOR_SELECTED = PIN_COLOR_BLUE;
 // 【43本目、Minami決定：B-2】近いピンを数字の入った丸にまとめる（MapLibreのGeoJSONソースの
 // cluster機能）。このズームより寄るとまとめない（場所に寄ったとき＝ズーム14では1つずつ見える）。
@@ -307,15 +306,16 @@ function isFiniteNumber(value) {
 
 /**
  * 【2026-10-21、43本目B-1／C、45本目で見直し、Minami決定】ピンの色の決まり（2Dのmap-view.jsの
- * pinCategory()と同じ規則）。'blue'：最後に検索した金額帯の場所／'orange'：最後に検索した金額を
- * こえて、今の金額までに届く場所（＋を何回押しても積み重なる）／'gray'：最後に検索した金額帯より
- * 安い場所／'hidden'：今の金額をこえる場所（出さない）。
+ * pinCategory()と同じ規則）。
+ * 【2026-10-23、49本目、Minami決定】灰色をやめ、紺とオレンジの2色にした。'blue'：紺の上限以下の場所／
+ * 'orange'：紺の上限をこえて今の金額までに届く場所／'hidden'：今の金額をこえる場所（出さない）。
+ * 紺の上限は、＋で上げている（今の金額＞最後に検索した金額）ときは最後に検索した金額、そうでないときは
+ * 直前の検索の金額（prevSearchedBudget、2Dのmap-view.jsの説明を参照）。
  */
-function pinCategory(fare, liveBudget, searchedBudget) {
+function pinCategory(fare, liveBudget, searchedBudget, prevSearchedBudget = searchedBudget) {
   if (!(fare <= liveBudget)) return 'hidden';
-  if (fare > searchedBudget) return 'orange';
-  if (fare > searchedBudget - BAND_WIDTH) return 'blue';
-  return 'gray';
+  const blueLimit = liveBudget > searchedBudget ? searchedBudget : Math.min(prevSearchedBudget, searchedBudget);
+  return fare > blueLimit ? 'orange' : 'blue';
 }
 
 const EARTH_RADIUS_KM = 6371;
@@ -617,18 +617,17 @@ export class TerrainMapView {
             source: REACH_WAVE_SOURCE_ID,
             paint: { 'line-color': '#2F6FB2', 'line-opacity': 0, 'line-width': CIRCLE_WAVE_WIDTH },
           },
-          // 【47本目、Minami決定：1】まとめない点（灰色は直径6px、オレンジがあるときの紺は直径10px、
-          // 白いふち）。まとめる点・まとめた丸より下に描き、紺を灰色より上にする。
+          // 【47本目、Minami決定：1】まとめない点（オレンジがあるときの紺、直径10px、白いふち）。
+          // まとめる点・まとめた丸より下に描く。【49本目】灰色はやめた（紺とオレンジの2色）。
           {
             id: SPOTS_PLAIN_LAYER_ID,
             type: 'circle',
             source: SPOTS_PLAIN_SOURCE_ID,
-            layout: { 'circle-sort-key': ['match', ['get', 'cat'], 'gray', 0, 1] },
             paint: {
-              'circle-radius': ['match', ['get', 'cat'], 'gray', 2, 3.5],
-              'circle-color': ['match', ['get', 'cat'], 'gray', PIN_COLOR_GRAY, PIN_COLOR_BLUE],
+              'circle-radius': 3.5,
+              'circle-color': PIN_COLOR_BLUE,
               'circle-opacity': 1,
-              'circle-stroke-width': ['match', ['get', 'cat'], 'gray', 1, 1.5],
+              'circle-stroke-width': 1.5,
               'circle-stroke-color': '#ffffff',
               'circle-blur': 0,
             },
@@ -640,13 +639,14 @@ export class TerrainMapView {
             // 【43本目】まとめた丸（point_countを持つ点）はHTMLの印で描くため、ここでは描かない。
             filter: ['!', ['has', 'point_count']],
             paint: {
-              // 青は直径13px（半径6.5）＋白いふち2px、灰色は小さな点（半径3.5、ふち1px）。
+              // 青は直径13px（半径6.5）＋白いふち2px。
               // 【48本目、Minami決定：1】オレンジは紺の点（まとめない点のレイヤー、直径10px）と同じくらいに
               // 小さくし（半径4＋白いふち1.5px＝直径11px）、紺よりひと回りだけ大きくして少し目立たせる。
-              'circle-radius': ['match', ['get', 'cat'], 'gray', 3.5, 'orange', 4, 6.5],
-              'circle-color': ['match', ['get', 'cat'], 'orange', PIN_COLOR_ORANGE, 'gray', PIN_COLOR_GRAY, PIN_COLOR_BLUE],
+              // 【49本目】灰色はやめた（紺とオレンジの2色）。
+              'circle-radius': ['match', ['get', 'cat'], 'orange', 4, 6.5],
+              'circle-color': ['match', ['get', 'cat'], 'orange', PIN_COLOR_ORANGE, PIN_COLOR_BLUE],
               'circle-opacity': 1,
-              'circle-stroke-width': ['match', ['get', 'cat'], 'gray', 1, 'orange', 1.5, 2],
+              'circle-stroke-width': ['match', ['get', 'cat'], 'orange', 1.5, 2],
               'circle-stroke-color': '#ffffff',
               'circle-blur': 0,
             },
@@ -1044,6 +1044,11 @@ export class TerrainMapView {
    * 検索直後の波の演出の途中なら、波のほうが最後にデータを作り直す（ここでは作り直さない）。
    * @param {number} budget 今の金額
    */
+  /** 【49本目】直前の検索の金額（pinCategory()の紺の上限に使う。2Dのmap-view.jsと同じ）。 */
+  setPrevSearchedBudget(budget) {
+    this._prevSearchedBudget = budget;
+  }
+
   setLiveBudget(budget, { pop = false } = {}) {
     const prevLive = this._liveBudget ?? this._lastBudget;
     this._liveBudget = budget;
@@ -1153,10 +1158,10 @@ export class TerrainMapView {
     if (!source || !plainSource) return;
     const searched = this._lastBudget;
     const live = this._liveBudget ?? searched;
-    // 【47本目、Minami決定：1】オレンジが1つでもあれば、まとめるのはオレンジだけ（紺・灰色はまとめない
-    // 小さな点）。なければ紺だけをまとめる（灰色はまとめない）。検索直後の波の途中でも、まとめる色は
+    // 【47本目、Minami決定：1】オレンジが1つでもあれば、まとめるのはオレンジだけ（紺はまとめない
+    // 小さな点）。なければ紺だけをまとめる。検索直後の波の途中でも、まとめる色は
     // 出し終えたときと同じにする（全件で判断する）。
-    const hasOrange = (this._spotFeatures || []).some((f) => pinCategory(f.properties.fare, live, searched) === 'orange');
+    const hasOrange = (this._spotFeatures || []).some((f) => pinCategory(f.properties.fare, live, searched, this._prevSearchedBudget) === 'orange');
     const clusterKind = hasOrange ? 'orange' : 'blue';
     this._clusterKind = clusterKind;
     const features = [];
@@ -1168,7 +1173,7 @@ export class TerrainMapView {
       // 【48本目】波を待っている・「ぽん」と出している最中のオレンジは、いつものソースに入れない。
       if (pinPop && (pinPop.pending.has(f.properties.id) || pinPop.shown.has(f.properties.id))) return;
       if (revealKm !== undefined && !(f.properties.distance_km <= revealKm)) return;
-      const cat = pinCategory(f.properties.fare, live, searched);
+      const cat = pinCategory(f.properties.fare, live, searched, this._prevSearchedBudget);
       if (cat === 'hidden') return;
       const feature = { type: 'Feature', geometry: f.geometry, properties: { ...f.properties, cat } };
       features.push(feature);

@@ -1414,7 +1414,6 @@ header p {
    （Minami実機確認）ため、くっきりした小さな丸にし、光のにじみ（box-shadowのぼかし）はやめた。
    - 青（.map-pin-blue）：検索した金額帯で行ける場所。円の青（#2F6FB2）より濃い紺に近い青＋白いふち、直径13px
    - オレンジ（.map-pin-orange）：金額を変えて、新しく金額帯に入った場所（検索すると青になる）
-   - 灰色（.map-pin-gray）：金額帯より安く行ける場所。小さな点
    - 選んだピン（.map-pin-selected）：ひと回り大きく（20px）、白い太いふちと影
    ピンは入れ物（.map-pin-wrapper-spot、22px四方）の真ん中に置き、大きさが変わっても位置がずれない
    ようにする。予算をこえる場所・まとめた丸に入った場所はJS側でdisplay:noneにする。 */
@@ -1459,14 +1458,7 @@ header p {
   100% { transform: scale(1); }
 }
 
-/* 【47本目】灰色は紺よりさらに小さな点（7px→6px）。まとめた丸には入れない。 */
-.map-pin-spot.map-pin-gray {
-  width: 6px;
-  height: 6px;
-  background-color: #8e959e;
-  border-width: 1px;
-  box-shadow: none;
-}
+/* 【49本目】灰色の点（金額帯より安い場所）はやめた。紺とオレンジの2色にする。 */
 
 /* 【2026-10-23、47本目、Minami決定：1】オレンジが1つでもあるとき（地図の入れ物に.map-has-orange）、
    主役はオレンジ（13pxの丸・オレンジの丸）。紺はまとめずに小さな点（9px、白いふち）にする。
