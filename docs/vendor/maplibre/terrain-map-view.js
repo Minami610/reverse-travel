@@ -165,9 +165,6 @@ const SPOTS_SOURCE_ID = 'spots';
 const SPOTS_LAYER_ID = 'spots-circle';
 // 【45本目】まとめた丸の位置を「今描いているズームの段」から拾うための、見えない円のレイヤー。
 const SPOTS_CLUSTER_HIT_LAYER_ID = 'spots-cluster-hit';
-const SPOTS_SINGLE_HIT_LAYER_ID = 'spots-single-hit';
-// SPOTS_LAYER_IDのいつもの絞り込み（まとめた丸はHTMLの印で描くため、ここでは描かない）。
-const SPOTS_LAYER_BASE_FILTER = ['!', ['has', 'point_count']];
 // 【47本目、Minami決定：1】まとめない点（オレンジがあるときの紺）を描くソースとレイヤー（49本目で灰色はやめた）。
 // まとめる機能（cluster）はソース単位でしか効かないため、まとめる点（オレンジがあればオレンジ、
 // なければ紺）はSPOTS_SOURCE_IDに、まとめない点はこちらに分けて入れる。
@@ -680,7 +677,7 @@ export class TerrainMapView {
             type: 'circle',
             source: SPOTS_SOURCE_ID,
             // 【43本目】まとめた丸（point_countを持つ点）はHTMLの印で描くため、ここでは描かない。
-            filter: SPOTS_LAYER_BASE_FILTER,
+            filter: ['!', ['has', 'point_count']],
             paint: {
               // 青は直径13px（半径6.5）＋白いふち2px。
               // 【48本目、Minami決定：1】オレンジは紺の点（まとめない点のレイヤー、直径10px）と同じくらいに
@@ -715,15 +712,6 @@ export class TerrainMapView {
             source: SPOTS_SOURCE_ID,
             filter: ['has', 'point_count'],
             paint: { 'circle-radius': 14, 'circle-opacity': 0, 'circle-stroke-width': 0 },
-          },
-          // 【51本目】まとめる色の1つずつの点の位置を拾うための見えない円。数字の丸と重なって丸に入れた点は
-          // SPOTS_LAYER_IDの絞り込みで描かなくするため、位置はこちらから拾う（絞り込みに左右されない）。
-          {
-            id: SPOTS_SINGLE_HIT_LAYER_ID,
-            type: 'circle',
-            source: SPOTS_SOURCE_ID,
-            filter: ['!', ['has', 'point_count']],
-            paint: { 'circle-radius': 4, 'circle-opacity': 0, 'circle-stroke-width': 0 },
           },
           // 【2026-10-15、11本目①】選んだピンの強調（吹き出し廃止の代わり、
           // Minami指示：一回り大きく＋白い縁取り＋光の輪）。spotsレイヤーより
@@ -854,7 +842,8 @@ export class TerrainMapView {
     // 【47本目】まとめない点（SPOTS_PLAIN_LAYER_ID）も同じく押せる（1つの場所はどちらか一方の
     // ソースにしか入らない）。
     const onSpotClick = (e) => {
-      const feature = e.features && e.features[0];
+      // 【51本目】数字の丸に入れて透明にしている点は押せない（丸のほうを押す）。
+      const feature = (e.features || []).find((f) => !this._absorbedIds?.has(f.properties.id));
       if (!feature) return;
       this.setSelectedSpot(feature.properties);
       // 【2026-10-11、5本目】地図の点をタップしたら、その場所へ寄る（Minami指示）。
@@ -1259,6 +1248,13 @@ export class TerrainMapView {
    */
   _updateClusterMarkers() {
     if (!this.map) return;
+    // 【51本目】＋の波・「ぽん」の最中はまとめ直さない（終わってから、まとめ直す）。重なりでのまとめ直しは
+    // 点の絞り込み（setFilter）を変えるため描き直しが重く、波の最後のコマが間に合わなくなった
+    // （verify-layoutの「波は広がりながらうすくなる」で実測）。
+    if (this._circleWave || this._pinPop) {
+      this._scheduleClusterMarkerUpdate();
+      return;
+    }
     if (!this._clusterMarkers) this._clusterMarkers = new Map();
     const source = this.map.getSource(SPOTS_SOURCE_ID);
     const seen = new Set();
@@ -1269,25 +1265,25 @@ export class TerrainMapView {
       // まとめた丸も返す。そのため、拡大して分かれたあとも前の段の丸（例：7件の丸）が、ばらの
       // ピンと一緒に残ることがあった（香川・山下・往復¥500、PCで実測）。今描いている段の丸だけを
       // 返すqueryRenderedFeatures()（見えない円のレイヤー）で拾う。
-      const items = [];
-      const seenRaw = new Set();
-      this.map.queryRenderedFeatures({ layers: [SPOTS_CLUSTER_HIT_LAYER_ID] }).forEach((f) => {
-        const id = f.properties.cluster_id;
-        if (seenRaw.has(id)) return; // タイルの境目で同じ丸が2回返ることがある
-        seenRaw.add(id);
-        const p = this.map.project(f.geometry.coordinates);
-        items.push({ members: [{ clusterId: id, lngLat: f.geometry.coordinates, count: f.properties.point_count }], x: p.x, y: p.y, count: f.properties.point_count });
-      });
       // 【51本目、Minami決定】数字の丸どうし・数字の丸と1つずつの点が画面上で重なるときは、重ならなく
       // なるまで1つの丸にまとめる（丸の直径28px以上が、まとめる範囲14より大きいため）。丸に入れた点は
-      // SPOTS_LAYER_IDの絞り込みで描かない。
+      // SPOTS_LAYER_IDで透明にする（絞り込み（setFilter）で消すと、そのソースのタイルを作り直すため重い。
+      // 透明にするだけなら、次に拾うときもその点の位置が分かる）。丸と1つずつの点は1回の
+      // queryRenderedFeatures()でまとめて拾う（地形ありでは1回あたり10〜16msかかり、件数にほとんどよらない。
+      // 2回に分けると、地図を動かしている間の重さが倍になり、＋の波のコマが落ちた）。
+      const items = [];
+      const seenCluster = new Set();
       const seenSingle = new Set();
-      this.map.queryRenderedFeatures({ layers: [SPOTS_SINGLE_HIT_LAYER_ID] }).forEach((f) => {
-        const id = f.properties.id;
-        if (seenSingle.has(id)) return;
-        seenSingle.add(id);
+      this.map.queryRenderedFeatures({ layers: [SPOTS_CLUSTER_HIT_LAYER_ID, SPOTS_LAYER_ID] }).forEach((f) => {
+        const isClusterFeature = f.properties.point_count !== undefined;
+        const id = isClusterFeature ? f.properties.cluster_id : f.properties.id;
+        const seenSet = isClusterFeature ? seenCluster : seenSingle;
+        if (seenSet.has(id)) return; // タイルの境目で同じ丸・点が2回返ることがある
+        seenSet.add(id);
         const p = this.map.project(f.geometry.coordinates);
-        items.push({ members: [{ spotId: id, lngLat: f.geometry.coordinates, count: 1 }], x: p.x, y: p.y, count: 1 });
+        const count = isClusterFeature ? f.properties.point_count : 1;
+        const member = isClusterFeature ? { clusterId: id, lngLat: f.geometry.coordinates, count } : { spotId: id, lngLat: f.geometry.coordinates, count };
+        items.push({ members: [member], x: p.x, y: p.y, count });
       });
       items.sort((a, b) => (a.x - b.x) || (a.y - b.y));
       const singleRadius = this._clusterKind === 'orange' ? PIN_ORANGE_RADIUS_WITH_STROKE : PIN_BLUE_RADIUS_WITH_STROKE;
@@ -1334,15 +1330,16 @@ export class TerrainMapView {
       entry.marker.remove();
       this._clusterMarkers.delete(id);
     });
-    // 丸に入れた点を描かない。変わったときだけ絞り込みを設定し直す（設定し直すと描き直し→idle→ここ、と
-    // なるため、同じなら何もしない）。
+    // 丸に入れた点を透明にする。変わったときだけ設定し直す（同じなら何もしない。設定し直すと描き直し→idle→
+    // ここ、となるため）。検証（verify-layout.js）・押したときの判定用に、丸に入れた点の一覧も覚えておく。
     absorbedIds = absorbedIds.sort();
     const signature = absorbedIds.join(',');
     if (signature !== (this._absorbedSignature || '') && this.map.getLayer(SPOTS_LAYER_ID)) {
       this._absorbedSignature = signature;
-      this.map.setFilter(SPOTS_LAYER_ID, absorbedIds.length === 0
-        ? SPOTS_LAYER_BASE_FILTER
-        : ['all', SPOTS_LAYER_BASE_FILTER, ['!', ['in', ['get', 'id'], ['literal', absorbedIds]]]]);
+      this._absorbedIds = new Set(absorbedIds);
+      const visible = absorbedIds.length === 0 ? 1 : ['case', ['in', ['get', 'id'], ['literal', absorbedIds]], 0, 1];
+      this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-opacity', visible);
+      this.map.setPaintProperty(SPOTS_LAYER_ID, 'circle-stroke-opacity', visible);
     }
   }
 
@@ -2134,8 +2131,10 @@ export class TerrainMapView {
       // レイヤーがまだ無いときは、ピンは無いものとして扱う
     }
     // まとめた丸・選んだピン・出発駅の印（HTMLの印）と、地図の部品
+    // 【51本目】色の説明（#map-legend）は避けない。400×464の3Dでは、避けると地図の中に置ける場所が無くなり、
+    // 地図の外（一覧／地図のタブの上）に出てしまうため。吹き出しは初めの1回・3秒だけなので、その間は上に重なってよい。
     this.map.getContainer().querySelectorAll('.maplibregl-marker').forEach((el) => addRect(el.getBoundingClientRect()));
-    document.querySelectorAll('#map-controls-cluster, #map-dimension-toggle, #map-legend, #mobile-budget-overlay, #spot-info-panel, #map-area .maplibregl-ctrl-attrib, #map-area .maplibregl-ctrl')
+    document.querySelectorAll('#map-controls-cluster, #map-dimension-toggle, #mobile-budget-overlay, #spot-info-panel, #map-area .maplibregl-ctrl-attrib, #map-area .maplibregl-ctrl')
       .forEach((el) => { if (el.offsetParent !== null) addRect(el.getBoundingClientRect()); });
     const hits = (r) => obstacles.some((o) => r.left < o.right + MARGIN && r.right > o.left - MARGIN
       && r.top < o.bottom + MARGIN && r.bottom > o.top - MARGIN);
@@ -2488,6 +2487,7 @@ export class TerrainMapView {
   /** 2D切替時・再試行時にWebGLコンテキストを確実に解放する（上限超過による失敗を防ぐ） */
   destroy() {
     this._absorbedSignature = '';
+    this._absorbedIds = null;
     this._cancelWaveReveal();
     this._cancelFitCircleToView();
     if (this._circleAnimFrame) {

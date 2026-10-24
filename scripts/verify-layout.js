@@ -34,6 +34,8 @@ const SPOT_FOCUS_WAIT_MS = 3200;
 // 【27本目】検証スクリプト側の期待値（terrain-map-view.js内のHANDLE_PITCH_MAXと
 // 同じ値。importできない実行形態のためここでも定義する）。
 const HANDLE_PITCH_MAX_FOR_TEST = 75;
+// 【51本目】3Dでは、数字の丸と重なって丸に入れた点は、spots-circleの中で透明にしている（消すと重いため）。
+// spots-circleの点をqueryRenderedFeatures()で数えるときは、丸に入れた点（_absorbedIds）を除く。
 
 const VIEWPORTS = {
   pc: { width: 1920, height: 1080 },
@@ -190,7 +192,7 @@ async function spotScreenPos3d(page, q) {
     for (let r = 0; r <= 6 && !hit; r += 2) {
       for (const [dx, dy] of [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r], [r, -r], [-r, r]]) {
         const q = [p.x + dx, p.y + dy];
-        if (!map.queryRenderedFeatures(q, { layers: ['spots-circle', 'spots-plain-circle'] }).some((f) => f.properties.id === id)) continue;
+        if (!map.queryRenderedFeatures(q, { layers: ['spots-circle', 'spots-plain-circle'] }).filter((f) => !window.__terrainViewForDebug?._absorbedIds?.has(f.properties.id)).some((f) => f.properties.id === id)) continue;
         const el = document.elementFromPoint(rect.left + q[0], rect.top + q[1]);
         if (el && el.tagName === 'CANVAS') { hit = { x: q[0], y: q[1] }; break; }
       }
@@ -3455,7 +3457,8 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
     // 【25本目②】「¥◯で探す」を押すと、上の要約バー・一覧の見出しが
     // そろって新しい金額に変わること（要約バー末尾の金額＝見出しの上限額）。
     const summaryBudget = parseInt((afterOverlaySearch.summaryText.match(/¥([\d,]+)$/) || [])[1]?.replace(/,/g, ''), 10);
-    const headingBudget = parseInt((afterOverlaySearch.bandHeading.match(/〜¥([\d,]+)で/) || [])[1]?.replace(/,/g, ''), 10);
+    // 【51本目】見出しが「¥1,001〜¥1,200 の場所　23か所」の形になったため、金額の後ろを「で」から「 の場所」に変えた。
+    const headingBudget = parseInt((afterOverlaySearch.bandHeading.match(/〜¥([\d,]+) の場所/) || [])[1]?.replace(/,/g, ''), 10);
     record(
       `[${label}/2D] 「この金額で探す」を押すと、要約バーの金額が変わり、一覧の見出しとそろう`,
       afterOverlaySearch.summaryText !== before2d.summaryText && summaryBudget === headingBudget,
@@ -6414,7 +6417,7 @@ async function checkSelectedPinVisibleAfterFocus3d(browser, baseUrl, savedPaths)
             const p = { x: mapRect.x + rel.x, y: mapRect.y + rel.y };
             const ok = await page.evaluate(({ p, rel, id }) => {
               const map = window.__terrainMapForDebug;
-              const drawn = map.queryRenderedFeatures([[rel.x - 4, rel.y - 4], [rel.x + 4, rel.y + 4]], { layers: ['spots-circle', 'spots-plain-circle'] })
+              const drawn = map.queryRenderedFeatures([[rel.x - 4, rel.y - 4], [rel.x + 4, rel.y + 4]], { layers: ['spots-circle', 'spots-plain-circle'] }).filter((f) => !window.__terrainViewForDebug?._absorbedIds?.has(f.properties.id))
                 .some((f) => f.properties.id === id);
               return drawn && document.elementFromPoint(p.x, p.y)?.tagName === 'CANVAS';
             }, { p, rel, id: cand.id });
@@ -6605,7 +6608,7 @@ async function checkPinColorsAndClusters(browser, baseUrl, savedPaths) {
             const bluePts = await page.evaluate(() => {
               const map = window.__terrainMapForDebug;
               const rect = map.getContainer().getBoundingClientRect();
-              return map.queryRenderedFeatures({ layers: ['spots-circle', 'spots-plain-circle'] })
+              return map.queryRenderedFeatures({ layers: ['spots-circle', 'spots-plain-circle'] }).filter((f) => !window.__terrainViewForDebug?._absorbedIds?.has(f.properties.id))
                 .filter((f) => f.properties.cat === 'blue')
                 .map((f) => { const p = map.project(f.geometry.coordinates); return { x: rect.left + p.x, y: rect.top + p.y }; })
                 .slice(0, 5);
@@ -6624,7 +6627,7 @@ async function checkPinColorsAndClusters(browser, baseUrl, savedPaths) {
             if (dim === '3d') {
               const map = window.__terrainMapForDebug;
               const rect = map.getContainer().getBoundingClientRect();
-              return map.queryRenderedFeatures({ layers: ['spots-circle', 'spots-plain-circle'] }).map((f) => {
+              return map.queryRenderedFeatures({ layers: ['spots-circle', 'spots-plain-circle'] }).filter((f) => !window.__terrainViewForDebug?._absorbedIds?.has(f.properties.id)).map((f) => {
                 const p = map.project(f.geometry.coordinates);
                 const r = 8.5;
                 return { x: rect.left + p.x - r, y: rect.top + p.y - r, width: 2 * r, height: 2 * r };
@@ -7080,7 +7083,7 @@ async function checkRound45(browser, baseUrl, savedPaths) {
       return {
         zoom: +map.getZoom().toFixed(2),
         clusters: els.length,
-        pins: map.queryRenderedFeatures({ layers: ['spots-circle', 'spots-plain-circle'] }).length,
+        pins: map.queryRenderedFeatures({ layers: ['spots-circle', 'spots-plain-circle'] }).filter((f) => !window.__terrainViewForDebug?._absorbedIds?.has(f.properties.id)).length,
         signature: els.map((e) => e.textContent.trim()).sort().join(','),
       };
     }
@@ -7293,7 +7296,7 @@ async function checkRound45(browser, baseUrl, savedPaths) {
         const map = window.__terrainMapForDebug;
         const rect = map.getContainer().getBoundingClientRect();
         const boxes = [];
-        map.queryRenderedFeatures({ layers: ['spots-circle', 'spots-plain-circle'] }).forEach((f) => {
+        map.queryRenderedFeatures({ layers: ['spots-circle', 'spots-plain-circle'] }).filter((f) => !window.__terrainViewForDebug?._absorbedIds?.has(f.properties.id)).forEach((f) => {
           const p = map.project(f.geometry.coordinates);
           boxes.push({ what: `ピン ${f.properties.name}`, left: rect.left + p.x - 8, right: rect.left + p.x + 8, top: rect.top + p.y - 8, bottom: rect.top + p.y + 8 });
         });
@@ -7722,6 +7725,221 @@ async function checkTwoColorPins(page, dim, { blueMax, live }) {
 }
 
 /**
+ * 【51本目】今の画面の数字の丸（円）と、まとめる色の1つずつのピン（円）を、画面上の中心と半径で返す。
+ * 2Dは.map-clusterと.map-pin-spot（見えているもの）の外形、3Dは.map-clusterの外形と、spots-circleの
+ * 描いている点（半径は白いふちを含めて、オレンジ5.5・紺8.5）。
+ */
+async function readClusterCircles(page, dim) {
+  return page.evaluate((dim) => {
+    const circle = (el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, r: r.width / 2 }; };
+    const visible = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).display !== 'none'; };
+    const root = document.getElementById(dim === '3d' ? 'spots-map-3d' : 'spots-map');
+    const clusters = [...root.querySelectorAll('.map-cluster')].filter(visible).map(circle);
+    const kind = dim === '3d' ? window.__terrainViewForDebug._clusterKind : (window.__mapViewForDebug._hasOrange ? 'orange' : 'blue');
+    let singles = [];
+    if (dim === '3d') {
+      const m = window.__terrainMapForDebug;
+      const box = m.getContainer().getBoundingClientRect();
+      const seen = new Set();
+      m.queryRenderedFeatures({ layers: ['spots-circle'] }).filter((f) => !window.__terrainViewForDebug?._absorbedIds?.has(f.properties.id)).forEach((f) => {
+        if (f.properties.cat !== kind || seen.has(f.properties.id)) return;
+        seen.add(f.properties.id);
+        const p = m.project(f.geometry.coordinates);
+        singles.push({ x: box.left + p.x, y: box.top + p.y, r: kind === 'orange' ? 5.5 : 8.5 });
+      });
+    } else {
+      singles = [...root.querySelectorAll(`.map-pin-spot.map-pin-${kind}`)]
+        .filter((el) => visible(el) && el.closest('.leaflet-marker-icon').style.display !== 'none' && !el.classList.contains('map-pin-selected'))
+        .map(circle);
+    }
+    const overlaps = [];
+    const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    for (let i = 0; i < clusters.length; i++) {
+      for (let j = i + 1; j < clusters.length; j++) {
+        if (d(clusters[i], clusters[j]) < clusters[i].r + clusters[j].r - 0.5) overlaps.push({ type: '丸と丸', a: clusters[i], b: clusters[j] });
+      }
+      singles.forEach((s) => { if (d(clusters[i], s) < clusters[i].r + s.r - 0.5) overlaps.push({ type: '丸とピン', a: clusters[i], b: s }); });
+    }
+    return { kind, clusters: clusters.length, singles: singles.length, overlaps: overlaps.length, examples: overlaps.slice(0, 3) };
+  }, dim);
+}
+
+/**
+ * 【2026-10-24、51本目、Minami決定】アプリの名前「みちどころ」・紺は「みちどころ」オレンジは「NEW」・
+ * 一覧の見出し・数字の丸どうしの重なり。富山駅前・¥800で検索→＋を4回（¥1,200）、PCと400×464、2Dと3D。
+ * 1. 数字の丸どうし、数字の丸と1つずつのピン（まとめる色）が画面上で重ならない。
+ * 2. 見出し「みちどころ」・副題「―近くの未知の場所を探そう―」が画面内に出ていて、切れていない。
+ *    ブラウザのタブの名前（document.title）が「みちどころ」で始まる。
+ * 3. 色の説明（● みちどころ・● NEW）と「NEW +◯」の札が地図の中に収まり、切れておらず、地図の部品と
+ *    重ならない。◯は地図のオレンジのピンの数（¥801〜¥1,200、0なら失敗）。
+ * 4. 一覧の見出しが「¥601〜¥800 の場所　◯か所」（◯は一覧のカードの数、0なら失敗）で、切れていない。
+ *    ¥1,200のまま（検索し直す前）は、一覧の場所（¥601〜¥800）は地図で紺なので「NEW」は付かない。
+ *    ¥1,200で検索し直すと「¥1,001〜¥1,200 の場所　◯か所」になり、カードにすべて「NEW」の札が付く
+ *    （直前の検索¥800より高い場所＝地図のオレンジ）。
+ * スクリーンショット：¥1,200まで上げたあと（画面全体。PCと400×464、2Dと3D）。400×464は一覧の画面も。
+ */
+async function checkRound51(browser, baseUrl, savedPaths) {
+  console.log('\n=== 51本目：名前「みちどころ」・みちどころ／NEW・一覧の見出し・数字の丸どうしの重なり ===');
+  const viewports = { pc: VIEWPORTS.pc, own: { width: 400, height: 464 } };
+  for (const [vLabel, viewport] of Object.entries(viewports)) {
+    const isMobile = vLabel !== 'pc';
+    const incId = isMobile ? 'mobile-budget-increment' : 'budget-increment';
+    const searchBtnId = isMobile ? 'mobile-budget-search-btn' : 'search-btn';
+    for (const dim of ['2d', '3d']) {
+      const label = `[51/${vLabel}/${dim}]`;
+      const context = await browser.newContext({ viewport });
+      await context.addInitScript(() => { try { localStorage.setItem('reverse-travel-rotate-hint-seen', 'true'); } catch { /* 無視 */ } });
+      const page = await context.newPage();
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+      page.on('console', (msg) => {
+        if (msg.type() === 'error' && !isKnownAcceptableConsoleMessage(msg.text())) errors.push(msg.text());
+      });
+      try {
+        await page.goto(baseUrl, { waitUntil: 'load' });
+        await page.waitForSelector('#departure-input');
+        await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+        const title = await page.title();
+        record(`${label} ブラウザのタブの名前が「みちどころ」`, title.startsWith('みちどころ'), title);
+        await searchExactStation(page, '富山駅前', 800, isMobile);
+        if (dim === '3d') {
+          await page.click('#map-dimension-toggle');
+          const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+          record(`${label} 3D化（検証の前提）`, ok);
+          if (!ok) continue;
+          await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+          await waitForTerrainCameraIdle(page);
+          await waitForTerrainTilesLoaded(page);
+          await page.waitForTimeout(500);
+        } else {
+          await waitForWaveRevealSettled(page);
+          await page.waitForTimeout(300);
+        }
+        for (let i = 0; i < 4; i++) {
+          await page.evaluate((x) => document.getElementById(x).click(), incId);
+          await page.waitForTimeout(150);
+        }
+        await waitForCircleSettled(page, dim);
+        if (dim === '3d') { await waitForTerrainCameraIdle(page); await waitForTerrainTilesLoaded(page); }
+        await page.waitForTimeout(1200); // 波・「ぽん」が終わり、まとめ直されるまで
+        await waitForBaseMapLoaded(page, dim);
+
+        // --- 1. 数字の丸どうし・丸とピンが重ならない ---
+        const circles = await readClusterCircles(page, dim);
+        record(
+          `${label} ¥1,200：数字の丸どうし・数字の丸と1つずつのピンが画面上で重ならない`,
+          circles.kind === 'orange' && circles.clusters + circles.singles > 0 && circles.overlaps === 0,
+          JSON.stringify(circles)
+        );
+
+        // --- 2. 見出し・副題 ---
+        const header = await page.evaluate(() => {
+          const r = (el) => { const b = el.getBoundingClientRect(); return { x: b.left, y: b.top, left: b.left, top: b.top, right: b.right, bottom: b.bottom, width: b.width, height: b.height }; };
+          const h1 = document.querySelector('header h1');
+          const sub = document.querySelector('header .app-subtitle');
+          return {
+            h1: h1.textContent.trim(), sub: sub.textContent.trim(),
+            h1Rect: r(h1), subRect: r(sub), mylist: r(document.getElementById('mylist-btn')),
+            h1Cut: h1.scrollWidth > h1.clientWidth, subCut: sub.scrollWidth > sub.clientWidth,
+            subVisible: getComputedStyle(sub).display !== 'none',
+          };
+        });
+        record(
+          `${label} 見出し「みちどころ」と副題「―近くの未知の場所を探そう―」が画面内に出ていて、切れていない・マイリストと重ならない`,
+          header.h1 === 'みちどころ' && header.sub === '―近くの未知の場所を探そう―' && header.subVisible
+            && !header.h1Cut && !header.subCut
+            && isFullyVisible(header.h1Rect, viewport) && isFullyVisible(header.subRect, viewport)
+            && !rectsOverlap(header.subRect, header.mylist) && !rectsOverlap(header.h1Rect, header.mylist),
+          JSON.stringify(header)
+        );
+
+        // --- 3. 色の説明・「NEW +◯」 ---
+        const legend = await page.evaluate((dim) => {
+          const r = (el) => { const b = el.getBoundingClientRect(); return { x: b.left, y: b.top, left: b.left, top: b.top, right: b.right, bottom: b.bottom, width: b.width, height: b.height }; };
+          const lg = document.getElementById('map-legend');
+          const tag = document.getElementById('map-new-count');
+          const area = document.getElementById('map-area');
+          const obstacles = [...document.querySelectorAll('#map-dimension-toggle, #map-compass-btn, #map-reset-view-btn, #map-rotate-handle, #map-area .leaflet-control-zoom, #map-area .leaflet-control-attribution, #map-area .maplibregl-ctrl-attrib, #map-area .maplibregl-ctrl-group')]
+            .filter((el) => { const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0 && getComputedStyle(el).visibility !== 'hidden'; })
+            .map((el) => ({ id: el.id || String(el.className).split(' ')[0], rect: r(el) }));
+          const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
+          const expectedNew = (view._lastSpots || []).filter((s) => Number.isFinite(s.latitude) && s.source_round_trip_fare > 800 && s.source_round_trip_fare <= 1200).length;
+          return {
+            hidden: lg.hidden, text: lg.textContent.replace(/\s+/g, ' ').trim(), rect: r(lg), area: r(area),
+            cut: lg.scrollWidth > lg.clientWidth, tagText: tag.textContent, tagHidden: tag.hidden, tagRect: r(tag),
+            tagBg: getComputedStyle(tag).backgroundColor, tagColor: getComputedStyle(tag).color,
+            expectedNew, obstacles,
+          };
+        }, dim);
+        const inArea = legend.rect.left >= legend.area.left && legend.rect.right <= legend.area.right && legend.rect.top >= legend.area.top && legend.rect.bottom <= legend.area.bottom;
+        const hitting = legend.obstacles.filter((o) => rectsOverlap(legend.rect, o.rect)).map((o) => o.id);
+        record(
+          `${label} 色の説明「● みちどころ」「● NEW」が地図の中に収まり、切れておらず、地図の部品と重ならない`,
+          !legend.hidden && legend.text.startsWith('みちどころ NEW') && inArea && !legend.cut && hitting.length === 0,
+          JSON.stringify({ text: legend.text, rect: legend.rect, area: legend.area, cut: legend.cut, hitting })
+        );
+        record(
+          `${label} 「NEW +◯」の札（オレンジ地に白い文字）の数が、地図のオレンジのピンの数（¥801〜¥1,200）`,
+          !legend.tagHidden && legend.expectedNew > 0 && legend.tagText === `NEW +${legend.expectedNew}`
+            && legend.tagBg === 'rgb(255, 107, 43)' && legend.tagColor === 'rgb(255, 255, 255)'
+            && legend.tagRect.right <= legend.rect.right,
+          JSON.stringify({ tagText: legend.tagText, expectedNew: legend.expectedNew, tagBg: legend.tagBg, tagColor: legend.tagColor })
+        );
+        const shotFile = path.join(screenshotDir, `round51-1200-${dim}-${vLabel}.png`);
+        await page.screenshot({ path: shotFile });
+        savedPaths.push(shotFile);
+
+        // --- 4. 一覧の見出し・カードの「NEW」 ---
+        const readList = async () => {
+          if (isMobile) {
+            await page.click('.tab-btn[data-tab="list"]');
+            await page.waitForTimeout(400);
+          }
+          return page.evaluate(() => {
+            const h = document.getElementById('results-band-heading');
+            const b = h.getBoundingClientRect();
+            const cards = [...document.querySelectorAll('.spot-card')];
+            return {
+              text: h.textContent, cut: h.scrollWidth > h.clientWidth, rect: { x: b.left, y: b.top, left: b.left, top: b.top, right: b.right, bottom: b.bottom, width: b.width, height: b.height },
+              cards: cards.length, newShown: cards.filter((c) => !c.querySelector('.spot-card-new')?.hidden).length,
+            };
+          });
+        };
+        const list1 = await readList();
+        record(
+          `${label} 一覧の見出しが「¥601〜¥800 の場所　◯か所」（◯は一覧の数）で、切れていない。¥1,200のままでは一覧の場所に「NEW」は付かない（地図で紺）`,
+          list1.cards > 0 && list1.text === `¥601〜¥800 の場所　${list1.cards}か所` && !list1.cut && isFullyVisible(list1.rect, viewport) && list1.newShown === 0,
+          JSON.stringify(list1)
+        );
+        if (isMobile && dim === '2d') {
+          const listShot = path.join(screenshotDir, 'round51-1200-list-own.png');
+          await page.screenshot({ path: listShot });
+          savedPaths.push(listShot);
+        }
+        // 検索した直後は地図も金額帯の場所だけで、裏で¥2,000分を取り終えてからそろう（「NEW +◯」も地図と
+        // 同じ数え方）。取り終えるまで待つ。
+        const prefetchBefore = await page.evaluate(() => window.__maxBudgetPrefetchAppliedCount || 0);
+        await clickElementChecked(page, searchBtnId, `${label} ${isMobile ? '「¥1,200で探す」' : '「この条件で検索」'}`);
+        await page.waitForFunction((n) => (window.__maxBudgetPrefetchAppliedCount || 0) > n, prefetchBefore, { timeout: 20000 }).catch(() => {});
+        await page.waitForTimeout(500);
+        const list2 = await readList();
+        const tag2 = await page.evaluate(() => document.getElementById('map-new-count').textContent);
+        record(
+          `${label} ¥1,200で検索し直すと、見出しが「¥1,001〜¥1,200 の場所　◯か所」になり、カードにすべて「NEW」が付く`,
+          list2.cards > 0 && list2.text === `¥1,001〜¥1,200 の場所　${list2.cards}か所` && !list2.cut && list2.newShown === list2.cards && tag2 === legend.tagText,
+          JSON.stringify({ ...list2, tag2 })
+        );
+        record(`${label} コンソールにエラーが出ていない（標高タイルの404を除く）`, errors.length === 0, errors.join(' / '));
+      } catch (e) {
+        record(`${label} 検証中にクラッシュしない`, false, e.message);
+      } finally {
+        await context.close();
+      }
+    }
+  }
+}
+
+/**
  * 【2026-10-23、49本目、Minami決定】ピンの色を紺とオレンジの2色にする（灰色をやめる）。
  * 富山駅前で（岡は¥501〜¥800の場所が無く、例の②③が成り立たないため。富山駅前はどの金額帯にも場所がある）、
  * ¥500で検索（¥500までが紺）→ ＋で¥800（¥501〜¥800がオレンジ）→ ¥800で再検索（¥500までが紺、
@@ -7861,7 +8079,7 @@ async function readClusterSummary(page, dim) {
       const tv = window.__terrainViewForDebug;
       const m = window.__terrainMapForDebug;
       const sizes = [...(tv._clusterMarkers || new Map()).values()].map((e) => e.count);
-      const singles = m.queryRenderedFeatures({ layers: ['spots-circle', 'spots-plain-circle'] }).filter((f) => f.properties.cat === 'orange').length;
+      const singles = m.queryRenderedFeatures({ layers: ['spots-circle', 'spots-plain-circle'] }).filter((f) => !window.__terrainViewForDebug?._absorbedIds?.has(f.properties.id)).filter((f) => f.properties.cat === 'orange').length;
       return { clusters: sizes.length, inClusters: sizes.reduce((a, b) => a + b, 0), orangeSingles: singles };
     }
     const mv = window.__mapViewForDebug;
@@ -7876,6 +8094,9 @@ async function readClusterSummary(page, dim) {
  * オレンジのピンが現れる。岡・¥500で検索→＋を7回（¥1,200）、PCと400×464、2Dと3D。
  * 1. まとめる範囲が「ピン同士が重なるくらい」（14px）：2Dは、隣のオレンジから14pxより遠いオレンジが
  *    必ず1つずつ点で出ている（数字の丸に入っていない）。3Dはまとめる範囲が14。数字の丸の数を記録する。
+ *    【51本目で変更】数字の丸（直径28px以上）と重なるピンは、14pxより遠くても丸に入れることにした
+ *    （丸とピンが重ならないように）。そのため「14pxより遠いオレンジ」のうち出ていないものは、
+ *    すべて数字の丸に入っている（消えてはいない）こと、と確かめる。丸と重ならないことはcheckRound51で見る。
  * 2. オレンジのピンの大きさが紺とほぼ同じ（2Dは画面上の直径の差が2px以内、3Dは半径の式）。
  * 3. ＋を押した直後の0.1秒にはまだ出ていない遠い場所の新しいオレンジが、0.55秒後には出ている。
  * 4. コンソールにエラーが出ない（国土地理院の標高タイルの404を除く）。
@@ -7988,11 +8209,13 @@ async function checkRound48(browser, baseUrl, savedPaths) {
             const pts = [];
             mv.markersBySpotId.forEach((m, id) => { const el = m.getElement(); if (el && el.dataset.cat === 'orange' && id !== mv.selectedSpotId) pts.push({ id, p: mv.map.latLngToContainerPoint(m.getLatLng()), el }); });
             const far = pts.filter((a) => pts.every((b) => b === a || a.p.distanceTo(b.p) > 14));
-            return { orange: pts.length, far: far.length, farHidden: far.filter((x) => x.el.style.display === 'none').length };
+            const inCluster = new Set(mv._clusters.flatMap((c) => c.members));
+            const farHidden = far.filter((x) => x.el.style.display === 'none');
+            return { orange: pts.length, far: far.length, farHidden: farHidden.length, farHiddenNotInCluster: farHidden.filter((x) => !inCluster.has(x.id)).length };
           });
           record(
-            `${label} ¥1,200：隣のオレンジから14pxより遠い（重ならない）オレンジは、すべて1つずつ点で出ている`,
-            live === 1200 && lonely.orange > 0 && lonely.farHidden === 0,
+            `${label} ¥1,200：隣のオレンジから14pxより遠いオレンジは、1つずつ点で出ているか、数字の丸と重なって丸に入っている（51本目）`,
+            live === 1200 && lonely.orange > 0 && lonely.far > lonely.farHidden && lonely.farHiddenNotInCluster === 0,
             JSON.stringify({ live, ...lonely, ...sum })
           );
         } else {
@@ -9035,6 +9258,7 @@ async function main() {
     await runWithFreshBrowser(checkRound47, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound48, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound49, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkRound51, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBreadcrumbTrail, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBudgetSlider, baseUrl, savedPaths);
     await runWithFreshBrowser(checkWaveRevealAndCircleScreenshots, baseUrl, savedPaths);

@@ -3215,13 +3215,16 @@ header p {
     gap: 0;
   }
 
+  /* 2段にしてもヘッダーの高さが今まで（マイリストボタン32px＋上下の余白）をこえないようにする
+     （400×464で一覧タブの高さが画面の半分を切らないように）。 */
   header h1 {
-    line-height: 1.2;
+    font-size: 1rem;
+    line-height: 1.15;
   }
 
   header p.app-subtitle {
-    font-size: 0.68rem;
-    line-height: 1.2;
+    font-size: 0.65rem;
+    line-height: 1.15;
     overflow: visible;
   }
 
