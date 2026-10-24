@@ -2197,7 +2197,7 @@ header p {
   border: 3.5px solid white;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.55);
   pointer-events: none;
-  z-index: 2;
+  z-index: 3; /* 【53本目】出発駅の印（z-index:2）より上 */
 }
 
 /* 【43本目、Minami決定：B-2】近いピンをまとめた丸（数字入りの紺の丸）。
@@ -2231,9 +2231,15 @@ header p {
   background-color: #ff6b2b;
 }
 
-/* 【47本目】3Dのまとめた丸（HTMLの印）は出発駅の印より上、選んだピンの印（z-index:2）より下。 */
+/* 【47本目】3Dのまとめた丸（HTMLの印）は選んだピンの印より下。
+   【2026-10-25、53本目、Minami決定】出発駅の印は、まとめた丸より上に描く（数字の丸が出発駅にかぶり、
+   出発駅が見えなかったため）。重なり順（上から）：選んだピン（3）→ 出発駅（2）→ まとめた丸（1）→ 地図に描く点。 */
 .map-cluster-3d {
   z-index: 1;
+}
+
+.map-departure-3d {
+  z-index: 2;
 }
 
 /* 検索直後の波の演出（下の.pin-wave-hidden）を、まとめた丸にも同じように効かせる。 */
@@ -5363,11 +5369,14 @@ const MAP_PIN_CLUSTER_MAX_ZOOM = 16;
 // zIndexOffset」で決まるため、段の差は地図の高さ（数千px）より十分大きくする。
 // 紺の丸（オレンジがないとき）は45本目のまま出発駅の印より上。
 // 【49本目】灰色はやめた（紺とオレンジの2色）。
+// 【2026-10-25、53本目、Minami決定】出発駅の印は、数字の丸・1つずつのピンより、いつも上に描く（数字の丸が
+// 出発駅の上にかぶり、出発駅が見えなかったため）。45本目・47本目の「まとめた丸・オレンジは出発駅の印より上」
+// はこれに置き換わった。選んだピン・ホバー中のピンは今までどおり出発駅の印より上。
 const MAP_Z_BLUE = 10000;
-const MAP_Z_DEPARTURE = 20000;
 const MAP_Z_BLUE_CLUSTER = 21000;
 const MAP_Z_ORANGE = 30000;
 const MAP_Z_ORANGE_CLUSTER = 31000;
+const MAP_Z_DEPARTURE = 35000;
 const MAP_Z_HOVER = 40000;
 const MAP_Z_SELECTED = 50000;
 
@@ -6000,6 +6009,7 @@ class MapView {
       // 【45本目】まとめた丸は出発駅の印より上に出す。まとめた丸の位置は中の場所の
       // 平均のため、出発駅のすぐ近くに場所が集まる駅（香川・山下・往復¥500）では、縮小してできた丸が
       // 出発駅の印の下に隠れ、まとまったことが見えなかった（3Dはあとから足した印が上になるため、もともと上）。
+      // 【53本目】出発駅の印は丸より上に変えた（MAP_Z_DEPARTUREの説明）。丸どうしの順（オレンジ＞紺）はこのまま。
       const zIndexOffset = kind === 'orange' ? MAP_Z_ORANGE_CLUSTER : MAP_Z_BLUE_CLUSTER;
       const marker = L.marker([lat, lng], { icon: createClusterIcon(members.length, kind), zIndexOffset })
         .addTo(this._clusterLayer);

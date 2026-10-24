@@ -958,6 +958,9 @@ export class TerrainMapView {
       this.departureMarker = new maplibregl.Marker({ color: '#e06c2c' })
         .setLngLat([departureStation.stop_lon, departureStation.stop_lat])
         .addTo(this.map);
+      // 【2026-10-25、53本目、Minami決定】出発駅の印は、数字の丸（HTMLの印、z-index:1）・1つずつのピン（地図に
+      // 描く円）より、いつも上に描く。選んだピンの印（z-index:3）よりは下（style.cssの.map-departure-3d）。
+      this.departureMarker.getElement().classList.add('map-departure-3d');
     }
 
     // 出発駅からの直線距離（km）を各スポットに付与する。予算の到達円の半径

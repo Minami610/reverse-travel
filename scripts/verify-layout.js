@@ -7152,12 +7152,14 @@ async function checkRound45(browser, baseUrl, savedPaths) {
       const el = m.getElement();
       if (el && el.style.display !== 'none') visible++;
     });
-    // まとめた丸が、ほかの印（出発駅の印など）の下に隠れていないか：丸の中心で一番上にある要素を見る
+    // まとめた丸が、ほかの印の下に隠れていないか：丸の中心で一番上にある要素を見る。
+    // 【53本目】出発駅の印は丸より上に描く決まりになったため、出発駅の印の下になっているのは数えない。
     const covered = mv._clusters.filter((c) => {
       const el = c.marker.getElement();
       if (!el) return true;
       const r = el.getBoundingClientRect();
       const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      if (top && top.closest('.map-pin-departure, .leaflet-tooltip')) return false;
       return !(top && el.contains(top));
     }).length;
     // 【48本目】まとめる色（オレンジがなければ紺）で1つずつ出ているピンのうち、隣から14px以内（重なる）の組の数。
@@ -7220,7 +7222,7 @@ async function checkRound45(browser, baseUrl, savedPaths) {
         JSON.stringify({ before: s0, after: s1 })
       );
       if (dim === '2d') {
-        record(`${label} 縮小してできたまとめた丸が、出発駅の印などの下に隠れていない`, s1.covered === 0, JSON.stringify(s1));
+        record(`${label} 縮小してできたまとめた丸が、ほかの印の下に隠れていない（出発駅の印の下は53本目から決まりどおり）`, s1.covered === 0, JSON.stringify(s1));
       }
       record(
         `${label} 2段拡大すると、検索した直後と同じに分かれる`,
@@ -7608,6 +7610,7 @@ async function checkRound47(browser, baseUrl, savedPaths) {
               zBlueMax: Math.max(...blue.map((x) => x.z)),
               zBlueMin: Math.min(...blue.map((x) => x.z)),
               zOrangeMin: Math.min(...orange.map((x) => x.z), ...orangeCluster), zDep: dep ? Number(dep.style.zIndex) : null,
+              zOrangeMax: Math.max(...orange.map((x) => x.z), ...orangeCluster),
               countsInBlue: [...document.querySelectorAll('#spots-map .map-pin-blue .map-cluster-count')].length,
               grayCount: document.querySelectorAll('#spots-map .map-pin-gray').length,
             };
@@ -7619,9 +7622,10 @@ async function checkRound47(browser, baseUrl, savedPaths) {
             JSON.stringify(look)
           );
           record(
-            `${label} 重なり順：オレンジの丸・オレンジのピン → 出発駅の印 → 紺`,
-            look.zDep !== null && look.zOrangeMin > look.zDep && look.zDep > look.zBlueMax,
-            JSON.stringify({ zOrangeMin: look.zOrangeMin, zDep: look.zDep, zBlue: [look.zBlueMin, look.zBlueMax] })
+            // 【53本目】出発駅の印は、数字の丸・1つずつのピンより、いつも上（47本目の順から変更）。
+            `${label} 重なり順：出発駅の印 → オレンジの丸・オレンジのピン → 紺（53本目）`,
+            look.zDep !== null && look.zDep > look.zOrangeMax && look.zOrangeMin > look.zBlueMax,
+            JSON.stringify({ zOrangeMin: look.zOrangeMin, zOrangeMax: look.zOrangeMax, zDep: look.zDep, zBlue: [look.zBlueMin, look.zBlueMax] })
           );
         } else {
           const look = await page.evaluate(() => {
@@ -7652,14 +7656,17 @@ async function checkRound47(browser, baseUrl, savedPaths) {
         const before = await page.evaluate((dim) => {
           if (dim === '3d') {
             const tv = window.__terrainViewForDebug;
-            const entries = [...(tv._clusterMarkers || new Map()).entries()].sort((a, b) => b[1].count - a[1].count);
+            // 【53本目】出発駅の印は丸より上に描くため、出発駅の印の下になっている丸は押せない。それ以外で一番大きい丸を押す。
+            const free3d = (el) => { const r = el.getBoundingClientRect(); return !!document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest('.map-cluster-wrapper'); };
+            const entries = [...(tv._clusterMarkers || new Map()).entries()].filter(([, e]) => free3d(e.el)).sort((a, b) => b[1].count - a[1].count);
             if (entries.length === 0) return null;
             const [id, e] = entries[0];
             const r = e.el.getBoundingClientRect();
             return { id, count: e.count, kind: e.kind, x: r.x + r.width / 2, y: r.y + r.height / 2, zoom: window.__terrainMapForDebug.getZoom() };
           }
           const mv = window.__mapViewForDebug;
-          const c = [...mv._clusters].sort((a, b) => b.members.length - a.members.length)[0];
+          const free2d = (el) => { const r = el.getBoundingClientRect(); return !!document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest('.map-cluster-wrapper'); };
+          const c = [...mv._clusters].filter((x) => free2d(x.marker.getElement())).sort((a, b) => b.members.length - a.members.length)[0];
           if (!c) return null;
           const r = c.marker.getElement().getBoundingClientRect();
           return { members: c.members, count: c.members.length, kind: c.kind, x: r.x + r.width / 2, y: r.y + r.height / 2, zoom: mv.map.getZoom() };
@@ -7994,6 +8001,92 @@ async function checkRound51(browser, baseUrl, savedPaths) {
       } finally {
         await context.close();
       }
+    }
+  }
+}
+
+/**
+ * 【2026-10-25、53本目、Minami決定】出発駅のピンは、数字の丸・1つずつのピンより、いつも上に描く（2D・3D）。
+ * 富山駅前・¥500で検索した直後と、＋で¥800にしたあと。PC 3D・PC 2D・400×464 3D。
+ * 1. 出発駅の印の中心で一番上にあるのが、出発駅の印（地図に描く点は印の下になる。3Dの点は地図の中に描くため
+ *    elementFromPointでは拾えないが、HTMLの印の数字の丸・選んだピンより上かどうかはこれで見られる）。
+ * 2. 数字の丸どうし・数字の丸と1つずつのピンが重ならない（51本目を崩さない）。
+ * スクリーンショット：round53-{search500|plus800}-{3d-pc|2d-pc|3d-own}.png（画面全体）。
+ */
+async function checkRound53(browser, baseUrl, savedPaths) {
+  console.log('\n=== 53本目：出発駅のピンを、数字の丸・1つずつのピンより上に描く ===');
+  const cases = [
+    { vLabel: 'pc', viewport: VIEWPORTS.pc, dim: '3d' },
+    { vLabel: 'pc', viewport: VIEWPORTS.pc, dim: '2d' },
+    { vLabel: 'own', viewport: { width: 400, height: 464 }, dim: '3d' },
+  ];
+  for (const { vLabel, viewport, dim } of cases) {
+    const isMobile = vLabel !== 'pc';
+    const incId = isMobile ? 'mobile-budget-increment' : 'budget-increment';
+    const label = `[53/${vLabel}/${dim}]`;
+    const context = await browser.newContext({ viewport });
+    await context.addInitScript(() => { try { localStorage.setItem('reverse-travel-rotate-hint-seen', 'true'); } catch { /* 無視 */ } });
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+    page.on('console', (msg) => {
+      if (msg.type() === 'error' && !isKnownAcceptableConsoleMessage(msg.text())) errors.push(msg.text());
+    });
+    const departureOnTop = () => page.evaluate((dim) => {
+      const el = dim === '3d'
+        ? document.querySelector('#spots-map-3d .map-departure-3d')
+        : document.querySelector('#spots-map .map-pin-departure')?.closest('.leaflet-marker-icon');
+      if (!el) return { found: false };
+      const r = el.getBoundingClientRect();
+      // 3Dの印はしずく形で、中心より少し上が塗りの部分。2Dはひし形の中心。
+      const x = r.left + r.width / 2;
+      const y = dim === '3d' ? r.top + r.height * 0.35 : r.top + r.height / 2;
+      const top = document.elementFromPoint(x, y);
+      const describe = (n) => (n ? (n.id ? `#${n.id}` : `${n.tagName}.${String(n.className).split(' ')[0]}`) : null);
+      return { found: true, onTop: !!top && el.contains(top), topIs: describe(top) };
+    }, dim);
+    const step = async (title, shotName) => {
+      await waitForBaseMapLoaded(page, dim);
+      const dep = await departureOnTop();
+      record(`${label} ${title}：出発駅のピンが、数字の丸・ほかのピンの下に隠れていない`, dep.found && dep.onTop, JSON.stringify(dep));
+      const circles = await readClusterCircles(page, dim);
+      record(`${label} ${title}：数字の丸どうし・数字の丸と1つずつのピンが重ならない（51本目）`, circles.clusters + circles.singles > 0 && circles.overlaps === 0, JSON.stringify(circles));
+      const file = path.join(screenshotDir, shotName);
+      await page.screenshot({ path: file });
+      savedPaths.push(file);
+    };
+    try {
+      await page.goto(baseUrl, { waitUntil: 'load' });
+      await page.waitForSelector('#departure-input');
+      await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+      await searchExactStation(page, '富山駅前', 500, isMobile);
+      if (dim === '3d') {
+        await page.click('#map-dimension-toggle');
+        const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+        record(`${label} 3D化（検証の前提）`, ok);
+        if (!ok) continue;
+        await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+        await waitForTerrainCameraIdle(page);
+        await waitForTerrainTilesLoaded(page);
+        await page.waitForTimeout(800);
+      } else {
+        await waitForWaveRevealSettled(page);
+        await page.waitForTimeout(500);
+      }
+      await step('¥500で検索した直後', `round53-search500-${dim}-${vLabel}.png`);
+      for (let i = 0; i < 3; i++) {
+        await page.evaluate((x) => document.getElementById(x).click(), incId);
+        await page.waitForTimeout(150);
+      }
+      await waitForCircleSettled(page, dim);
+      if (dim === '3d') { await waitForTerrainCameraIdle(page); await waitForTerrainTilesLoaded(page); }
+      await page.waitForTimeout(1200); // 波・「ぽん」が終わり、まとめ直されるまで
+      await step('＋で¥800にしたあと', `round53-plus800-${dim}-${vLabel}.png`);
+      record(`${label} コンソールにエラーが出ていない（標高タイルの404を除く）`, errors.length === 0, errors.join(' / '));
+    } catch (e) {
+      record(`${label} 検証中にクラッシュしない`, false, e.message);
+    } finally {
+      await context.close();
     }
   }
 }
@@ -9318,6 +9411,7 @@ async function main() {
     await runWithFreshBrowser(checkRound48, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound49, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound51, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkRound53, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBreadcrumbTrail, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBudgetSlider, baseUrl, savedPaths);
     await runWithFreshBrowser(checkWaveRevealAndCircleScreenshots, baseUrl, savedPaths);

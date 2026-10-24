@@ -1508,7 +1508,7 @@ header p {
   border: 3.5px solid white;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.55);
   pointer-events: none;
-  z-index: 2;
+  z-index: 3; /* 【53本目】出発駅の印（z-index:2）より上 */
 }
 
 /* 【43本目、Minami決定：B-2】近いピンをまとめた丸（数字入りの紺の丸）。
@@ -1542,9 +1542,15 @@ header p {
   background-color: #ff6b2b;
 }
 
-/* 【47本目】3Dのまとめた丸（HTMLの印）は出発駅の印より上、選んだピンの印（z-index:2）より下。 */
+/* 【47本目】3Dのまとめた丸（HTMLの印）は選んだピンの印より下。
+   【2026-10-25、53本目、Minami決定】出発駅の印は、まとめた丸より上に描く（数字の丸が出発駅にかぶり、
+   出発駅が見えなかったため）。重なり順（上から）：選んだピン（3）→ 出発駅（2）→ まとめた丸（1）→ 地図に描く点。 */
 .map-cluster-3d {
   z-index: 1;
+}
+
+.map-departure-3d {
+  z-index: 2;
 }
 
 /* 検索直後の波の演出（下の.pin-wave-hidden）を、まとめた丸にも同じように効かせる。 */

@@ -186,11 +186,14 @@ const MAP_PIN_CLUSTER_MAX_ZOOM = 16;
 // zIndexOffset」で決まるため、段の差は地図の高さ（数千px）より十分大きくする。
 // 紺の丸（オレンジがないとき）は45本目のまま出発駅の印より上。
 // 【49本目】灰色はやめた（紺とオレンジの2色）。
+// 【2026-10-25、53本目、Minami決定】出発駅の印は、数字の丸・1つずつのピンより、いつも上に描く（数字の丸が
+// 出発駅の上にかぶり、出発駅が見えなかったため）。45本目・47本目の「まとめた丸・オレンジは出発駅の印より上」
+// はこれに置き換わった。選んだピン・ホバー中のピンは今までどおり出発駅の印より上。
 const MAP_Z_BLUE = 10000;
-const MAP_Z_DEPARTURE = 20000;
 const MAP_Z_BLUE_CLUSTER = 21000;
 const MAP_Z_ORANGE = 30000;
 const MAP_Z_ORANGE_CLUSTER = 31000;
+const MAP_Z_DEPARTURE = 35000;
 const MAP_Z_HOVER = 40000;
 const MAP_Z_SELECTED = 50000;
 
@@ -823,6 +826,7 @@ export class MapView {
       // 【45本目】まとめた丸は出発駅の印より上に出す。まとめた丸の位置は中の場所の
       // 平均のため、出発駅のすぐ近くに場所が集まる駅（香川・山下・往復¥500）では、縮小してできた丸が
       // 出発駅の印の下に隠れ、まとまったことが見えなかった（3Dはあとから足した印が上になるため、もともと上）。
+      // 【53本目】出発駅の印は丸より上に変えた（MAP_Z_DEPARTUREの説明）。丸どうしの順（オレンジ＞紺）はこのまま。
       const zIndexOffset = kind === 'orange' ? MAP_Z_ORANGE_CLUSTER : MAP_Z_BLUE_CLUSTER;
       const marker = L.marker([lat, lng], { icon: createClusterIcon(members.length, kind), zIndexOffset })
         .addTo(this._clusterLayer);
