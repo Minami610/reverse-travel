@@ -7616,8 +7616,9 @@ async function checkRound47(browser, baseUrl, savedPaths) {
             };
           });
           record(
-            `${label} ＋を4回：紺は数字のない小さな点（直径8〜10px・白いふち）、灰色の点は無い（49本目）`,
-            look.blueCount > 0 && look.blueW[0] >= 8 && look.blueW[1] <= 10 && look.blueBorder === 'rgb(255, 255, 255)'
+            // 【54本目】オレンジがあるときの紺は、ふちもうすい白（rgba(255, 255, 255, 0.45)）になった。
+            `${label} ＋を4回：紺は数字のない小さな点（直径8〜10px・うすい白いふち）、灰色の点は無い（49本目・54本目）`,
+            look.blueCount > 0 && look.blueW[0] >= 8 && look.blueW[1] <= 10 && look.blueBorder === 'rgba(255, 255, 255, 0.45)'
               && look.grayCount === 0 && look.countsInBlue === 0,
             JSON.stringify(look)
           );
@@ -8082,6 +8083,204 @@ async function checkRound53(browser, baseUrl, savedPaths) {
       if (dim === '3d') { await waitForTerrainCameraIdle(page); await waitForTerrainTilesLoaded(page); }
       await page.waitForTimeout(1200); // 波・「ぽん」が終わり、まとめ直されるまで
       await step('＋で¥800にしたあと', `round53-plus800-${dim}-${vLabel}.png`);
+      record(`${label} コンソールにエラーが出ていない（標高タイルの404を除く）`, errors.length === 0, errors.join(' / '));
+    } catch (e) {
+      record(`${label} 検証中にクラッシュしない`, false, e.message);
+    } finally {
+      await context.close();
+    }
+  }
+}
+
+/**
+ * 【2026-10-25、54本目、Minami決定】オレンジ（NEW）が1つでもあるときだけ、紺の点をうすく（0.45）する（2D・3D）。
+ * 大きさは変えない。押したピン・マウスを乗せたピンは元の濃さ。色の説明の「● みちどころ」は濃い紺のまま。
+ * 富山駅前・¥500で検索した直後（オレンジなし）と、＋で¥800にしたあと（オレンジあり）。PC 3D・PC 2D・400×464 3D。
+ * PC 2Dでは、＋のあとにうすい紺のピンを1つ押し、元の濃さに戻ることも見る。
+ * スクリーンショット：round54-{search500|plus800}-{3d-pc|2d-pc|3d-own}.png、round54-plus800-select-2d-pc.png。
+ */
+async function checkRound54(browser, baseUrl, savedPaths) {
+  console.log('\n=== 54本目：オレンジがあるときの紺の点をうすくする ===');
+  const FADED = 0.45;
+  const cases = [
+    { vLabel: 'pc', viewport: VIEWPORTS.pc, dim: '3d' },
+    { vLabel: 'pc', viewport: VIEWPORTS.pc, dim: '2d' },
+    { vLabel: 'own', viewport: { width: 400, height: 464 }, dim: '3d' },
+  ];
+  for (const { vLabel, viewport, dim } of cases) {
+    const isMobile = vLabel !== 'pc';
+    const incId = isMobile ? 'mobile-budget-increment' : 'budget-increment';
+    const label = `[54/${vLabel}/${dim}]`;
+    const context = await browser.newContext({ viewport });
+    await context.addInitScript(() => { try { localStorage.setItem('reverse-travel-rotate-hint-seen', 'true'); } catch { /* 無視 */ } });
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+    page.on('console', (msg) => {
+      if (msg.type() === 'error' && !isKnownAcceptableConsoleMessage(msg.text())) errors.push(msg.text());
+    });
+    // 今の紺の点の濃さと大きさ（2Dは見えている紺のピンの塗りの透明度・直径、3Dはまとめない点のレイヤーの値と描いている数）
+    const readBlue = () => page.evaluate((dim) => {
+      const legendDot = getComputedStyle(document.querySelector('.map-legend-dot-blue')).backgroundColor;
+      if (dim === '3d') {
+        const m = window.__terrainMapForDebug;
+        const plain = m.queryRenderedFeatures({ layers: ['spots-plain-circle'] }).filter((f) => f.properties.cat === 'blue');
+        return {
+          hasOrange: window.__terrainViewForDebug._clusterKind === 'orange',
+          plainBlueDrawn: plain.length,
+          opacity: m.getPaintProperty('spots-plain-circle', 'circle-opacity'),
+          strokeOpacity: m.getPaintProperty('spots-plain-circle', 'circle-stroke-opacity'),
+          radius: m.getPaintProperty('spots-plain-circle', 'circle-radius'),
+          legendDot,
+        };
+      }
+      const mv = window.__mapViewForDebug;
+      const pins = [...mv.markersBySpotId.values()].map((mk) => mk.getElement())
+        .filter((el) => el && el.dataset.cat === 'blue' && el.style.display !== 'none')
+        .map((el) => el.querySelector('.map-pin-spot'))
+        .filter((pin) => pin && !pin.classList.contains('map-pin-selected') && !pin.classList.contains('map-pin-hover'));
+      const alpha = (c) => { const m = c.match(/rgba?\(([^)]+)\)/); const v = m ? m[1].split(',').map(Number) : []; return v.length === 4 ? v[3] : 1; };
+      const bgs = pins.map((pin) => getComputedStyle(pin).backgroundColor);
+      return {
+        hasOrange: mv._hasOrange,
+        bluePins: pins.length,
+        alphas: [...new Set(bgs.map(alpha))],
+        widths: [...new Set(pins.map((pin) => Math.round(pin.getBoundingClientRect().width)))],
+        legendDot,
+      };
+    }, dim);
+    const shot = async (name) => {
+      await waitForBaseMapLoaded(page, dim);
+      const file = path.join(screenshotDir, name);
+      await page.screenshot({ path: file });
+      savedPaths.push(file);
+    };
+    try {
+      await page.goto(baseUrl, { waitUntil: 'load' });
+      await page.waitForSelector('#departure-input');
+      await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+      await searchExactStation(page, '富山駅前', 500, isMobile);
+      if (dim === '3d') {
+        await page.click('#map-dimension-toggle');
+        const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+        record(`${label} 3D化（検証の前提）`, ok);
+        if (!ok) continue;
+        await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+        await waitForTerrainCameraIdle(page);
+        await waitForTerrainTilesLoaded(page);
+        await page.waitForTimeout(800);
+      } else {
+        await waitForWaveRevealSettled(page);
+        await page.waitForTimeout(500);
+      }
+      const before = await readBlue();
+      record(
+        `${label} ¥500で検索した直後（オレンジなし）：紺は今までどおりの濃さ`,
+        !before.hasOrange && (dim === '3d' ? before.plainBlueDrawn === 0 : before.bluePins > 0 && before.alphas.length === 1 && before.alphas[0] === 1),
+        JSON.stringify(before)
+      );
+      await shot(`round54-search500-${dim}-${vLabel}.png`);
+
+      for (let i = 0; i < 3; i++) {
+        await page.evaluate((x) => document.getElementById(x).click(), incId);
+        await page.waitForTimeout(150);
+      }
+      await waitForCircleSettled(page, dim);
+      if (dim === '3d') { await waitForTerrainCameraIdle(page); await waitForTerrainTilesLoaded(page); }
+      await page.waitForTimeout(1200);
+      const after = await readBlue();
+      record(
+        `${label} ＋で¥800（オレンジあり）：紺の点がうすい（${FADED}）・大きさは変わらない（2Dは9px、3Dは半径3.5＝直径10px）`,
+        after.hasOrange && (dim === '3d'
+          ? after.plainBlueDrawn > 0 && Array.isArray(after.opacity) && after.opacity[after.opacity.length - 1] === FADED
+            && JSON.stringify(after.strokeOpacity) === JSON.stringify(after.opacity) && after.radius === 3.5
+          : after.bluePins > 0 && after.alphas.length === 1 && Math.abs(after.alphas[0] - FADED) < 0.01 && after.widths.length === 1 && after.widths[0] === 9),
+        JSON.stringify(after)
+      );
+      record(`${label} 色の説明の「● みちどころ」は濃い紺のまま`, after.legendDot === 'rgb(31, 60, 136)', after.legendDot);
+      await shot(`round54-plus800-${dim}-${vLabel}.png`);
+      if (dim === '3d' && !isMobile) {
+        const pt = await page.evaluate(() => {
+          const m = window.__terrainMapForDebug;
+          const box = m.getContainer().getBoundingClientRect();
+          for (const f of m.queryRenderedFeatures({ layers: ['spots-plain-circle'] })) {
+            const p = m.project(f.geometry.coordinates);
+            const x = box.left + p.x;
+            const y = box.top + p.y;
+            const top = document.elementFromPoint(x, y);
+            if (top && top.tagName === 'CANVAS' && m.queryRenderedFeatures([p.x, p.y], { layers: ['spots-plain-circle'] }).some((g) => g.id === f.id)) return { id: f.id, x, y };
+          }
+          return null;
+        });
+        if (pt) {
+          await page.mouse.move(pt.x, pt.y);
+          await page.waitForTimeout(300);
+          const st = await page.evaluate((id) => window.__terrainMapForDebug.getFeatureState({ source: 'spots-plain', id }), pt.id);
+          record(`${label} マウスを乗せた紺の点は元の濃さ（hover）`, st.hover === true, JSON.stringify({ id: pt.id, state: st }));
+          await page.mouse.move(5, 5);
+          await page.waitForTimeout(300);
+          const st2 = await page.evaluate((id) => window.__terrainMapForDebug.getFeatureState({ source: 'spots-plain', id }), pt.id);
+          record(`${label} マウスを離すと、うすさに戻る`, st2.hover !== true, JSON.stringify(st2));
+        } else {
+          record(`${label} マウスを乗せられる紺の点がある`, false);
+        }
+      }
+
+      if (dim === '2d') {
+        // うすい紺のピンを1つ押す（ほかの部品・ピンに隠れていないもの）。押したピンは元の濃さ（選んだピン）になる。
+        const target = await page.evaluate(() => {
+          const mv = window.__mapViewForDebug;
+          for (const [id, mk] of mv.markersBySpotId) {
+            const el = mk.getElement();
+            if (!el || el.dataset.cat !== 'blue' || el.style.display === 'none') continue;
+            const pin = el.querySelector('.map-pin-spot');
+            const r = pin.getBoundingClientRect();
+            const x = r.left + r.width / 2;
+            const y = r.top + r.height / 2;
+            const top = document.elementFromPoint(x, y);
+            if (top && pin.contains(top)) return { id, x, y };
+          }
+          return null;
+        });
+        record(`${label} ＋のあと、押せるうすい紺のピンがある`, !!target, JSON.stringify(target));
+        if (target) {
+          await page.mouse.move(target.x, target.y);
+          await page.waitForTimeout(200);
+          const hover = await page.evaluate((id) => {
+            const el = window.__mapViewForDebug.markersBySpotId.get(id).getElement();
+            const pin = el.querySelector('.map-pin-spot');
+            return { hovered: el.matches(':hover'), bg: getComputedStyle(pin).backgroundColor };
+          }, target.id);
+          record(`${label} マウスを乗せた紺のピンは元の濃さ`, hover.hovered && hover.bg === 'rgb(31, 60, 136)', JSON.stringify(hover));
+          // 一覧のカードに乗せたとき（地図のピンに.map-pin-hoverが付く）も元の濃さ
+          await page.mouse.move(5, 5);
+          await page.waitForTimeout(200);
+          const cardHover = await page.evaluate((id) => {
+            const mv = window.__mapViewForDebug;
+            mv.highlightSpot(id);
+            const pin = mv.markersBySpotId.get(id).getElement().querySelector('.map-pin-spot');
+            const bg = getComputedStyle(pin).backgroundColor;
+            mv.unhighlightSpot(id);
+            return { bg };
+          }, target.id);
+          record(`${label} 一覧のカードに乗せたとき（.map-pin-hover）の紺のピンも元の濃さ`, cardHover.bg === 'rgb(31, 60, 136)', JSON.stringify(cardHover));
+          await page.mouse.click(target.x, target.y);
+          await page.waitForTimeout(1500);
+          const sel = await page.evaluate((id) => {
+            const mv = window.__mapViewForDebug;
+            const pin = mv.markersBySpotId.get(id).getElement().querySelector('.map-pin-spot');
+            return { selectedId: mv.selectedSpotId, selected: pin.classList.contains('map-pin-selected'), bg: getComputedStyle(pin).backgroundColor, border: getComputedStyle(pin).borderTopColor };
+          }, target.id);
+          record(
+            `${label} うすい紺のピンを押すと選ばれ、元の濃さ（白い太いふち）になる`,
+            sel.selectedId === target.id && sel.selected && sel.bg === 'rgb(31, 60, 136)' && sel.border === 'rgb(255, 255, 255)',
+            JSON.stringify(sel)
+          );
+          await page.mouse.move(5, 5);
+          await page.waitForTimeout(300);
+          await shot(`round54-plus800-select-${dim}-${vLabel}.png`);
+        }
+      }
       record(`${label} コンソールにエラーが出ていない（標高タイルの404を除く）`, errors.length === 0, errors.join(' / '));
     } catch (e) {
       record(`${label} 検証中にクラッシュしない`, false, e.message);
@@ -9412,6 +9611,7 @@ async function main() {
     await runWithFreshBrowser(checkRound49, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound51, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound53, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkRound54, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBreadcrumbTrail, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBudgetSlider, baseUrl, savedPaths);
     await runWithFreshBrowser(checkWaveRevealAndCircleScreenshots, baseUrl, savedPaths);

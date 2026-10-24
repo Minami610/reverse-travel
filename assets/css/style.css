@@ -1478,7 +1478,21 @@ header p {
   width: 9px;
   height: 9px;
   border-width: 1.5px;
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
+  /* 【2026-10-25、54本目、Minami決定】オレンジ（NEW）があるときは、紺をうすく（0.45）して背景のように見せる。
+     大きさは変えない（押しやすさのため）。opacityではなく色の透明度でうすくする（検索直後の波の演出
+     .pin-wave-hiddenが同じ要素のopacityを使うため、opacityを上書きすると隠れているはずの点が見えてしまう）。
+     選んだピン・ホバー中のピンは、この決まりから外れて元の濃さ。3Dはterrain-map-view.jsのPLAIN_PIN_OPACITY。 */
+  background-color: rgba(31, 60, 136, 0.45);
+  border-color: rgba(255, 255, 255, 0.45);
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.12);
+}
+
+/* 【54本目】地図の上でマウスを乗せた紺のピンは、元の濃さに戻す（一覧のカードに乗せたときの.map-pin-hoverは上の
+   :not()で元の濃さ）。 */
+.map-has-orange .map-pin-wrapper:hover .map-pin-spot.map-pin-blue {
+  background-color: #1f3c88;
+  border-color: white;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 /* ホバーと選択は独立した状態として扱う（選択を後ろに置き、両方付いたときは選択の見た目を優先）。 */

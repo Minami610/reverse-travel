@@ -274,6 +274,12 @@ function circleObstacleRects(container) {
 // 変えて新しく金額帯に入った場所。選んだピンは青でひと回り大きく、白い太いふちと影。以前の光の
 // にじみ（circle-blur）はやめた。【49本目】灰色（金額帯より安く行ける場所）はやめた（紺とオレンジの2色）。
 const PIN_COLOR_BLUE = '#1F3C88';
+// 【2026-10-25、54本目、Minami決定】オレンジ（NEW）があるときの紺（まとめない点のレイヤーSPOTS_PLAIN_LAYER_ID）の
+// うすさ。このレイヤーに紺が入るのはオレンジがあるときだけ（なければ紺はまとめる側のSPOTS_LAYER_IDに入る）
+// のため、決まった値でよい。大きさは変えない。選んだピンは別のレイヤー・HTMLの印で元の濃さ。2Dのstyle.cssと同じ値。
+const PLAIN_PIN_OPACITY = 0.45;
+// マウスを乗せている点（feature-stateのhover）は元の濃さ。
+const PLAIN_PIN_OPACITY_EXPR = ['case', ['boolean', ['feature-state', 'hover'], false], 1, PLAIN_PIN_OPACITY];
 const PIN_COLOR_ORANGE = '#FF6B2B';
 const COLOR_SELECTED = PIN_COLOR_BLUE;
 // 【43本目、Minami決定：B-2】近いピンを数字の入った丸にまとめる（MapLibreのGeoJSONソースの
@@ -594,6 +600,8 @@ export class TerrainMapView {
           [SPOTS_PLAIN_SOURCE_ID]: {
             type: 'geojson',
             data: { type: 'FeatureCollection', features: [] },
+            // 【54本目】マウスを乗せた点を元の濃さに戻すため、点ごとの状態（feature-state）を場所のIDで持つ。
+            promoteId: 'id',
           },
           [SPOTS_POP_SOURCE_ID]: {
             type: 'geojson',
@@ -666,9 +674,10 @@ export class TerrainMapView {
             paint: {
               'circle-radius': 3.5,
               'circle-color': PIN_COLOR_BLUE,
-              'circle-opacity': 1,
+              'circle-opacity': PLAIN_PIN_OPACITY_EXPR,
               'circle-stroke-width': 1.5,
               'circle-stroke-color': '#ffffff',
+              'circle-stroke-opacity': PLAIN_PIN_OPACITY_EXPR,
               'circle-blur': 0,
             },
           },
@@ -874,6 +883,17 @@ export class TerrainMapView {
       this.map.on('mouseenter', layerId, () => { this.map.getCanvas().style.cursor = 'pointer'; });
       this.map.on('mouseleave', layerId, () => { this.map.getCanvas().style.cursor = ''; });
     });
+    // 【54本目】うすくした紺（まとめない点）にマウスを乗せたら、その点を元の濃さに戻す。
+    const setPlainHover = (id) => {
+      if (this._plainHoverId === id) return;
+      if (this._plainHoverId !== undefined && this._plainHoverId !== null) {
+        this.map.setFeatureState({ source: SPOTS_PLAIN_SOURCE_ID, id: this._plainHoverId }, { hover: false });
+      }
+      this._plainHoverId = id;
+      if (id !== null) this.map.setFeatureState({ source: SPOTS_PLAIN_SOURCE_ID, id }, { hover: true });
+    };
+    this.map.on('mousemove', SPOTS_PLAIN_LAYER_ID, (e) => setPlainHover(e.features?.[0]?.id ?? null));
+    this.map.on('mouseleave', SPOTS_PLAIN_LAYER_ID, () => setPlainHover(null));
 
     // 【2026-10-10修正】hillshadeレイヤーを追加したことで、初期表示の時点から
     // 標高タイルも取得されるようになった。標高タイルは地点によって存在しない
@@ -2523,6 +2543,7 @@ export class TerrainMapView {
   destroy() {
     this._absorbedSignature = '';
     this._absorbedIds = null;
+    this._plainHoverId = null;
     this._cancelWaveReveal();
     this._cancelFitCircleToView();
     if (this._circleAnimFrame) {
