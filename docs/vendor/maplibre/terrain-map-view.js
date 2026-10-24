@@ -1457,7 +1457,7 @@ export class TerrainMapView {
     if (!source || !dep || !isFiniteNumber(dep.stop_lat) || !isFiniteNumber(dep.stop_lon)) return;
     const container = this.map.getContainer();
     if (container.clientWidth === 0 || container.clientHeight === 0) return;
-    const wave = { fromKm, toKm, radiusKm: fromKm, opacity: CIRCLE_WAVE_START_OPACITY, frame: null };
+    const wave = { fromKm, toKm, radiusKm: fromKm, opacity: CIRCLE_WAVE_START_OPACITY, frame: null, startedAt: performance.now() };
     this._circleWave = wave;
     const paint = () => {
       wave.ring = wave.radiusKm > 0 ? buildCircleRing(dep, wave.radiusKm) : null; // 検証用（verify-layout.js）にも残す
@@ -1592,13 +1592,45 @@ export class TerrainMapView {
    */
   scheduleFitCircleToView() {
     this._cancelFitCircleToView();
-    this._circleFitTimer = setTimeout(() => {
+    // 【2026-10-24、52本目、Minami決定：①】＋の波が出ているときは、地図合わせを波が終わってから始める
+    // （押してから約0.5秒後。合わせ終わるのは約0.95秒後）。3Dでは地図合わせの動き出しの最初のコマで画面が
+    // 0.2〜0.37秒止まることがあり（地形の描き直し）、それが波（0.5秒）の終わりと重なると、波がうすくなり
+    // きらずに消えていた（「ぽん」も同じ理由で遅れていた）。−のとき・波が出ないときは今までどおり
+    // CIRCLE_FIT_DEBOUNCE_MS（0.15秒）。2Dは止まらないため変えていない。
+    // 地図合わせがすでに動いている途中に押したときも今までどおり0.15秒で行き先を変える（止まるのは
+    // 動き出しのときだけで、待つと今の動きが一度止まってから動き直すことになり、35本目の決まり
+    // 「動いている途中でまた押しても、なめらかに行き先を変える」に反するため）。
+    const wave = this._circleWave;
+    const alreadyMoving = !!(this.map && this.map.isMoving());
+    const waveLeftMs = wave && !alreadyMoving ? Math.max(0, wave.startedAt + CIRCLE_WAVE_DURATION_MS - performance.now()) : 0;
+    const fire = () => {
       this._circleFitTimer = null;
+      // 波の時間が終わっていても、波を消すのは次のコマ（requestAnimationFrame）のため、まだ残っていることがある。
+      // そのまま動き出すと、止まったコマの間も波が残る。時間が終わっていればここで消し、少し早く呼ばれた
+      // ときは残りを待つ。
+      const w = this._circleWave;
+      if (w && waveLeftMs > 0) {
+        const left = w.startedAt + CIRCLE_WAVE_DURATION_MS - performance.now();
+        if (left > 0) {
+          this._circleFitTimer = setTimeout(fire, left);
+          return;
+        }
+        this._cancelCircleWave();
+        // 「ぽん」も同じ：波が縁まで届いた（時間が終わった）ので、まだ出していないオレンジをここで出す。
+        const pop = this._pinPop;
+        if (pop && pop.pending.size > 0) {
+          const now = performance.now();
+          pop.pending.forEach((km, id) => pop.shown.set(id, now));
+          pop.pending.clear();
+          this._paintPinPop(now);
+        }
+      }
       // 【37本目、Minami決定：A】金額操作のあとは、はみ出しそう・小さすぎる
       // ときだけ動かす。半径は描画途中の値ではなく行き先で判断する
       // （半径アニメーション0.2秒はデバウンス0.15秒より長く、まだ途中のことがあるため）。
       this.fitCircleToView({ radiusKm: this._reachCircleTargetKm, onlyIfNeeded: true });
-    }, CIRCLE_FIT_DEBOUNCE_MS);
+    };
+    this._circleFitTimer = setTimeout(fire, Math.max(CIRCLE_FIT_DEBOUNCE_MS, waveLeftMs));
   }
 
   _cancelFitCircleToView() {

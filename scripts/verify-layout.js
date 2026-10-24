@@ -4530,7 +4530,10 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       // デバウンス（0.15秒）が終わり、easeTo()が動き出すのを待ってから、
       // 実際に止まる（moveend）まで固定時間に頼らず待つ（waitForTerrainCameraIdle()
       // 参照：GPU負荷が高いとeaseTo()の実時間が0.45秒を大きく超えることがある）。
-      await page.waitForTimeout(TEST_CIRCLE_FIT_DEBOUNCE_MS + 100);
+      // 【52本目】3Dで＋の波が出ているときは、地図合わせは波が終わってから（押してから約0.5秒後）始まる。
+      // 決まった時間だけ待つと、まだ始まっていない地図合わせを「終わった」と見誤るため、保留中の
+      // 地図合わせ・半径の動き・地図の動きが全部止まるまで待つ。
+      await waitForCircleSettled(page, '3d');
       await waitForTerrainCameraIdle(page);
       let fitElapsedMs = Date.now() - t0;
       const zoomAfterFit = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
@@ -4635,7 +4638,10 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       await page.evaluate(() => document.getElementById('budget-increment').click());
       await page.waitForTimeout(80);
       await page.evaluate(() => document.getElementById('budget-increment').click());
-      await page.waitForTimeout(TEST_CIRCLE_FIT_DEBOUNCE_MS + 100);
+      // 【52本目】3Dで＋の波が出ているときは、地図合わせは波が終わってから（押してから約0.5秒後）始まる。
+      // 決まった時間だけ待つと、まだ始まっていない地図合わせを「終わった」と見誤るため、保留中の
+      // 地図合わせ・半径の動き・地図の動きが全部止まるまで待つ。
+      await waitForCircleSettled(page, '3d');
       await waitForTerrainCameraIdle(page);
       const moveEndCount = await page.evaluate(() => window.__moveEndCount);
       record('[circle-fit/3D] ＋を連打（3回）しても、地図の移動は最後の1回だけ起きる', moveEndCount === 1, `moveend回数=${moveEndCount}`);
@@ -4704,7 +4710,10 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
         firstMoveStarted && !moveEndedBeforeSecondPress && isMovingRightAfterSecondPress,
         JSON.stringify({ firstMoveStarted, moveEndedBeforeSecondPress, isMovingRightAfterSecondPress })
       );
-      await page.waitForTimeout(TEST_CIRCLE_FIT_DEBOUNCE_MS + 100);
+      // 【52本目】3Dで＋の波が出ているときは、地図合わせは波が終わってから（押してから約0.5秒後）始まる。
+      // 決まった時間だけ待つと、まだ始まっていない地図合わせを「終わった」と見誤るため、保留中の
+      // 地図合わせ・半径の動き・地図の動きが全部止まるまで待つ。
+      await waitForCircleSettled(page, '3d');
       await waitForTerrainCameraIdle(page);
       const zoomAfterMidFlight = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
       const withinFrameMidFlight = await circleFullyWithinFrame(page, '3d');
@@ -4724,7 +4733,10 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       const bearingBeforePlus = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
       const pitchBeforePlus = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
       await clickElementChecked(page, 'budget-increment', '[circle-fit/3D] 向き・傾きを変えたあと：＋');
-      await page.waitForTimeout(TEST_CIRCLE_FIT_DEBOUNCE_MS + 100);
+      // 【52本目】3Dで＋の波が出ているときは、地図合わせは波が終わってから（押してから約0.5秒後）始まる。
+      // 決まった時間だけ待つと、まだ始まっていない地図合わせを「終わった」と見誤るため、保留中の
+      // 地図合わせ・半径の動き・地図の動きが全部止まるまで待つ。
+      await waitForCircleSettled(page, '3d');
       await waitForTerrainCameraIdle(page);
       const bearingAfterPlus = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
       const pitchAfterPlus = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
@@ -4784,7 +4796,10 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
         radiusRightAfterMinus < radiusBeforeMinus,
         `前(¥2000)=${radiusBeforeMinus} / ${stepsTaken}回－後(¥${budgetAfterMinus})=${radiusRightAfterMinus}`
       );
-      await page.waitForTimeout(TEST_CIRCLE_FIT_DEBOUNCE_MS + 100);
+      // 【52本目】3Dで＋の波が出ているときは、地図合わせは波が終わってから（押してから約0.5秒後）始まる。
+      // 決まった時間だけ待つと、まだ始まっていない地図合わせを「終わった」と見誤るため、保留中の
+      // 地図合わせ・半径の動き・地図の動きが全部止まるまで待つ。
+      await waitForCircleSettled(page, '3d');
       await waitForTerrainCameraIdle(page);
       const zoomAfterMinus = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
       const withinFrameAfterMinus = await circleFullyWithinFrame(page, '3d');
@@ -4808,7 +4823,10 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
         el.value = 2000;
         el.dispatchEvent(new Event('input'));
       });
-      await page.waitForTimeout(TEST_CIRCLE_FIT_DEBOUNCE_MS + 100);
+      // 【52本目】3Dで＋の波が出ているときは、地図合わせは波が終わってから（押してから約0.5秒後）始まる。
+      // 決まった時間だけ待つと、まだ始まっていない地図合わせを「終わった」と見誤るため、保留中の
+      // 地図合わせ・半径の動き・地図の動きが全部止まるまで待つ。
+      await waitForCircleSettled(page, '3d');
       await waitForTerrainCameraIdle(page);
       const zoomAt2000 = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
       record('[circle-fit/3D] ¥2000でも最低ズーム8.5を下回らない', zoomAt2000 >= 8.45, `zoom=${zoomAt2000}`);
@@ -5587,6 +5605,13 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
       if (dim === '3d') await waitForTerrainTilesLoaded(page);
       await setCircleRatio(page, dim, 1.2);
       if (dim === '3d') await waitForTerrainTilesLoaded(page);
+      if (dim === '3d') {
+        // 【52本目】3Dは、止まっている地図で＋を押すと、地図合わせは波が終わってから始まる（下の検証）。
+        // 波と地図の動きが重なるのは、地図合わせが動いている途中にもう一度＋を押したとき。1回目を押して
+        // 地図が動き出すのを待ってから、下で2回目を押す。
+        await page.evaluate(() => document.getElementById('budget-increment').click());
+        await page.waitForFunction(() => window.__terrainMapForDebug.isMoving(), { timeout: 5000 }).catch(() => {});
+      }
       const moving = await page.evaluate((dim) => new Promise((resolve) => {
         const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
         const out = [];
@@ -5622,6 +5647,40 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
       );
       await waitForCircleSettled(page, dim);
       if (dim === '3d') await waitForTerrainTilesLoaded(page);
+
+      // 【2026-10-24、52本目、Minami決定：①】3Dで止まっている地図で＋を押したとき、地図合わせ（円がはみ出し
+      // そうなとき）は波が終わってから始まる。地図合わせの動き出しの最初のコマで画面が止まることがあり、
+      // 波の終わりと重なると、波がうすくなりきらずに消えていたため。
+      if (dim === '3d') {
+        await setCircleRatio(page, dim, 1.2);
+        await waitForTerrainTilesLoaded(page);
+        const order = await page.evaluate(() => new Promise((resolve) => {
+          const tv = window.__terrainViewForDebug;
+          const map = window.__terrainMapForDebug;
+          const t0 = performance.now();
+          let waveEndAt = null;
+          let moveStartAt = null;
+          let waveFramesWhileMoving = 0;
+          const onStart = () => { if (moveStartAt === null) moveStartAt = performance.now() - t0; };
+          map.on('movestart', onStart);
+          document.getElementById('budget-increment').click();
+          const tick = () => {
+            const t = performance.now() - t0;
+            if (tv._circleWave && map.isMoving()) waveFramesWhileMoving++;
+            if (!tv._circleWave && waveEndAt === null && t > 50) waveEndAt = t;
+            if (t < 2500) requestAnimationFrame(tick);
+            else { map.off('movestart', onStart); resolve({ waveEndAt, moveStartAt, waveFramesWhileMoving }); }
+          };
+          requestAnimationFrame(tick);
+        }));
+        record(
+          `${label} 止まっている地図で＋を押すと、地図合わせは波が終わってから始まる（52本目）`,
+          order.moveStartAt !== null && order.waveEndAt !== null && order.waveFramesWhileMoving === 0 && order.moveStartAt >= 450,
+          JSON.stringify(order)
+        );
+        await waitForCircleSettled(page, dim);
+        await waitForTerrainTilesLoaded(page);
+      }
 
       // 3D：向き・傾きを変えたあと（90度の倍数以外）でも、波が円の縁に沿って出る。
       if (dim === '3d') {
