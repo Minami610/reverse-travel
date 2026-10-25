@@ -244,13 +244,66 @@ const CIRCLE_ZOOM_IN_TARGET_RATIO = 0.85;
 // 3Dの円は傾きで上側が縮んだ形に写るため、行き先のカメラ（MapLibreのtransformの複製）で縁の点を
 // 実際に画面へ写して確かめ、かかっていれば少しずつ引く。
 // 名前の帯（#spot-info-panel）は見ない（map-view.jsのMAP_CIRCLE_OBSTACLE_SELECTORSと同じ理由）。
+// 【57本目、Minami決定：ア】予算操作帯（#mobile-budget-overlay）は結果の入れ物の一部として扱い、ここからは外した
+// （入れ物ごと「見えている範囲」から除く。visibleMapRect()）。ここに残す部品は、見えている範囲の中で4px避ける。
 const CIRCLE_OBSTACLE_SELECTORS = [
   '#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle', '#map-dimension-toggle',
-  '#mobile-budget-overlay', '#map-zoom-controls',
+  '#map-zoom-controls',
 ];
 const CIRCLE_OBSTACLE_GAP_PX = 4;
 const CIRCLE_OBSTACLE_ZOOM_STEP = 0.03;
 const CIRCLE_OBSTACLE_MAX_STEPS = 30;
+
+/**
+ * 【2026-10-25、57本目、Minami決定：ア】地図の上に重ねた入れ物（data-map-overlayの付いた、見えている要素：PCの左の
+ * 入れ物、スマホの下の入れ物、検索カード）を除いた「見えている範囲」（地図の入れ物の左上を基準にしたpx）。
+ * 入れ物は画面の端に寄せて置くため、入れ物ごとに、地図の左・右・上・下のどれかの側を入れ物の手前まで削り、
+ * 残る広さが一番大きい削り方を選ぶ（PCの左の入れ物なら左を、スマホの下の入れ物なら下を削る）。
+ * 残りが小さすぎるとき（80px未満）は、地図全体を見えている範囲とする。
+ * 円の合わせ方（円の直径を見えている範囲の短辺の0.85にし、出発駅を見えている範囲の真ん中に置く）・ピンや
+ * まとめた丸へ寄るときの中心に使う。2D（map-view.js）と3D（terrain-map-view.js）に同じ関数がある
+ * （3Dは別に読み込むため）。
+ * @param {Element} container 地図の入れ物
+ * @returns {{left: number, top: number, right: number, bottom: number}}
+ */
+function visibleMapRect(container) {
+  const c = container.getBoundingClientRect();
+  const full = { left: 0, top: 0, right: c.width, bottom: c.height };
+  let vis = { ...full };
+  const area = (v) => Math.max(0, v.right - v.left) * Math.max(0, v.bottom - v.top);
+  document.querySelectorAll('[data-map-overlay]').forEach((el) => {
+    if (el.hidden) return;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return;
+    const b = el.getBoundingClientRect();
+    if (!(b.width > 0 && b.height > 0)) return;
+    const r = { left: b.left - c.left, top: b.top - c.top, right: b.right - c.left, bottom: b.bottom - c.top };
+    if (r.right <= vis.left || r.left >= vis.right || r.bottom <= vis.top || r.top >= vis.bottom) return;
+    const candidates = [
+      { ...vis, left: Math.max(vis.left, r.right) },
+      { ...vis, right: Math.min(vis.right, r.left) },
+      { ...vis, top: Math.max(vis.top, r.bottom) },
+      { ...vis, bottom: Math.min(vis.bottom, r.top) },
+    ];
+    vis = candidates.reduce((best, v) => (area(v) > area(best) ? v : best));
+  });
+  if (vis.right - vis.left < 80 || vis.bottom - vis.top < 80) return full;
+  return vis;
+}
+
+/**
+ * 【57本目】見えている範囲（visibleMapRect()）をMapLibreのpadding（地図の各辺からの余白）にしたもの。
+ * カメラの中心（easeTo()のcenter）は、このpaddingの内側の真ん中に来る。
+ */
+function visiblePadding(container) {
+  const vis = visibleMapRect(container);
+  return {
+    top: Math.round(vis.top),
+    left: Math.round(vis.left),
+    right: Math.max(0, Math.round(container.clientWidth - vis.right)),
+    bottom: Math.max(0, Math.round(container.clientHeight - vis.bottom)),
+  };
+}
 
 /** 【47本目】地図の上に見えている部品の形（地図の入れ物の左上を基準にしたpx。丸い部品はround・中心・半径つき）。 */
 function circleObstacleRects(container) {
@@ -1387,8 +1440,8 @@ export class TerrainMapView {
   _zoomIntoMergedCluster(lngLat) {
     if (!this.map) return;
     const target = Math.min(PIN_CLUSTER_MAX_ZOOM + 0.1, this.map.getZoom() + 1);
-    this.map.setPadding(CLEAR_PADDING);
-    this.map.easeTo({ center: lngLat, zoom: target, duration: prefersReducedMotion() ? 0 : 600, padding: CLEAR_PADDING });
+    // 【57本目】見えている範囲（重ねた入れ物を除く）の真ん中へ寄せる。
+    this.map.easeTo({ center: lngLat, zoom: target, duration: prefersReducedMotion() ? 0 : 600, padding: visiblePadding(this.map.getContainer()) });
   }
 
   /** 【43本目B-2】まとめた丸を押したとき、その丸が分かれるズームまで寄る（向き・傾きはそのまま）。 */
@@ -1398,8 +1451,8 @@ export class TerrainMapView {
     Promise.resolve(source.getClusterExpansionZoom(clusterId)).then((zoom) => {
       if (!this.map) return;
       const target = Math.max(zoom + 0.1, this.map.getZoom() + 1);
-      this.map.setPadding(CLEAR_PADDING);
-      this.map.easeTo({ center: lngLat, zoom: target, duration: prefersReducedMotion() ? 0 : 600, padding: CLEAR_PADDING });
+      // 【57本目】見えている範囲（重ねた入れ物を除く）の真ん中へ寄せる。
+      this.map.easeTo({ center: lngLat, zoom: target, duration: prefersReducedMotion() ? 0 : 600, padding: visiblePadding(this.map.getContainer()) });
     }).catch(() => {});
   }
 
@@ -1729,7 +1782,14 @@ export class TerrainMapView {
     // 地図タブへ戻って次に予算を操作したときに改めて合わせ直せば実害はない）。
     const container = this.map.getContainer();
     if (container.clientWidth === 0 || container.clientHeight === 0) return null;
-    const shortSide = Math.max(1, Math.min(container.clientWidth, container.clientHeight));
+    // 【2026-10-25、57本目、Minami決定：ア】地図から重ねた入れ物を除いた「見えている範囲」で測り、出発駅をその
+    // 真ん中に置く（以前は地図全体の短辺・中心は出発駅のまま。PCの左の入れ物・スマホの下の入れ物の下に、
+    // 円や出発駅が隠れていたため）。見えている範囲はカメラのpaddingとして渡す。
+    const visPad = visiblePadding(container);
+    const shortSide = Math.max(1, Math.min(
+      container.clientWidth - visPad.left - visPad.right,
+      container.clientHeight - visPad.top - visPad.bottom,
+    ));
 
     if (onlyIfNeeded) {
       // 【37本目】35本目と同じく横方向で測る：出発駅から「画面の左右」の向き
@@ -1752,17 +1812,30 @@ export class TerrainMapView {
       else return null;
       const zoom = this._capCircleZoomForObstacles(
         dep, radiusKm, Math.min(Math.max(effectiveZoom + Math.log2(targetRatio / ratio), CIRCLE_FIT_MIN_ZOOM), 22),
-        this.map.getPitch(), bearingNow
+        this.map.getPitch(), bearingNow, visPad
       );
       // 最低ズーム8.5に張り付いていて、もう動く余地が無いときは動かさない
       // （¥2000付近で＋を押すたびに同じ場所へ飛び直す空の動きを出さない）。
       if (Math.abs(zoom - effectiveZoom) < 0.02) return null;
-      // ここではcameraForBounds()を使わないため、下の通常経路のような事前の
-      // setPadding(CLEAR_PADDING)は不要（easeTo()自体にpadding:CLEAR_PADDINGを渡す）。
-      // 事前に呼ぶと、それ自体が瞬時のカメラ操作として余分なmoveendを出してしまう。
-      this._easeToCircle(dep, zoom, this.map.getPitch(), bearingNow, (prefersReducedMotion() || !animate) ? 0 : durationMs);
+      // 事前のsetPadding()はしない（easeTo()自体にpaddingを渡す）。事前に呼ぶと、それ自体が瞬時のカメラ操作として
+      // 余分なmoveendを出してしまう。
+      this._easeToCircle(dep, zoom, this.map.getPitch(), bearingNow, (prefersReducedMotion() || !animate) ? 0 : durationMs, visPad);
       return zoom;
     }
+
+    // 【57本目】行き先のカメラ（transformの複製、paddingは見えている範囲）で、円の横方向の直径（画面上のpx）が
+    // 見えている範囲の短辺の0.85になるズームを求める（35本目からの「横方向で測る」と同じ。地図は動かさない）。
+    // 以前のcameraForBounds()は対称な余白でしか中心を出発駅にできず、また呼ぶ前に地図のpaddingを0へ戻す必要が
+    // あった（見えている範囲をpaddingで持つようになったため、0へ戻すと地図が一瞬ずれる）。
+    const pitch = pitchOverride ?? this.map.getPitch();
+    const bearing = this.map.getBearing();
+    const fitZoom = this._zoomForCircleDiameter(dep, radiusKm, shortSide * CIRCLE_FIT_TARGET_DIAMETER_RATIO, pitch, bearing, visPad);
+    if (fitZoom !== null) {
+      const zoom = this._capCircleZoomForObstacles(dep, radiusKm, Math.max(fitZoom, CIRCLE_FIT_MIN_ZOOM), pitch, bearing, visPad);
+      this._easeToCircle(dep, zoom, pitch, bearing, (prefersReducedMotion() || !animate) ? 0 : durationMs, visPad);
+      return zoom;
+    }
+    // transformを複製できない版だけ、以前のcameraForBounds()で合わせる（見えている範囲は使わない）。
 
     const north = destinationPoint(dep.stop_lat, dep.stop_lon, 0, radiusKm);
     const east = destinationPoint(dep.stop_lat, dep.stop_lon, 90, radiusKm);
@@ -1803,13 +1876,44 @@ export class TerrainMapView {
     // 小さい画面で合計がコンテナの辺を超えてしまっていた。cameraForBounds()を
     // 呼ぶ前に地図のpaddingを明示的に0へ戻し、引数のpaddingだけで判定させる。
     this.map.setPadding(CLEAR_PADDING);
-    const pitch = pitchOverride ?? this.map.getPitch();
-    const bearing = this.map.getBearing();
     const camera = this.map.cameraForBounds(bounds, { padding, pitch, bearing });
     if (!camera) return null;
-    const zoom = this._capCircleZoomForObstacles(dep, radiusKm, Math.max(camera.zoom, CIRCLE_FIT_MIN_ZOOM), pitch, bearing);
-    this._easeToCircle(dep, zoom, pitch, bearing, (prefersReducedMotion() || !animate) ? 0 : durationMs);
+    const zoom = Math.max(camera.zoom, CIRCLE_FIT_MIN_ZOOM);
+    this._easeToCircle(dep, zoom, pitch, bearing, (prefersReducedMotion() || !animate) ? 0 : durationMs, CLEAR_PADDING);
     return zoom;
+  }
+
+  /**
+   * 【57本目】出発駅を見えている範囲の真ん中（padding）に置き、傾きpitch・向きbearingにしたとき、半径radiusKmの円の
+   * 横方向の直径（画面の左右の向きの2点の画面上の距離）がdiameterPxになるズーム。transformを複製して測る
+   * （地図そのものは動かさない）。ズームが1上がると画面上の長さは2倍になるため、1回目の見積もりのあと
+   * もう1回測り直して合わせる（地形・遠近による小さなずれをならす）。複製できない版ではnull。
+   */
+  _zoomForCircleDiameter(dep, radiusKm, diameterPx, pitch, bearing, padding) {
+    let tr;
+    try {
+      tr = this.map.transform.clone();
+      tr.setPadding(padding);
+      tr.setCenter(new maplibregl.LngLat(dep.stop_lon, dep.stop_lat));
+      tr.setPitch(pitch);
+      tr.setBearing(bearing);
+    } catch {
+      return null;
+    }
+    const l = destinationPoint(dep.stop_lat, dep.stop_lon, bearing - 90, radiusKm);
+    const r = destinationPoint(dep.stop_lat, dep.stop_lon, bearing + 90, radiusKm);
+    const ll = new maplibregl.LngLat(l.lon, l.lat);
+    const rr = new maplibregl.LngLat(r.lon, r.lat);
+    let z = this.map.getZoom();
+    for (let i = 0; i < 2; i++) {
+      tr.setZoom(z);
+      const a = tr.locationToScreenPoint(ll);
+      const b = tr.locationToScreenPoint(rr);
+      const d = Math.hypot(b.x - a.x, b.y - a.y);
+      if (!(d > 0) || !Number.isFinite(d)) return null;
+      z = Math.min(Math.max(z + Math.log2(diameterPx / d), 0), 22);
+    }
+    return z;
   }
 
   /**
@@ -1818,13 +1922,18 @@ export class TerrainMapView {
    * 行き先のカメラはMapLibreのtransformを複製して作る（地図そのものは動かさない）。複製できない版では
    * 何もしない（zoomのまま）。
    */
-  _capCircleZoomForObstacles(dep, radiusKm, zoom, pitch, bearing) {
-    const rects = circleObstacleRects(this.map.getContainer());
+  _capCircleZoomForObstacles(dep, radiusKm, zoom, pitch, bearing, padding = CLEAR_PADDING) {
+    // 【57本目】見えている範囲（padding）の外＝重ねた入れ物の下にある部品は見ない。
+    const container = this.map.getContainer();
+    const vr = container.clientWidth - padding.right;
+    const vb = container.clientHeight - padding.bottom;
+    const rects = circleObstacleRects(container)
+      .filter((r) => !(r.right <= padding.left || r.left >= vr || r.bottom <= padding.top || r.top >= vb));
     if (rects.length === 0) return zoom;
     let tr;
     try {
       tr = this.map.transform.clone();
-      tr.setPadding(CLEAR_PADDING);
+      tr.setPadding(padding);
       tr.setCenter(new maplibregl.LngLat(dep.stop_lon, dep.stop_lat));
       tr.setPitch(pitch);
       tr.setBearing(bearing);
@@ -1855,7 +1964,7 @@ export class TerrainMapView {
 
   /** fitCircleToView()の実際のカメラ移動。動いている間は行き先のズームを
    * _circleFitAnimに覚えておき（37本目、途中で次の判断をするときに使う）、止まったら消す。 */
-  _easeToCircle(dep, zoom, pitch, bearing, duration) {
+  _easeToCircle(dep, zoom, pitch, bearing, duration, padding = CLEAR_PADDING) {
     const anim = duration > 0 ? { zoom } : null;
     this._circleFitAnim = anim;
     this.map.easeTo({
@@ -1864,7 +1973,8 @@ export class TerrainMapView {
       pitch,
       bearing,
       duration,
-      padding: CLEAR_PADDING,
+      // 【57本目】出発駅を見えている範囲（重ねた入れ物を除く）の真ん中に置く。
+      padding,
     });
     if (anim) {
       this.map.once('moveend', () => {
@@ -1960,7 +2070,14 @@ export class TerrainMapView {
     const height = container?.clientHeight || 0;
     const maxBottom = REVEAL_ABOVE_BAND_PADDING_MAX.bottom;
     const bottom = height > 0 ? Math.min(maxBottom, Math.floor(height / 2)) : maxBottom;
-    return { top: 0, right: 0, bottom, left: 0 };
+    if (!container || height === 0 || container.clientWidth === 0) return { top: 0, right: 0, bottom, left: 0 };
+    // 【57本目】重ねた入れ物（PCの左の入れ物・スマホの下の入れ物）の下に選んだピンが隠れないよう、見えている範囲を
+    // paddingにし、下は帯よけの余白と入れ物の大きい方にする。上下・左右の合計が地図の辺の長さに近づくと
+    // 「Map cannot fit within canvas」になるため、真ん中に80pxは残す。
+    const vis = visiblePadding(container);
+    const pad = { top: vis.top, right: vis.right, bottom: Math.max(bottom, vis.bottom), left: vis.left };
+    pad.bottom = Math.max(0, Math.min(pad.bottom, height - 80 - pad.top));
+    return pad;
   }
 
   /**

@@ -58,6 +58,9 @@ export class LayoutController {
       // 部品の列の高さ（2D/3Dの切り替え・戻るボタンの出し入れで変わる）も見る
       const cluster = document.getElementById('map-controls-cluster');
       if (cluster) this._resizeObserver.observe(cluster);
+      // 【57本目】検索カードの中身の高さ（金額帯の案内・「条件が変わりました」の出し入れ）が変わったら、入りきるか測り直す
+      const form = document.getElementById('search-form');
+      if (form) this._resizeObserver.observe(form);
     }
     if (typeof MutationObserver === 'function' && this.layoutEl) {
       // 検索カード⇔結果の入れ物の切り替え（#app-layoutのクラス・hidden属性）でも測り直す。
@@ -105,6 +108,30 @@ export class LayoutController {
     if (this.layoutEl.style.getPropertyValue('--map-controls-room') !== roomValue) {
       this.layoutEl.style.setProperty('--map-controls-room', roomValue);
     }
+    this.fitSearchCard();
+  }
+
+  /**
+   * 【2026-10-25、57本目、Minami指示】検索カードが低い画面（400×464など）でも、カードの中をスクロールせずに
+   * 出発駅・予算・スライダー・「この条件で探す」・「データ出典・免責」が見えるようにする。入りきらないときは、
+   * 説明文（.search-card-lead）→ 例のボタン（.search-examples）の順に外し、それでも入らなければ
+   * 行の間を詰める（.search-card-tight）。それでも入らないときは、今までどおりカードの中をスクロールする。
+   * いったんすべて外してから測り直す（画面が広くなったときに戻すため）。
+   */
+  fitSearchCard() {
+    const card = document.getElementById('layout-left');
+    if (!card) return;
+    const steps = ['search-card-no-lead', 'search-card-no-examples', 'search-card-tight'];
+    steps.forEach((c) => card.classList.remove(c));
+    if (getComputedStyle(card).display !== 'none') {
+      for (const c of steps) {
+        if (card.scrollHeight <= card.clientHeight + 1) break;
+        card.classList.add(c);
+      }
+    }
+    // 自分でクラスを付け外しした分の変化は、測り直しのきっかけにしない（付け外しのたびに呼ばれ続けないため。
+    // ここはupdateInsets()の中なので、それまでに来ていた変化はもう測り終えている）。
+    if (this._mutationObserver) this._mutationObserver.takeRecords();
   }
 
   /** 以前の「一覧／地図」タブの切り替え。タブはやめたため、地図の大きさを測り直すだけ。 */

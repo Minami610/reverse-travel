@@ -1580,7 +1580,9 @@ async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
       // 確認した結果、130（富山湾を背にして立山連峰側を向く）に修正した
       // （旧220は富山湾＝北側が奥に見えてしまっていた）。
       await page.evaluate(() => {
-        window.__terrainMapForDebug.jumpTo({ center: [137.2133, 36.7004], pitch: 70, zoom: 10, bearing: 130 });
+        // 【57本目】円の合わせ方（ア）で、カメラの中心は「見えている範囲」（結果の入れ物を除く、paddingで持つ）の真ん中に
+        // なった。ここは地形の描き方を見る検証なので、地図全体の真ん中を中心にする（padding 0）。
+        window.__terrainMapForDebug.jumpTo({ center: [137.2133, 36.7004], pitch: 70, zoom: 10, bearing: 130, padding: { top: 0, right: 0, bottom: 0, left: 0 } });
       });
       // 【2026-10-11修正】waitForTerrainLoaded()が複数バッチの最後まで正しく
       // 待つよう直った結果、立山方向（zoom10・pitch70、高標高域で要求タイルが
@@ -4381,8 +4383,10 @@ async function checkInitialSearchCircleFit(browser, baseUrl, savedPaths) {
         }
         await page.waitForTimeout(800);
 
+        // 【57本目】見えている範囲（重ねた入れ物を除く）の短辺で測る（measureCircleState()と同じ決め方）
+        const visShortForRatio = (await measureCircleState(page, dim)).visShort;
         const ratio = dim === '3d'
-          ? await page.evaluate(() => {
+          ? await page.evaluate((visShort) => {
               const tv = window.__terrainViewForDebug;
               const map = window.__terrainMapForDebug;
               const dep = tv._lastDepartureStation;
@@ -4409,11 +4413,10 @@ async function checkInitialSearchCircleFit(browser, baseUrl, savedPaths) {
               const pw = map.project([w.lon, w.lat]);
               const vertDiameterPx = Math.hypot(pn.x - ps.x, pn.y - ps.y);
               const horizDiameterPx = Math.hypot(pe.x - pw.x, pe.y - pw.y);
-              const rect = document.getElementById('map-area').getBoundingClientRect();
-              const shortSide = Math.min(rect.width, rect.height);
+              const shortSide = visShort;
               return { vertRatio: vertDiameterPx / shortSide, horizRatio: horizDiameterPx / shortSide, zoom: map.getZoom() };
-            })
-          : await page.evaluate(() => {
+            }, visShortForRatio)
+          : await page.evaluate((visShort) => {
               const mv = window.__mapViewForDebug;
               const map = mv.map;
               const [lat, lon] = mv.departureLatLng;
@@ -4440,10 +4443,9 @@ async function checkInitialSearchCircleFit(browser, baseUrl, savedPaths) {
               const pw = map.latLngToContainerPoint(w);
               const vertDiameterPx = Math.hypot(pn.x - ps.x, pn.y - ps.y);
               const horizDiameterPx = Math.hypot(pe.x - pw.x, pe.y - pw.y);
-              const rect = document.getElementById('map-area').getBoundingClientRect();
-              const shortSide = Math.min(rect.width, rect.height);
+              const shortSide = visShort;
               return { vertRatio: vertDiameterPx / shortSide, horizRatio: horizDiameterPx / shortSide, zoom: map.getZoom() };
-            });
+            }, visShortForRatio);
 
         const atZoomFloor = dim === '3d' ? ratio.zoom <= 8.55 : ratio.zoom <= 8.55;
         const ratioOk = dim === '3d'
@@ -5168,40 +5170,64 @@ async function measureCircleState(page, dim) {
       return { lat: toDeg(phi2), lon: toDeg(lambda2) };
     };
     const rect = document.getElementById('map-area').getBoundingClientRect();
+    // 【57本目、Minami決定：ア】円は、地図から重ねた入れ物（data-map-overlay）を除いた「見えている範囲」の短辺で測り、
+    // 出発駅はその真ん中に置く（map-view.js・terrain-map-view.jsのvisibleMapRect()と同じ決め方を、ここでも別に書く）。
+    const mapEl = dim === '3d' ? window.__terrainMapForDebug.getContainer() : window.__mapViewForDebug.map.getContainer();
+    const cr = mapEl.getBoundingClientRect();
+    const full = { left: 0, top: 0, right: cr.width, bottom: cr.height };
+    let vis = { ...full };
+    const area = (v) => Math.max(0, v.right - v.left) * Math.max(0, v.bottom - v.top);
+    document.querySelectorAll('[data-map-overlay]').forEach((el) => {
+      const cs = getComputedStyle(el);
+      if (el.hidden || cs.display === 'none' || cs.visibility === 'hidden') return;
+      const b = el.getBoundingClientRect();
+      if (!(b.width > 0 && b.height > 0)) return;
+      const o = { left: b.left - cr.left, top: b.top - cr.top, right: b.right - cr.left, bottom: b.bottom - cr.top };
+      if (o.right <= vis.left || o.left >= vis.right || o.bottom <= vis.top || o.top >= vis.bottom) return;
+      vis = [
+        { ...vis, left: Math.max(vis.left, o.right) }, { ...vis, right: Math.min(vis.right, o.left) },
+        { ...vis, top: Math.max(vis.top, o.bottom) }, { ...vis, bottom: Math.min(vis.bottom, o.top) },
+      ].reduce((best, v) => (area(v) > area(best) ? v : best));
+    });
+    if (vis.right - vis.left < 80 || vis.bottom - vis.top < 80) vis = full;
+    const visShort = Math.min(vis.right - vis.left, vis.bottom - vis.top);
+    const visCenter = { x: (vis.left + vis.right) / 2, y: (vis.top + vis.bottom) / 2 };
     if (dim === '3d') {
       const tv = window.__terrainViewForDebug;
       const map = window.__terrainMapForDebug;
       const dep = tv._lastDepartureStation;
       const radiusKm = tv._reachCircleRadiusKm;
-      const container = map.getContainer();
-      const shortSide = Math.min(container.clientWidth, container.clientHeight);
+      const shortSide = visShort;
       const bearing = map.getBearing();
       const l = dest(dep.stop_lat, dep.stop_lon, bearing - 90, radiusKm);
       const r = dest(dep.stop_lat, dep.stop_lon, bearing + 90, radiusKm);
       const pl = map.project([l.lon, l.lat]);
       const pr = map.project([r.lon, r.lat]);
       const c = map.getCenter();
+      const pd = map.project([dep.stop_lon, dep.stop_lat]);
       return {
         ratio: Math.hypot(pr.x - pl.x, pr.y - pl.y) / shortSide,
         zoom: map.getZoom(), center: { lat: c.lat, lng: c.lng }, pitch: map.getPitch(), bearing,
         radiusKm, dep: { lat: dep.stop_lat, lon: dep.stop_lon }, frame: { w: rect.width, h: rect.height },
+        vis, visShort, depOffsetPx: Math.hypot(pd.x - visCenter.x, pd.y - visCenter.y),
       };
     }
     const mv = window.__mapViewForDebug;
     const map = mv.map;
     const [lat, lon] = mv.departureLatLng;
     const radiusKm = mv._reachCircleRadiusKm;
-    const size = map.getSize();
-    const shortSide = Math.min(size.x, size.y);
+    const shortSide = visShort;
     const e = dest(lat, lon, 90, radiusKm);
     const w = dest(lat, lon, 270, radiusKm);
     const pe = map.latLngToContainerPoint([e.lat, e.lon]);
     const pw = map.latLngToContainerPoint([w.lat, w.lon]);
     const c = map.getCenter();
+    const pd = map.latLngToContainerPoint([lat, lon]);
     return {
       ratio: Math.hypot(pe.x - pw.x, pe.y - pw.y) / shortSide,
       zoom: map.getZoom(), center: { lat: c.lat, lng: c.lng }, pitch: 0, bearing: 0,
       radiusKm, dep: { lat, lon }, frame: { w: rect.width, h: rect.height },
+      vis, visShort, depOffsetPx: Math.hypot(pd.x - visCenter.x, pd.y - visCenter.y),
     };
   }, dim);
 }
@@ -8435,6 +8461,8 @@ async function checkRound56(browser, baseUrl, savedPaths) {
             cardScrollable: card.scrollHeight > card.clientHeight + 1,
             title: document.querySelector('.search-card-title')?.textContent.replace(/\s+/g, ''),
             lead: document.querySelector('.search-card-lead')?.textContent.trim(),
+            // 【57本目】低い画面（400×464）では、入りきらないときに説明文→例のボタンの順に外す（fitSearchCard()）
+            dropped: ['search-card-no-lead', 'search-card-no-examples'].filter((c) => card.classList.contains(c)),
             budgetLabel: document.querySelector('.budget-label')?.textContent.trim(),
             visible: {
               departure: vis('#departure-input'), slider: vis('#budget-slider'), search: vis('#search-btn'),
@@ -8450,10 +8478,10 @@ async function checkRound56(browser, baseUrl, savedPaths) {
         const cardInside = top.card && top.area && top.card.left >= top.area.left && top.card.right <= top.area.right + 1
           && top.card.top >= top.area.top && top.card.bottom <= top.area.bottom + 1;
         record(
-          `${label} トップ画面：検索カードが地図の中に収まり、見出し・出発駅・予算（往復）・スライダー・「この条件で探す」・例・「データ出典・免責」が見える`,
+          `${label} トップ画面：検索カードが地図の中に収まり、見出し・出発駅・予算（往復）・スライダー・「この条件で探す」・例・「データ出典・免責」が見える（57本目：低い画面では説明文・例のボタンは外れてよい）`,
           cardInside && top.title === 'いくらで、どこまで行ける？' && top.lead === '予算を決めると、行ける場所が地図に出ます'
             && top.budgetLabel === '予算（往復）' && top.searchLabel === 'この条件で探す'
-            && top.visible.departure && top.visible.slider && top.visible.search && top.visible.examples && top.visible.dataLine && top.mapReady,
+            && top.visible.departure && top.visible.slider && top.visible.search && (top.visible.examples || top.dropped.includes('search-card-no-examples')) && top.visible.dataLine && top.mapReady,
           JSON.stringify(top)
         );
         if (isMobile) {
@@ -8496,9 +8524,16 @@ async function checkRound56(browser, baseUrl, savedPaths) {
         if (dim === '2d') await shot(`round56-top-2d-${vLabel}.png`);
 
         // ---- 検索して結果画面へ ----
-        await page.click('.example-chip[data-station-name="富山駅前"]');
+        if (top.dropped.includes('search-card-no-examples')) {
+          // 【57本目】例のボタンが外れている画面（400×464）では、出発駅を入れて候補から選ぶ
+          await fillDeparture(page, '富山駅前');
+          await page.waitForTimeout(500);
+          await page.locator('.suggestion-item[data-station-name="富山駅前"]').first().click();
+        } else {
+          await page.click('.example-chip[data-station-name="富山駅前"]');
+        }
         const chip = await page.evaluate(() => ({ v: document.getElementById('departure-input').value, pref: document.getElementById('departure-input').dataset.prefCode, idx: document.getElementById('departure-input').dataset.localIndex }));
-        record(`${label} 例の「富山」を押すと、出発駅が富山駅前になる`, chip.v === '富山駅前' && chip.pref === '16' && chip.idx === '13', JSON.stringify(chip));
+        record(`${label} 例の「富山」（例のボタンが外れている画面では候補）を押すと、出発駅が富山駅前になる`, chip.v === '富山駅前' && chip.pref === '16' && chip.idx === '13', JSON.stringify(chip));
         await setBudgetSlider(page, 800);
         const prefetchBefore = await page.evaluate(() => window.__maxBudgetPrefetchAppliedCount || 0);
         await clickElementChecked(page, 'search-btn', `${label} トップ画面の「この条件で探す」`);
@@ -8725,6 +8760,184 @@ async function checkRound49(browser, baseUrl, savedPaths) {
 }
 
 /** 【48本目】出発駅の候補を、駅名がちょうど一致するもので選んで検索する（「岡」で「岡山…」を選ばないように）。 */
+/**
+ * 【2026-10-25、57本目、Minami決定：ア】円の合わせ方（ア）の前倒しと、トップ画面の直し。
+ * 1. トップ画面（400×464・375×667）：検索カードの中をスクロールしなくても、出発駅・予算・スライダー・「この条件で探す」・
+ *    「データ出典・免責」が見え、「この条件で探す」が押せる（clickElementChecked）。入りきらないときは説明文→例のボタンの順に
+ *    外れる（400×464）。
+ * 2. 「条件を変える」で開いて金額を変えると、ボタンのすぐ上に「条件が変わりました」が出て、検索すると消える（PC・400×464）。
+ * 3. 検索した直後（富山駅前・¥800）と、地図を動かして最初の見え方に戻るボタンを押したあと：出発駅が「見えている範囲」
+ *    （地図から重ねた入れ物を除いた範囲）の真ん中にあり（3px以内）、円の直径は見えている範囲の短辺の0.85以下
+ *    （部品を避けて小さくなることはある）・0.5以上（PC 1920×1080・390×844・375×667・400×464、2Dと3D）。
+ * スクリーンショット：結果画面（4画面×2D/3D）、トップ画面（400×464・375×667）。
+ */
+async function checkRound57(browser, baseUrl, savedPaths) {
+  console.log('\n=== 57本目：円の合わせ方（ア）の前倒しとトップ画面の直し ===');
+  const shot = async (page, name) => {
+    const file = path.join(screenshotDir, name);
+    await page.screenshot({ path: file });
+    savedPaths.push(file);
+  };
+  const newPage = async (viewport) => {
+    const context = await browser.newContext({ viewport });
+    await context.addInitScript(() => { try { localStorage.setItem('reverse-travel-rotate-hint-seen', 'true'); } catch { /* 無視 */ } });
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+    page.on('console', (msg) => {
+      if (msg.type() === 'error' && !isKnownAcceptableConsoleMessage(msg.text())) errors.push(msg.text());
+    });
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    await page.waitForFunction(() => !!window.__mapViewForDebug?.map, { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(500);
+    return { context, page, errors };
+  };
+
+  // ---- 1. トップ画面（400×464・375×667） ----
+  for (const [vLabel, viewport] of Object.entries({ own: { width: 400, height: 464 }, se: { width: 375, height: 667 } })) {
+    const label = `[57/${vLabel}/トップ]`;
+    const { context, page, errors } = await newPage(viewport);
+    try {
+      const top = await page.evaluate(() => {
+        const card = document.getElementById('layout-left');
+        const cb = card.getBoundingClientRect();
+        const shown = (sel) => {
+          const el = document.querySelector(sel);
+          if (!el || el.offsetParent === null) return { sel, ok: false, why: 'hidden' };
+          const b = el.getBoundingClientRect();
+          const inCard = b.top >= cb.top - 0.5 && b.bottom <= cb.bottom + 0.5 && b.left >= cb.left - 0.5 && b.right <= cb.right + 0.5;
+          const t = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+          return { sel, ok: b.width > 0 && b.height > 0 && inCard && !!t && el.contains(t), top: Math.round(b.top), bottom: Math.round(b.bottom) };
+        };
+        const hidden = (sel) => { const el = document.querySelector(sel); return !el || el.offsetParent === null; };
+        return {
+          scrollable: card.scrollHeight > card.clientHeight + 1, scrollTop: card.scrollTop,
+          card: { top: Math.round(cb.top), bottom: Math.round(cb.bottom) },
+          items: ['#departure-input', '#budget-display', '#budget-slider', '#search-btn', '#about-data-btn'].map(shown),
+          leadHidden: hidden('.search-card-lead'), examplesHidden: hidden('.search-examples'),
+          title: document.querySelector('.search-card-title').getBoundingClientRect().height,
+          cls: card.className,
+        };
+      });
+      record(`${label} 検索カードの中をスクロールしなくても、出発駅・予算・スライダー・「この条件で探す」・「データ出典・免責」が見える`,
+        !top.scrollable && top.items.every((i) => i.ok), JSON.stringify(top));
+      // 外す順番：例のボタンを外すのは、説明文を外したあとだけ
+      record(`${label} 入りきらないときに外すのは説明文→例のボタンの順（例のボタンだけが外れていることはない）`,
+        !top.examplesHidden || top.leadHidden, JSON.stringify({ lead: top.leadHidden, examples: top.examplesHidden }));
+      record(`${label} 見出しは1行（高さ32px以下）`, top.title <= 32, String(top.title));
+      await shot(page, `round57-top-${vLabel}.png`);
+      // 出発駅を入れて「この条件で探す」を押す
+      await fillDeparture(page, '富山駅前');
+      await page.waitForTimeout(500);
+      await page.locator('.suggestion-item[data-station-name="富山駅前"]').first().click();
+      await page.waitForTimeout(200);
+      await clickElementChecked(page, 'search-btn', `${label} 「この条件で探す」`);
+      const ok = await page.waitForSelector('.spot-card, .no-results', { timeout: 15000, state: 'attached' }).then(() => true).catch(() => false);
+      record(`${label} 「この条件で探す」を押すと検索できる`, ok);
+      record(`${label} コンソールにエラーが出ない`, errors.length === 0, errors.join(' | '));
+    } catch (e) {
+      record(`${label} 検証中にクラッシュしない`, false, e.message);
+    } finally {
+      await context.close();
+    }
+  }
+
+  // ---- 2. 「条件が変わりました」 ----
+  for (const [vLabel, viewport] of Object.entries({ pc: VIEWPORTS.pc, own: { width: 400, height: 464 } })) {
+    const label = `[57/${vLabel}/条件が変わりました]`;
+    const { context, page, errors } = await newPage(viewport);
+    try {
+      await searchExactStation(page, '富山駅前', 800, vLabel !== 'pc');
+      await waitForWaveRevealSettled(page);
+      await clickElementChecked(page, 'search-summary-toggle', `${label} 「▼条件を変える」`);
+      await page.waitForTimeout(300);
+      const read = () => page.evaluate(() => {
+        const note = document.getElementById('search-pending-note');
+        const btn = document.getElementById('search-btn');
+        const nb = note.getBoundingClientRect();
+        const bb = btn.getBoundingClientRect();
+        const t = note.hidden ? null : document.elementFromPoint(nb.left + Math.min(20, nb.width / 2), nb.top + nb.height / 2);
+        return {
+          shown: !note.hidden && note.offsetParent !== null && nb.height > 0, text: note.textContent.trim(),
+          pending: btn.classList.contains('search-btn-pending'),
+          gap: Math.round(bb.top - nb.bottom), onTop: !!t && note.contains(t),
+        };
+      });
+      const s0 = await read();
+      record(`${label} 開いた直後（検索した条件のまま）は「条件が変わりました」が出ていない`, !s0.shown && !s0.pending, JSON.stringify(s0));
+      await setBudgetSlider(page, 1000);
+      await page.waitForTimeout(200);
+      // 「条件を変える」で開いたカードは、400×464では「▲閉じる」・金額帯の案内のぶん高くなり、中をスクロールする（56本目から。
+      // 結果画面の作り直しは59本目）。ボタンが見えるところまでカードの中をスクロールしてから確かめる。
+      await page.evaluate(() => document.getElementById('search-btn').scrollIntoView({ block: 'center' }));
+      await page.waitForTimeout(100);
+      const s1 = await read();
+      record(`${label} 金額を変えると、ボタンのすぐ上（12px以内）に「条件が変わりました」が出て、隠れていない`,
+        s1.shown && s1.text === '条件が変わりました' && s1.pending && s1.gap >= 0 && s1.gap <= 12 && s1.onTop, JSON.stringify(s1));
+      await shot(page, `round57-pending-${vLabel}.png`);
+      await clickElementChecked(page, 'search-btn', `${label} 「この条件で探す」`);
+      await page.waitForSelector('.spot-card, .no-results', { timeout: 15000, state: 'attached' });
+      await page.waitForTimeout(500);
+      const s2 = await read();
+      record(`${label} 検索すると「条件が変わりました」は消える`, !s2.shown && !s2.pending, JSON.stringify(s2));
+      record(`${label} コンソールにエラーが出ない`, errors.length === 0, errors.join(' | '));
+    } catch (e) {
+      record(`${label} 検証中にクラッシュしない`, false, e.message);
+    } finally {
+      await context.close();
+    }
+  }
+
+  // ---- 3. 円の合わせ方（ア） ----
+  const vps = { pc: VIEWPORTS.pc, std: { width: 390, height: 844 }, se: { width: 375, height: 667 }, own: { width: 400, height: 464 } };
+  for (const [vLabel, viewport] of Object.entries(vps)) {
+    for (const dim of ['2d', '3d']) {
+      const label = `[57/${vLabel}/${dim}/円]`;
+      const { context, page, errors } = await newPage(viewport);
+      try {
+        await searchExactStation(page, '富山駅前', 800, vLabel !== 'pc');
+        if (dim === '3d') {
+          await clickDimensionToggle(page);
+          const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+          record(`${label} 3D化（検証の前提）`, ok);
+          if (!ok) continue;
+          await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+          await waitForTerrainCameraIdle(page);
+        } else {
+          await waitForWaveRevealSettled(page);
+        }
+        await page.waitForTimeout(1200);
+        const st = await measureCircleState(page, dim);
+        const desc = (s) => JSON.stringify({ ratio: +s.ratio.toFixed(3), visShort: Math.round(s.visShort), depOffsetPx: +s.depOffsetPx.toFixed(1), vis: s.vis });
+        console.log(`  ${label} 検索した直後：円の直径÷見えている範囲の短辺=${st.ratio.toFixed(3)}（短辺${Math.round(st.visShort)}px）、出発駅と見えている範囲の真ん中のずれ=${st.depOffsetPx.toFixed(1)}px`);
+        record(`${label} 検索した直後：出発駅が見えている範囲（重ねた入れ物を除く）の真ん中にある（3px以内）`, st.depOffsetPx <= 3, desc(st));
+        record(`${label} 検索した直後：円の直径は見えている範囲の短辺の0.5〜0.86`, st.ratio >= 0.5 && st.ratio <= 0.86, desc(st));
+        await waitForBaseMapLoaded(page, dim);
+        await shot(page, `round57-result-${dim}-${vLabel}.png`);
+        // 地図を動かしてから、最初の見え方に戻るボタン
+        await page.evaluate((dim) => {
+          if (dim === '3d') window.__terrainMapForDebug.jumpTo({ zoom: window.__terrainMapForDebug.getZoom() + 1.3, center: [137.30, 36.75] });
+          else window.__mapViewForDebug.map.setView([36.75, 137.30], window.__mapViewForDebug.map.getZoom() + 1.3, { animate: false });
+        }, dim);
+        await page.waitForTimeout(300);
+        await clickElementChecked(page, 'map-reset-view-btn', `${label} 最初の見え方に戻るボタン`);
+        await page.waitForTimeout(2200);
+        if (dim === '3d') await waitForTerrainCameraIdle(page);
+        const st2 = await measureCircleState(page, dim);
+        record(`${label} 最初の見え方に戻るボタンのあと：出発駅が見えている範囲の真ん中（3px以内）、円は検索した直後と同じ大きさ（差0.02以内）`,
+          st2.depOffsetPx <= 3 && Math.abs(st2.ratio - st.ratio) <= 0.02, desc(st2));
+        record(`${label} コンソールにエラーが出ない`, errors.length === 0, errors.join(' | '));
+      } catch (e) {
+        record(`${label} 検証中にクラッシュしない`, false, e.message);
+      } finally {
+        await context.close();
+      }
+    }
+  }
+}
+
 async function searchExactStation(page, stationName, budget, isMobile) {
   await ensureFormExpanded(page);
   await fillDeparture(page, '');
@@ -9933,6 +10146,7 @@ async function main() {
     await runWithFreshBrowser(checkRound53, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound54, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound56, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkRound57, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBreadcrumbTrail, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBudgetSlider, baseUrl, savedPaths);
     await runWithFreshBrowser(checkWaveRevealAndCircleScreenshots, baseUrl, savedPaths);

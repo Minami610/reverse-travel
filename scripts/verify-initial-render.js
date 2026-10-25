@@ -1568,8 +1568,11 @@ async function checkSearchButtonState(html) {
   const doc = window.document;
   const searchBtn = doc.getElementById('search-btn');
   // 【56本目】文言は見本どおりいつも「この条件で探す」。まだこの条件で検索していないことは色（.search-btn-pending）で伝える。
-  const isPending = () => searchBtn.classList.contains('search-btn-pending') && searchBtn.textContent === 'この条件で探す';
-  const isDefault = () => !searchBtn.classList.contains('search-btn-pending') && searchBtn.textContent === 'この条件で探す';
+  // 【57本目】色だけで伝えないよう、ボタンのすぐ上の「条件が変わりました」（#search-pending-note）も一緒に出し入れする。
+  const note = doc.getElementById('search-pending-note');
+  const noteShown = () => !!note && !note.hidden && note.textContent.trim() === '条件が変わりました';
+  const isPending = () => searchBtn.classList.contains('search-btn-pending') && searchBtn.textContent === 'この条件で探す' && noteShown();
+  const isDefault = () => !searchBtn.classList.contains('search-btn-pending') && searchBtn.textContent === 'この条件で探す' && !!note && note.hidden;
 
   const item = await waitForSuggestion(doc, window, '高松築港', '高松築港');
   if (!item) {
@@ -1586,7 +1589,7 @@ async function checkSearchButtonState(html) {
   console.log(
     initialOk
       ? '✅ 検索直後はボタンが既定の見た目（「検索」）です'
-      : `❌ 検索直後のボタンの見た目が想定と異なります（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}）`
+      : `❌ 検索直後のボタンの見た目が想定と異なります（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}, 条件が変わりました=${noteShown()}）`
   );
 
   // 1. 予算を変える（検索はしない）→ 強調表示になること
@@ -1595,7 +1598,7 @@ async function checkSearchButtonState(html) {
   console.log(
     pendingAfterBudgetChange
       ? '✅ 予算を変えて検索せずにいると、ボタンが「この条件で検索」（強調表示）になりました'
-      : `❌ 予算を変えてもボタンが強調表示になりません（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}）`
+      : `❌ 予算を変えてもボタンが強調表示になりません（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}, 条件が変わりました=${noteShown()}）`
   );
 
   // 2. その状態で検索する → 既定の見た目に戻ること
@@ -1605,7 +1608,7 @@ async function checkSearchButtonState(html) {
   console.log(
     revertedAfterSearch
       ? '✅ 検索すると、ボタンが既定の見た目（「検索」）に戻りました'
-      : `❌ 検索してもボタンが既定の見た目に戻りません（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}）`
+      : `❌ 検索してもボタンが既定の見た目に戻りません（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}, 条件が変わりました=${noteShown()}）`
   );
 
   // 3. 予算を変えてから、最後に検索した値（¥1000）に戻す → 既定のままであること
@@ -1615,7 +1618,7 @@ async function checkSearchButtonState(html) {
   console.log(
     revertedAfterUndo
       ? '✅ 予算を変えても、最後に検索した値に戻すとボタンは既定のままです'
-      : `❌ 最後に検索した値に戻してもボタンが強調表示のままです（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}）`
+      : `❌ 最後に検索した値に戻してもボタンが強調表示のままです（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}, 条件が変わりました=${noteShown()}）`
   );
 
   if (errors.length > 0) {

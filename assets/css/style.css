@@ -2845,6 +2845,61 @@ body {
   box-shadow: 0 0 0 3px rgba(255, 107, 43, 0.35);
 }
 
+/* 【57本目】色だけで伝えないよう、まだこの条件で検索していないときはボタンのすぐ上に小さな文字も出す */
+.search-pending-note {
+  margin: 0 0 4px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--color-accent-deep);
+}
+
+/* 【57本目】検索カードが低い画面（400×464など）で入りきらないとき（layout-controller.jsのfitSearchCard()）：
+   説明文 → 例のボタンの順に外し、それでも入らなければ行の間を詰める */
+.search-card.search-card-no-lead .search-card-lead,
+.search-card.search-card-no-examples .search-examples {
+  display: none;
+}
+
+.search-card.search-card-no-lead .search-card-title {
+  margin-bottom: 6px;
+}
+
+.search-card.search-card-tight {
+  padding-top: 8px;
+}
+
+.search-card.search-card-tight .search-card-title {
+  margin-bottom: 2px;
+  line-height: 1.2;
+}
+
+.search-card.search-card-tight .form-group {
+  margin-bottom: 4px;
+}
+
+.search-card.search-card-tight .form-group label {
+  margin-bottom: 1px;
+}
+
+.search-card.search-card-tight #budget-display {
+  font-size: 1.3rem;
+}
+
+.search-card.search-card-tight #budget-slider {
+  margin-top: 0;
+}
+
+.search-card.search-card-tight #search-btn {
+  padding: 0.5rem;
+}
+
+.search-card.search-card-tight .data-line {
+  margin-top: 2px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
 /* 「条件を変える」で開いたときだけ出す閉じるボタン（PC・スマホとも） */
 #app-layout.has-results:not(.form-collapsed) .form-close-btn {
   display: block;

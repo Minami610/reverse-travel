@@ -213,6 +213,7 @@ class ReverseTravel {
       mobileBudgetDistance: document.getElementById('mobile-budget-distance'),
       budgetIncrement: document.getElementById('budget-increment'),
       searchBtn: document.getElementById('search-btn'),
+      searchPendingNote: document.getElementById('search-pending-note'),
       appLayout: document.getElementById('app-layout'),
       sortSelect: document.getElementById('sort-select'),
       departureGuidance: document.getElementById('departure-guidance'),
@@ -931,14 +932,17 @@ class ReverseTravel {
       // まだ一度も検索していない＝比較対象がないため、常に既定の表示にする
       btn.classList.remove('search-btn-pending');
       btn.textContent = SEARCH_BUTTON_LABEL;
+      if (this.elements.searchPendingNote) this.elements.searchPendingNote.hidden = true;
       return;
     }
     const currentText = this.elements.departureInput.value;
     const currentBudget = parseInt(this.elements.budgetInput.value, 10);
     const changed = currentText !== this.lastSearchedDepartureText || currentBudget !== this.lastSearchedBudget;
     // 【56本目】文言は見本どおりいつも「この条件で探す」。まだこの条件で検索していないことは色（.search-btn-pending）で伝える。
+    // 【57本目、Minami指示】色だけで伝えないよう、ボタンのすぐ上に「条件が変わりました」の小さな文字も出す（検索すると消える）。
     btn.classList.toggle('search-btn-pending', changed);
     btn.textContent = SEARCH_BUTTON_LABEL;
+    if (this.elements.searchPendingNote) this.elements.searchPendingNote.hidden = !changed;
   }
 
   /**

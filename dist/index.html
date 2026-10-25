@@ -3534,6 +3534,61 @@ body {
   box-shadow: 0 0 0 3px rgba(255, 107, 43, 0.35);
 }
 
+/* 【57本目】色だけで伝えないよう、まだこの条件で検索していないときはボタンのすぐ上に小さな文字も出す */
+.search-pending-note {
+  margin: 0 0 4px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--color-accent-deep);
+}
+
+/* 【57本目】検索カードが低い画面（400×464など）で入りきらないとき（layout-controller.jsのfitSearchCard()）：
+   説明文 → 例のボタンの順に外し、それでも入らなければ行の間を詰める */
+.search-card.search-card-no-lead .search-card-lead,
+.search-card.search-card-no-examples .search-examples {
+  display: none;
+}
+
+.search-card.search-card-no-lead .search-card-title {
+  margin-bottom: 6px;
+}
+
+.search-card.search-card-tight {
+  padding-top: 8px;
+}
+
+.search-card.search-card-tight .search-card-title {
+  margin-bottom: 2px;
+  line-height: 1.2;
+}
+
+.search-card.search-card-tight .form-group {
+  margin-bottom: 4px;
+}
+
+.search-card.search-card-tight .form-group label {
+  margin-bottom: 1px;
+}
+
+.search-card.search-card-tight #budget-display {
+  font-size: 1.3rem;
+}
+
+.search-card.search-card-tight #budget-slider {
+  margin-top: 0;
+}
+
+.search-card.search-card-tight #search-btn {
+  padding: 0.5rem;
+}
+
+.search-card.search-card-tight .data-line {
+  margin-top: 2px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
 /* 「条件を変える」で開いたときだけ出す閉じるボタン（PC・スマホとも） */
 #app-layout.has-results:not(.form-collapsed) .form-close-btn {
   display: block;
@@ -3850,6 +3905,8 @@ body {
             <p id="budget-band-preview" class="budget-band-preview" hidden></p>
           </div>
 
+          <!-- まだこの条件で検索していないことを、色だけでなく文字でも伝える（57本目、Minami指示。main.jsのupdateSearchButtonState()） -->
+          <p id="search-pending-note" class="search-pending-note" hidden>条件が変わりました</p>
           <button type="submit" id="search-btn">この条件で探す</button>
           <!-- 例：押すと出発駅をその駅にする（56本目、Minami決定：A） -->
           <p class="search-examples">
@@ -5436,11 +5493,50 @@ const MAP_CIRCLE_ZOOM_IN_TARGET_RATIO = 0.85;
 // 名前の帯（#spot-info-panel）は見ない：検索した直後・戻るボタンのときは出ておらず、「← 一覧に戻る」の
 // ときだけ選んだ場所の帯が出たままになる。そこで帯を避けると、検索した直後と同じ見え方に戻らなくなる
 // （39本目の決まり。実測：400×464の3Dで0.85→0.67に縮んだ）。
+// 【57本目、Minami決定：ア】予算操作帯（#mobile-budget-overlay）は結果の入れ物の一部として扱い、ここからは外した
+// （入れ物ごと「見えている範囲」から除く。visibleMapRect()）。ここに残す部品は、見えている範囲の中で4px避ける。
 const MAP_CIRCLE_OBSTACLE_SELECTORS = [
   '#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle', '#map-dimension-toggle',
-  '#mobile-budget-overlay', '#map-zoom-controls',
+  '#map-zoom-controls',
 ];
 const MAP_CIRCLE_OBSTACLE_GAP_PX = 4;
+
+/**
+ * 【2026-10-25、57本目、Minami決定：ア】地図の上に重ねた入れ物（data-map-overlayの付いた、見えている要素：PCの左の
+ * 入れ物、スマホの下の入れ物、検索カード）を除いた「見えている範囲」（地図の入れ物の左上を基準にしたpx）。
+ * 入れ物は画面の端に寄せて置くため、入れ物ごとに、地図の左・右・上・下のどれかの側を入れ物の手前まで削り、
+ * 残る広さが一番大きい削り方を選ぶ（PCの左の入れ物なら左を、スマホの下の入れ物なら下を削る）。
+ * 残りが小さすぎるとき（80px未満）は、地図全体を見えている範囲とする。
+ * 円の合わせ方（円の直径を見えている範囲の短辺の0.85にし、出発駅を見えている範囲の真ん中に置く）・ピンや
+ * まとめた丸へ寄るときの中心に使う。2D（map-view.js）と3D（terrain-map-view.js）に同じ関数がある
+ * （3Dは別に読み込むため）。
+ * @param {Element} container 地図の入れ物
+ * @returns {{left: number, top: number, right: number, bottom: number}}
+ */
+function visibleMapRect(container) {
+  const c = container.getBoundingClientRect();
+  const full = { left: 0, top: 0, right: c.width, bottom: c.height };
+  let vis = { ...full };
+  const area = (v) => Math.max(0, v.right - v.left) * Math.max(0, v.bottom - v.top);
+  document.querySelectorAll('[data-map-overlay]').forEach((el) => {
+    if (el.hidden) return;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return;
+    const b = el.getBoundingClientRect();
+    if (!(b.width > 0 && b.height > 0)) return;
+    const r = { left: b.left - c.left, top: b.top - c.top, right: b.right - c.left, bottom: b.bottom - c.top };
+    if (r.right <= vis.left || r.left >= vis.right || r.bottom <= vis.top || r.top >= vis.bottom) return;
+    const candidates = [
+      { ...vis, left: Math.max(vis.left, r.right) },
+      { ...vis, right: Math.min(vis.right, r.left) },
+      { ...vis, top: Math.max(vis.top, r.bottom) },
+      { ...vis, bottom: Math.min(vis.bottom, r.top) },
+    ];
+    vis = candidates.reduce((best, v) => (area(v) > area(best) ? v : best));
+  });
+  if (vis.right - vis.left < 80 || vis.bottom - vis.top < 80) return full;
+  return vis;
+}
 
 /** 【47本目】地図の上に見えている部品の形（地図の入れ物の左上を基準にしたpx。丸い部品はround・中心・半径つき）。 */
 function circleObstacleRects(container) {
@@ -6195,10 +6291,13 @@ class MapView {
       latlngs.reduce((sum, ll) => sum + ll[0], 0) / latlngs.length,
       latlngs.reduce((sum, ll) => sum + ll[1], 0) / latlngs.length,
     ];
+    // 【57本目】まとめた丸の場所を、見えている範囲（重ねた入れ物を除く）の真ん中に置く。
+    const vc = this._visibleCenter();
+    const placed = this._centerPlacingAt(L.latLng(center[0], center[1]), target, vc.x, vc.y);
     if (reachPrefersReducedMotion()) {
-      this.map.setView(center, target, { animate: false });
+      this.map.setView(placed, target, { animate: false });
     } else {
-      this.map.flyTo(center, target, { duration: 0.6 });
+      this.map.flyTo(placed, target, { duration: 0.6 });
     }
   }
 
@@ -6361,8 +6460,9 @@ class MapView {
   revealAboveBand(latlng) {
     if (!this.map) return;
     const zoom = this.map.getZoom();
-    const targetPoint = this.map.project(latlng, zoom).add([0, REVEAL_ABOVE_BAND_OFFSET_PX]);
-    const target = this.map.unproject(targetPoint, zoom);
+    // 【57本目】選んだピンは、見えている範囲（重ねた入れ物を除く）の真ん中に、ただし下の帯にかからない高さに置く。
+    const { x, y, vis } = this._visibleCenter();
+    const target = this._centerPlacingAt(latlng, zoom, x, Math.min(y, vis.bottom - REVEAL_ABOVE_BAND_OFFSET_PX));
     if (reachPrefersReducedMotion()) {
       this.map.panTo(target, { animate: false });
     } else {
@@ -6537,36 +6637,22 @@ class MapView {
     if (!radiusKm || radiusKm <= 0) return null;
     if (!this.isContainerVisible()) return null;
     const [lat, lon] = this.departureLatLng;
-    const bounds = L.latLngBounds([
-      reachDestinationPoint(lat, lon, 0, radiusKm),
-      reachDestinationPoint(lat, lon, 90, radiusKm),
-      reachDestinationPoint(lat, lon, 180, radiusKm),
-      reachDestinationPoint(lat, lon, 270, radiusKm),
-    ]);
-    const size = this.map.getSize();
-    const shortSide = Math.max(1, Math.min(size.x, size.y));
-    // 【2026-10-20、35本目、不具合修正】当初は3D側と同じ式（余白(片側) = 短辺 ×
-    // (1 - 目標直径比率) / 2）をそのまま使ったが、実機相当の検証で比率が
-    // 0.75の目標に対し0.899（約2割大きい）になる不具合が見つかった。
-    // 原因はLeafletのgetBoundsZoom()の仕様差：fitBounds()経由で呼ぶときは
-    // paddingTopLeft・paddingBottomRightをそれぞれ加算してgetBoundsZoom()へ
-    // 渡すため、結果的に「片側の値」×2が効く。しかし、ここでは
-    // （_overviewZoom用のfitToBudget()と同様に）getBoundsZoom()を直接呼んで
-    // おり、内部では渡したpadding Pointを1回だけ（getSize().subtract(padding)）
-    // 減算する——つまり「両側の合計」として扱われる。3D（MapLibre）の
-    // cameraForBounds()は数値1つのpaddingを「各辺に同じ量」として扱う仕様の
-    // ため3D側の式は正しいが、2DのgetBoundsZoom()直接呼びでは「片側の値」を
-    // 2倍せずに渡すと、実際に効く余白が意図の半分になり、円が目標より
-    // 大きくなる。ここでは直接呼びのため、合計分（片側×2）をそのまま渡す。
-    const padding = Math.min(
-      Math.round(shortSide * (1 - MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO)),
-      Math.floor(shortSide / 2) - 1
-    );
-    // fitZoomは「円の直径が短辺のT（MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO、41本目から0.6）に
-    // なるズーム」。2D（メルカトル）ではズームが1上がると画面上の長さがちょうど2倍になる
-    // ため、任意のズームzでの比率は T × 2^(z − fitZoom)、比率rになるズームは
-    // fitZoom + log2(r / T) で求まる。
-    const fitZoom = this.map.getBoundsZoom(bounds, false, L.point(padding, padding));
+    // 【2026-10-25、57本目、Minami決定：ア】地図から重ねた入れ物を除いた「見えている範囲」で測る（以前は地図全体の短辺・
+    // 中心は出発駅のまま。PCの左の入れ物・スマホの下の入れ物の下に、円や出発駅が隠れていたため）。
+    const vis = visibleMapRect(this.map.getContainer());
+    const shortSide = Math.max(1, Math.min(vis.right - vis.left, vis.bottom - vis.top));
+    // fitZoomは「円の直径が見えている範囲の短辺のT（MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO、0.85）になるズーム」。
+    // 2D（メルカトル）ではズームが1上がると画面上の長さがちょうど2倍になるため、任意のズームzでの比率は
+    // T × 2^(z − fitZoom)、比率rになるズームは fitZoom + log2(r / T) で求まる。
+    // 【57本目】見えている範囲は地図全体と縦横の比が違うため、地図全体の大きさで測るgetBoundsZoom()（35本目から）
+    // ではなく、円の東西の直径（画面上のpx）が見えている範囲の短辺のTになるズームを直接求める（メルカトルは
+    // 等角のため、円は画面上でも真円）。
+    const z0 = this.map.getZoom();
+    const pe = this.map.project(reachDestinationPoint(lat, lon, 90, radiusKm), z0);
+    const pw = this.map.project(reachDestinationPoint(lat, lon, 270, radiusKm), z0);
+    const d0 = Math.abs(pe.x - pw.x);
+    if (!(d0 > 0)) return null;
+    const fitZoom = z0 + Math.log2((shortSide * MAP_CIRCLE_FIT_TARGET_DIAMETER_RATIO) / d0);
     let targetZoom = fitZoom;
     let currentZoom = null;
     if (onlyIfNeeded) {
@@ -6584,10 +6670,12 @@ class MapView {
     }
     // 【47本目】円の縁が地図の上の部品にかからない大きさまでにとどめる。中心（出発駅）から一番近い
     // 部品までの距離−すき間を半径の上限にする（2Dの円は真円）。部品が中心にかぶっているときは見ない。
-    const cx = size.x / 2;
-    const cy = size.y / 2;
+    // 【57本目】中心は見えている範囲の真ん中。見えている範囲の外（入れ物の下）にある部品は見ない。
+    const cx = (vis.left + vis.right) / 2;
+    const cy = (vis.top + vis.bottom) / 2;
     let nearestPx = Infinity;
     circleObstacleRects(this.map.getContainer()).forEach((r) => {
+      if (r.right <= vis.left || r.left >= vis.right || r.bottom <= vis.top || r.top >= vis.bottom) return;
       if (r.round) {
         nearestPx = Math.min(nearestPx, Math.max(0, Math.hypot(r.cx - cx, r.cy - cy) - r.radius));
         return;
@@ -6604,14 +6692,32 @@ class MapView {
     // 最低ズーム8.5（または最大16）に張り付いていて、もう動く余地が無いときは動かさない
     // （¥2000付近で＋を押すたびに同じ場所へ飛び直す空の動きを出さない）。
     if (onlyIfNeeded && Math.abs(zoom - currentZoom) < 0.02) return null;
+    // 【57本目】出発駅が見えている範囲の真ん中に来るよう、地図の中心をずらす。
+    const center = this._centerPlacingAt(this.departureLatLng, zoom, cx, cy);
     if (reachPrefersReducedMotion() || !animate) {
       this._circleFitAnim = null;
-      this.map.setView(this.departureLatLng, zoom, { animate: false });
+      this.map.setView(center, zoom, { animate: false });
     } else {
       this._circleFitAnim = { zoom, endsAt: performance.now() + durationSec * 1000 + 100 };
-      this.map.flyTo(this.departureLatLng, zoom, { duration: durationSec });
+      this.map.flyTo(center, zoom, { duration: durationSec });
     }
     return zoom;
+  }
+
+  /**
+   * 【57本目】ズームzoomで、latlngが地図の入れ物の(x, y)（px）に来るようにするための、地図の中心を返す。
+   * @returns {L.LatLng}
+   */
+  _centerPlacingAt(latlng, zoom, x, y) {
+    const size = this.map.getSize();
+    const p = this.map.project(latlng, zoom);
+    return this.map.unproject(p.add([size.x / 2 - x, size.y / 2 - y]), zoom);
+  }
+
+  /** 【57本目】見えている範囲（重ねた入れ物を除く）の真ん中（地図の入れ物の左上を基準にしたpx）。 */
+  _visibleCenter() {
+    const vis = visibleMapRect(this.map.getContainer());
+    return { x: (vis.left + vis.right) / 2, y: (vis.top + vis.bottom) / 2, vis };
   }
 
   /**
@@ -7072,6 +7178,9 @@ class LayoutController {
       // 部品の列の高さ（2D/3Dの切り替え・戻るボタンの出し入れで変わる）も見る
       const cluster = document.getElementById('map-controls-cluster');
       if (cluster) this._resizeObserver.observe(cluster);
+      // 【57本目】検索カードの中身の高さ（金額帯の案内・「条件が変わりました」の出し入れ）が変わったら、入りきるか測り直す
+      const form = document.getElementById('search-form');
+      if (form) this._resizeObserver.observe(form);
     }
     if (typeof MutationObserver === 'function' && this.layoutEl) {
       // 検索カード⇔結果の入れ物の切り替え（#app-layoutのクラス・hidden属性）でも測り直す。
@@ -7119,6 +7228,30 @@ class LayoutController {
     if (this.layoutEl.style.getPropertyValue('--map-controls-room') !== roomValue) {
       this.layoutEl.style.setProperty('--map-controls-room', roomValue);
     }
+    this.fitSearchCard();
+  }
+
+  /**
+   * 【2026-10-25、57本目、Minami指示】検索カードが低い画面（400×464など）でも、カードの中をスクロールせずに
+   * 出発駅・予算・スライダー・「この条件で探す」・「データ出典・免責」が見えるようにする。入りきらないときは、
+   * 説明文（.search-card-lead）→ 例のボタン（.search-examples）の順に外し、それでも入らなければ
+   * 行の間を詰める（.search-card-tight）。それでも入らないときは、今までどおりカードの中をスクロールする。
+   * いったんすべて外してから測り直す（画面が広くなったときに戻すため）。
+   */
+  fitSearchCard() {
+    const card = document.getElementById('layout-left');
+    if (!card) return;
+    const steps = ['search-card-no-lead', 'search-card-no-examples', 'search-card-tight'];
+    steps.forEach((c) => card.classList.remove(c));
+    if (getComputedStyle(card).display !== 'none') {
+      for (const c of steps) {
+        if (card.scrollHeight <= card.clientHeight + 1) break;
+        card.classList.add(c);
+      }
+    }
+    // 自分でクラスを付け外しした分の変化は、測り直しのきっかけにしない（付け外しのたびに呼ばれ続けないため。
+    // ここはupdateInsets()の中なので、それまでに来ていた変化はもう測り終えている）。
+    if (this._mutationObserver) this._mutationObserver.takeRecords();
   }
 
   /** 以前の「一覧／地図」タブの切り替え。タブはやめたため、地図の大きさを測り直すだけ。 */
@@ -7735,6 +7868,7 @@ class ReverseTravel {
       mobileBudgetDistance: document.getElementById('mobile-budget-distance'),
       budgetIncrement: document.getElementById('budget-increment'),
       searchBtn: document.getElementById('search-btn'),
+      searchPendingNote: document.getElementById('search-pending-note'),
       appLayout: document.getElementById('app-layout'),
       sortSelect: document.getElementById('sort-select'),
       departureGuidance: document.getElementById('departure-guidance'),
@@ -8453,14 +8587,17 @@ class ReverseTravel {
       // まだ一度も検索していない＝比較対象がないため、常に既定の表示にする
       btn.classList.remove('search-btn-pending');
       btn.textContent = SEARCH_BUTTON_LABEL;
+      if (this.elements.searchPendingNote) this.elements.searchPendingNote.hidden = true;
       return;
     }
     const currentText = this.elements.departureInput.value;
     const currentBudget = parseInt(this.elements.budgetInput.value, 10);
     const changed = currentText !== this.lastSearchedDepartureText || currentBudget !== this.lastSearchedBudget;
     // 【56本目】文言は見本どおりいつも「この条件で探す」。まだこの条件で検索していないことは色（.search-btn-pending）で伝える。
+    // 【57本目、Minami指示】色だけで伝えないよう、ボタンのすぐ上に「条件が変わりました」の小さな文字も出す（検索すると消える）。
     btn.classList.toggle('search-btn-pending', changed);
     btn.textContent = SEARCH_BUTTON_LABEL;
+    if (this.elements.searchPendingNote) this.elements.searchPendingNote.hidden = !changed;
   }
 
   /**
