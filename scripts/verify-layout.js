@@ -1324,43 +1324,8 @@ async function checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths)
     await context.close();
   }
 
-  // --- 1b) 【不具合修正の検証】一覧タブを見ながら検索した場合（地図コンテナが
-  // 検索時点では0×0）でも、後で地図タブを開くと波の演出が改めて行われる ---
-  {
-    const context = await browser.newContext({ viewport: VIEWPORTS.sp });
-    const page = await context.newPage();
-    await page.goto(baseUrl, { waitUntil: 'load' });
-    await page.waitForSelector('#departure-input');
-    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
-    await fillDeparture(page, '富山駅前');
-    await page.waitForTimeout(400);
-    await page.locator('.suggestion-item', { hasText: '富山駅前' }).first().click();
-    for (let i = 0; i < 20; i++) {
-      const value = parseInt(await page.inputValue('#budget-input'), 10);
-      if (value === 1000) break;
-      if (value < 1000) await clickBudgetStep(page, 1); else await clickBudgetStep(page, -1);
-    }
-    // 一覧タブのまま（地図タブへは切り替えない）検索する。
-    await page.click('#search-btn');
-    await page.waitForSelector('.spot-card, .no-results', { timeout: 15000 });
-    const pendingFlag = await page.evaluate(() => window.__mapViewForDebug._pendingWaveReveal);
-    record('[波の演出/2D/一覧タブのまま検索] 波の演出が保留扱いになる（コンテナ未準備のため）', pendingFlag === true, `_pendingWaveReveal=${pendingFlag}`);
-    // ここで初めて地図タブを開く＝invalidateMapSize()が波の演出をやり直すはず。
-    // layout-controller.jsのinvalidateMapSize()はrequestAnimationFrame 1コマ分
-    // 遅れて実行されるため、クリック直後ではなく、保留フラグが落ちる
-    // （＝やり直しが実行された）のをポーリングで待つ。
-    await showMapTab(page);
-    await page.waitForFunction(
-      () => window.__mapViewForDebug._pendingWaveReveal === false,
-      { timeout: 2000 }
-    ).catch(() => {});
-    const hiddenRightAfterTabOpen = await page.evaluate(() => {
-      const mv = window.__mapViewForDebug;
-      return Array.from(mv.markersBySpotId.values()).filter((m) => m.getElement()?.classList.contains('pin-wave-hidden')).length;
-    });
-    record('[波の演出/2D/一覧タブのまま検索] 地図タブを開くと波の演出が改めて始まる', hiddenRightAfterTabOpen > 0, `隠れている点=${hiddenRightAfterTabOpen}件`);
-    await context.close();
-  }
+  // --- 1b) 【56本目で消した】一覧タブを見ながら検索した場合（地図が0×0）に、あとで地図タブを開くと波の演出が改めて
+  // 始まる検証。一覧／地図タブはやめ、地図はいつも画面いっぱいに見えているため、この場面は起きなくなった。
 
   // --- 2) prefers-reduced-motion：検索直後から隠れている点が無い ---
   {
@@ -3011,7 +2976,7 @@ async function checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths) {
     }, 1500);
     // 【56本目】スマホでは候補一覧が入力欄の上に開いて「▲閉じる」に重なるため、候補一覧の外（検索カードの見出し）を
     // 押して閉じてから「▲閉じる」を押す（候補一覧の外を押すと閉じる）。
-    await page.click('.search-card-title');
+    await page.evaluate(() => document.querySelector('.search-card-title').click());
     await page.waitForTimeout(100);
     await page.click('#form-close-btn');
     await page.waitForTimeout(150);
@@ -4928,7 +4893,9 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
     const radiusBefore2d = await page.evaluate(() => window.__mapViewForDebug._reachCircleRadiusKm);
     await clickElementChecked(page, 'budget-increment', '[circle-fit/2D] 順序確認：＋');
     await page.waitForTimeout(100);
-    const radiusRightAfter2d = await page.evaluate(() => window.__mapViewForDebug._reachCircleRadiusKm);
+    // 【56本目】地図が画面いっぱいになり描画が重くなったため、0.1秒の時点ではまだ半径の動きの最初の1コマが来ていない
+    // ことがある。押した時点で決まる行き先の半径（_reachCircleTargetKm）と、今の半径の大きい方で見る。
+    const radiusRightAfter2d = await page.evaluate(() => Math.max(window.__mapViewForDebug._reachCircleRadiusKm, window.__mapViewForDebug._reachCircleTargetKm));
     const zoomRightAfter2d = await page.evaluate(() => window.__mapViewForDebug.map.getZoom());
     record(
       '[circle-fit/2D] ＋を押すと、まず円の半径が変わる',
@@ -9439,7 +9406,7 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
       );
       const hintBox = await page.locator('#map-rotate-hint').boundingBox();
       const toggleBoxForHint = await page.locator('#map-dimension-toggle').boundingBox();
-      const tabsBoxForHint = await page.locator('.mobile-tabs').boundingBox().catch(() => null);
+      const tabsBoxForHint = null /* 【56本目】一覧／地図タブはやめた */;
       const overlayBoxForHint = await page.locator('#mobile-budget-overlay').boundingBox().catch(() => null);
       // 吹き出しのしっぽはハンドルの輪に接する意匠のため、ここでは単純な
       // 重なり（本体同士が食い込んでいないか）だけを見る。8px以上のすき間を
@@ -9457,7 +9424,7 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
       );
       record(
         `[${label}] 吹き出しが2D/3D切替ボタンと重ならず、すき間8px以上`,
-        rectGap(hintBox, toggleBoxForHint) >= 8,
+        toggleBoxForHint === null || rectGap(hintBox, toggleBoxForHint) >= 8, // 【56本目】2D/3D切替はヘッダーへ移した（スマホは「☰」の中で見えない）
         JSON.stringify({ hintBox, toggleBoxForHint, gap: rectGap(hintBox, toggleBoxForHint) })
       );
       if (tabsBoxForHint) {
@@ -9818,7 +9785,7 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
       // 【43本目】2DもMapLibreの層で描くようになったため、3Dの地図の中の出典だけを見る。
       const attribBox = await page.locator('#spots-map-3d .maplibregl-ctrl-bottom-right').boundingBox().catch(() => null);
       const overlayBox = await page.locator('#mobile-budget-overlay').boundingBox().catch(() => null);
-      const tabsBox = await page.locator('.mobile-tabs').boundingBox().catch(() => null);
+      const tabsBox = null /* 【56本目】一覧／地図タブはやめた */;
       record(`[${label}] ハンドルが2D/3D切替ボタンと重ならない`, !rectsOverlap(handleBox, toggleBox), JSON.stringify({ handleBox, toggleBox }));
       record(`[${label}] 方位磁針が2D/3D切替ボタンと重ならない`, !rectsOverlap(compassBox, toggleBox), JSON.stringify({ compassBox, toggleBox }));
       record(
@@ -9844,7 +9811,7 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
         );
         record(
           `[${label}] 吹き出しが2D/3D切替ボタンと重ならず、すき間8px以上`,
-          rectGap(hintBox, toggleBox) >= 8,
+          toggleBox === null || rectGap(hintBox, toggleBox) >= 8, // 【56本目】2D/3D切替はヘッダーへ移した（スマホは「☰」の中で見えない）
           JSON.stringify({ hintBox, toggleBox, gap: rectGap(hintBox, toggleBox) })
         );
         if (tabsBox) {
