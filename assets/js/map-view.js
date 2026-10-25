@@ -131,9 +131,10 @@ const MAP_CIRCLE_ZOOM_IN_TARGET_RATIO = 0.85;
 // （39本目の決まり。実測：400×464の3Dで0.85→0.67に縮んだ）。
 // 【57本目、Minami決定：ア】予算操作帯（#mobile-budget-overlay）は結果の入れ物の一部として扱い、ここからは外した
 // （入れ物ごと「見えている範囲」から除く。visibleMapRect()）。ここに残す部品は、見えている範囲の中で4px避ける。
+// 【58本目】PCで一覧を閉じたときの細いバー・「☰ 一覧を開く」、開いているときのパネルの右の縁の「◀」も避ける。
 const MAP_CIRCLE_OBSTACLE_SELECTORS = [
   '#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle', '#map-dimension-toggle',
-  '#map-zoom-controls',
+  '#map-zoom-controls', '[data-map-overlay="bar"]', '#results-list-open-btn', '#results-list-close-btn',
 ];
 const MAP_CIRCLE_OBSTACLE_GAP_PX = 4;
 
@@ -156,6 +157,8 @@ function visibleMapRect(container) {
   const area = (v) => Math.max(0, v.right - v.left) * Math.max(0, v.bottom - v.top);
   document.querySelectorAll('[data-map-overlay]').forEach((el) => {
     if (el.hidden) return;
+    // 【58本目】PCで一覧を閉じたときの細いバー（data-map-overlay="bar"）は、覆う入れ物ではなく円が避ける部品
+    if (el.getAttribute('data-map-overlay') === 'bar') return;
     const cs = getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden') return;
     const b = el.getBoundingClientRect();
@@ -1011,6 +1014,11 @@ export class MapView {
     if (forceRefit || this._needsSearchFit) {
       this.refitBounds();
       this._needsSearchFit = false;
+      this._pendingVisibleAreaRefit = false;
+    } else if (this._pendingVisibleAreaRefit) {
+      // 【58本目】見えていない間に一覧パネルを開け閉めしていたら、見えたここで合わせ直す
+      this._pendingVisibleAreaRefit = false;
+      this.fitCircleToView({ radiusKm: this._reachCircleRadiusKm, animate: false });
     }
     this.forceMarkerReposition();
     if (this.lastBudget != null) {
@@ -1333,11 +1341,46 @@ export class MapView {
     if (reachPrefersReducedMotion() || !animate) {
       this._circleFitAnim = null;
       this.map.setView(center, zoom, { animate: false });
+      this._rememberFitCamera();
     } else {
       this._circleFitAnim = { zoom, endsAt: performance.now() + durationSec * 1000 + 100 };
+      this.map.once('moveend', () => this._rememberFitCamera());
       this.map.flyTo(center, zoom, { duration: durationSec });
     }
     return zoom;
+  }
+
+  /** 【58本目】円に合わせ終えたときの地図の中心・ズーム（開け閉めのとき、そのあと地図が動いたかを見るため）。 */
+  _rememberFitCamera() {
+    if (!this.map) return;
+    this._lastFitCamera = { center: this.map.getCenter(), zoom: this.map.getZoom() };
+  }
+
+  /** 【58本目】地図が、最後に円に合わせたときのまま（利用者が動かしていない・ピンへ寄っていない）か。 */
+  isAtLastCircleFit() {
+    const f = this._lastFitCamera;
+    if (!this.map || !f) return false;
+    if (Math.abs(this.map.getZoom() - f.zoom) > 0.01) return false;
+    const a = this.map.latLngToContainerPoint(f.center);
+    const b = this.map.latLngToContainerPoint(this.map.getCenter());
+    return Math.hypot(a.x - b.x, a.y - b.y) < 2;
+  }
+
+  /**
+   * 【58本目】見えている範囲が変わったとき（PCの一覧パネルを開け閉めしたとき）。地図が最後に円に合わせたときの
+   * ままなら、新しい見えている範囲の真ん中へ出発駅を合わせ直す（円の大きさの決め方・動きの時間は今までの
+   * 地図合わせと同じ）。利用者が地図を動かしたあと（ピンへ寄ったあとを含む）は合わせ直さない（58本目の報告で
+   * 確認中）。地図が見えていない（3D表示中）ときは、次に見えたとき（handleShown()）に合わせ直す。
+   */
+  handleVisibleAreaChanged() {
+    if (!this.map || !this.departureLatLng || !(this._reachCircleRadiusKm > 0)) return;
+    if (!this.isContainerVisible()) {
+      if (this.isAtLastCircleFit()) this._pendingVisibleAreaRefit = true;
+      return;
+    }
+    this._pendingVisibleAreaRefit = false;
+    if (!this.isAtLastCircleFit()) return;
+    this.fitCircleToView({ radiusKm: this._reachCircleRadiusKm });
   }
 
   /**

@@ -246,9 +246,10 @@ const CIRCLE_ZOOM_IN_TARGET_RATIO = 0.85;
 // 名前の帯（#spot-info-panel）は見ない（map-view.jsのMAP_CIRCLE_OBSTACLE_SELECTORSと同じ理由）。
 // 【57本目、Minami決定：ア】予算操作帯（#mobile-budget-overlay）は結果の入れ物の一部として扱い、ここからは外した
 // （入れ物ごと「見えている範囲」から除く。visibleMapRect()）。ここに残す部品は、見えている範囲の中で4px避ける。
+// 【58本目】PCで一覧を閉じたときの細いバー・「☰ 一覧を開く」、開いているときのパネルの右の縁の「◀」も避ける。
 const CIRCLE_OBSTACLE_SELECTORS = [
   '#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle', '#map-dimension-toggle',
-  '#map-zoom-controls',
+  '#map-zoom-controls', '[data-map-overlay="bar"]', '#results-list-open-btn', '#results-list-close-btn',
 ];
 const CIRCLE_OBSTACLE_GAP_PX = 4;
 const CIRCLE_OBSTACLE_ZOOM_STEP = 0.03;
@@ -273,6 +274,8 @@ function visibleMapRect(container) {
   const area = (v) => Math.max(0, v.right - v.left) * Math.max(0, v.bottom - v.top);
   document.querySelectorAll('[data-map-overlay]').forEach((el) => {
     if (el.hidden) return;
+    // 【58本目】PCで一覧を閉じたときの細いバー（data-map-overlay="bar"）は、覆う入れ物ではなく円が避ける部品
+    if (el.getAttribute('data-map-overlay') === 'bar') return;
     const cs = getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden') return;
     const b = el.getBoundingClientRect();
@@ -1967,6 +1970,8 @@ export class TerrainMapView {
   _easeToCircle(dep, zoom, pitch, bearing, duration, padding = CLEAR_PADDING) {
     const anim = duration > 0 ? { zoom } : null;
     this._circleFitAnim = anim;
+    // 【58本目】合わせ終えたときのカメラを覚える（duration 0のときはeaseTo()の中でmoveendが出るため、先に登録する）
+    this.map.once('moveend', () => this._rememberFitCamera());
     this.map.easeTo({
       center: [dep.stop_lon, dep.stop_lat],
       zoom,
@@ -1983,6 +1988,43 @@ export class TerrainMapView {
     }
     this._focusedOnSpot = false;
     this._flyFocusedSpotId = null;
+  }
+
+  /** 【58本目】円に合わせ終えたときのカメラ（開け閉めのとき、そのあと地図が動いたかを見るため）。 */
+  _rememberFitCamera() {
+    if (!this.map) return;
+    this._lastFitCamera = { center: this.map.getCenter(), zoom: this.map.getZoom(), pitch: this.map.getPitch(), bearing: this.map.getBearing() };
+  }
+
+  /** 【58本目】地図が、最後に円に合わせたときのまま（利用者が動かしていない・ピンへ寄っていない）か。 */
+  isAtLastCircleFit() {
+    const f = this._lastFitCamera;
+    if (!this.map || !f) return false;
+    if (Math.abs(this.map.getZoom() - f.zoom) > 0.01) return false;
+    if (Math.abs(this.map.getPitch() - f.pitch) > 0.5) return false;
+    if (Math.abs(((this.map.getBearing() - f.bearing + 540) % 360) - 180) > 0.5) return false;
+    const a = this.map.project(f.center);
+    const b = this.map.project(this.map.getCenter());
+    return Math.hypot(a.x - b.x, a.y - b.y) < 2;
+  }
+
+  /**
+   * 【58本目】見えている範囲が変わったとき（PCの一覧パネルを開け閉めしたとき）。地図が最後に円に合わせたときの
+   * ままなら、新しい見えている範囲の真ん中へ出発駅を合わせ直す（傾き・向きはそのまま。円の大きさの決め方・
+   * 動きの時間は今までの地図合わせと同じ）。利用者が地図を動かしたあと（ピンへ寄ったあとを含む）は合わせ直さない
+   * （58本目の報告で確認中）。地図が見えていない（2D表示中）ときは、次に見えたとき（resize()）に合わせ直す。
+   */
+  handleVisibleAreaChanged() {
+    if (!this.map || !this._lastDepartureStation || !(this._reachCircleRadiusKm > 0)) return;
+    const container = this.map.getContainer();
+    if (container.clientWidth === 0 || container.clientHeight === 0) {
+      if (this.isAtLastCircleFit()) this._pendingVisibleAreaRefit = true;
+      return;
+    }
+    this._pendingVisibleAreaRefit = false;
+    if (!this.isAtLastCircleFit()) return;
+    this._cancelFitCircleToView();
+    this.fitCircleToView({ radiusKm: this._reachCircleRadiusKm });
   }
 
   // 【2026-10-20、39本目】ここにあった旧「全体表示」fitToBudget()（スポット座標基準・
@@ -2670,7 +2712,14 @@ export class TerrainMapView {
     if (!this.map) return;
     this.map.resize();
     // 【39本目】見えていない間に「← 一覧に戻る」が押されていたら、見えたここで合わせる。
-    if (this._pendingReturnToSearchView) this.returnToSearchView({ durationMs: 0 });
+    if (this._pendingReturnToSearchView) {
+      this._pendingVisibleAreaRefit = false;
+      this.returnToSearchView({ durationMs: 0 });
+    } else if (this._pendingVisibleAreaRefit) {
+      // 【58本目】見えていない間に一覧パネルを開け閉めしていたら、見えたここで合わせ直す
+      this._pendingVisibleAreaRefit = false;
+      this.fitCircleToView({ radiusKm: this._reachCircleRadiusKm, animate: false });
+    }
   }
 
   /** 2D切替時・再試行時にWebGLコンテキストを確実に解放する（上限超過による失敗を防ぐ） */

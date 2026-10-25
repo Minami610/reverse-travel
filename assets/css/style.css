@@ -3034,3 +3034,410 @@ body {
     padding: 6px 0;
   }
 }
+
+/* ========================================
+   【2026-10-26、58本目】PCの結果画面（見本②：左の一覧パネル、見本③：閉じたときの上の細いバー）
+   スマホ（759px以下）の結果画面は59本目で作るため、ここでは何も変えない（PCだけの部品はスマホでは出さない）。
+   ======================================== */
+.results-list-close-btn,
+.results-list-open-btn,
+.map-data-line,
+.results-legend,
+.results-departure,
+.results-budget-amount,
+.results-counts {
+  display: none;
+}
+
+@media (min-width: 760px) {
+  /* パネルの右の縁の「◀」をパネルの外にはみ出して出すため、パネル自体は切り取らない（中の一覧がスクロールする） */
+  .results-panel {
+    overflow: visible;
+    padding: 14px 16px 6px;
+  }
+
+  .results-list-close-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    top: 36px;
+    right: -18px;
+    width: 18px;
+    height: 44px;
+    padding: 0;
+    border: none;
+    border-radius: 0 8px 8px 0;
+    background: white;
+    box-shadow: 3px 2px 6px rgba(0, 0, 0, 0.15);
+    color: var(--color-text-sub);
+    font-size: 10px;
+    cursor: pointer;
+  }
+
+  .results-list-close-btn:hover {
+    color: var(--color-text);
+  }
+
+  /* 1行目：「出発：○○」と「条件を変える」（小さな灰色の文字） */
+  .results-panel .search-summary {
+    margin: 0 0 10px;
+    padding: 0;
+    background: none;
+    box-shadow: none;
+    border-radius: 0;
+    font-size: 0.85rem;
+    font-weight: 400;
+  }
+
+  .results-panel #search-summary-text,
+  .results-panel .summary-toggle-arrow,
+  .results-departure-closed {
+    display: none;
+  }
+
+  .results-departure {
+    display: inline;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-text-sub);
+  }
+
+  .results-departure b {
+    color: var(--color-text);
+    font-weight: 800;
+  }
+
+  .results-panel #search-summary-toggle {
+    padding: 0;
+    color: var(--color-text-sub);
+    font-size: 0.72rem;
+    font-weight: 400;
+  }
+
+  .results-panel #search-summary-toggle:hover {
+    color: var(--color-text);
+    text-decoration: underline;
+  }
+
+  /* 2行目：−・「予算（往復）」¥800・＋、右に「42か所」「NEW +8」 */
+  .results-panel .mobile-budget-overlay {
+    flex-wrap: wrap;
+    height: auto;
+    margin: 0 0 8px;
+    padding: 0;
+    gap: 8px;
+    border: none;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  .results-panel .mobile-budget-overlay #mobile-budget-decrement,
+  .results-panel .mobile-budget-overlay #mobile-budget-increment {
+    width: 34px;
+    height: 34px;
+    border: 2px solid var(--color-accent);
+    color: var(--color-accent);
+    font-size: 1.25rem;
+    line-height: 1;
+  }
+
+  .results-panel .mobile-budget-overlay #mobile-budget-increment {
+    background: var(--color-accent);
+    color: white;
+  }
+
+  .results-budget-amount {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.1;
+  }
+
+  .results-budget-label {
+    font-size: 0.62rem;
+    color: var(--color-text-sub);
+  }
+
+  #results-budget-value {
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: var(--color-text);
+    white-space: nowrap;
+  }
+
+  .results-counts {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 3px;
+    margin-left: auto;
+  }
+
+  #results-map-count {
+    font-size: 1.05rem;
+    font-weight: 800;
+    color: var(--color-text);
+    white-space: nowrap;
+  }
+
+  /* 金額を変えて、まだその金額で検索していないときだけ「¥◯で探す」を次の行に出す（一覧を更新するのはこのボタン） */
+  .results-panel #mobile-budget-search-btn:not(.mobile-budget-search-btn-pending) {
+    display: none;
+  }
+
+  .results-panel #mobile-budget-search-btn {
+    order: 10;
+    max-width: none;
+  }
+
+  .results-panel #mobile-budget-distance {
+    order: 11;
+  }
+
+  /* 3行目：色の説明（PCの結果画面では地図の上の中央の色の説明の代わり） */
+  .results-legend {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 10px;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 16px;
+    color: #333;
+  }
+
+  #app-layout.has-results.form-collapsed .map-legend {
+    display: none;
+  }
+
+  /* 見出し「¥601〜¥800 の場所」と右に「12か所」、下に紺の線。一覧だけがパネルの中でスクロールする */
+  .results-panel #results-container {
+    overflow: hidden;
+  }
+
+  .results-panel .results-band-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin: 0 0 6px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid #1f3c88;
+    color: var(--color-text);
+    font-size: 0.95rem;
+    font-weight: 800;
+  }
+
+  .results-panel .results-band-heading[hidden] {
+    display: none;
+  }
+
+  .band-heading-count {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--color-text-sub);
+    white-space: nowrap;
+  }
+
+  .results-panel #sort-controls {
+    margin-bottom: 4px;
+    font-size: 0.75rem;
+  }
+
+  .results-panel #sort-select {
+    padding: 0.15rem 0.4rem;
+    font-size: 0.75rem;
+  }
+
+  .results-panel #results-list {
+    gap: 0;
+  }
+
+  /* 一覧のカード：中身は今のまま、写真を左に小さく、名前・運賃などを右に並べる（見本②の並び） */
+  .results-panel .spot-card {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr) auto;
+    column-gap: 10px;
+    align-items: start;
+    min-height: 0;
+    padding: 10px 2px;
+    border-bottom: 1px solid var(--color-border);
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .results-panel .spot-card:hover {
+    transform: none;
+    box-shadow: none;
+  }
+
+  .results-panel .spot-card > * {
+    grid-column: 2 / 4;
+  }
+
+  .results-panel .spot-card .spot-image {
+    grid-column: 1;
+    grid-row: 1 / span 4;
+    width: 64px;
+    height: 64px;
+    border-radius: 8px;
+  }
+
+  .results-panel .spot-card .spot-image-placeholder {
+    font-size: 1.4rem;
+  }
+
+  .results-panel .spot-card h3 {
+    grid-column: 2;
+    grid-row: 1;
+    padding: 0;
+    font-size: 0.9rem;
+  }
+
+  .results-panel .spot-card-actions {
+    position: static;
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    gap: 2px;
+  }
+
+  /* ☆・共有は押しやすさのため44px四方のまま（影だけ消す） */
+  .results-panel .spot-card .favorite-btn,
+  .results-panel .spot-card .share-btn {
+    box-shadow: none;
+  }
+
+  /* 「NEW」は今までどおり写真の左上に重ねる（51本目） */
+  .results-panel .spot-card-new {
+    top: 8px;
+    left: 0;
+    padding: 0 4px;
+    font-size: 10px;
+    line-height: 15px;
+  }
+
+  .results-panel .spot-card .spot-summary {
+    grid-column: 2;
+    grid-row: 2;
+    padding: 0;
+    margin: 2px 0;
+    font-size: 0.8rem;
+  }
+
+  .results-panel .spot-card .spot-description {
+    padding: 0;
+    margin: 0 0 2px;
+    font-size: 0.75rem;
+    -webkit-line-clamp: 1;
+  }
+
+  .results-panel .spot-card .support-badge {
+    padding: 2px 0 0;
+  }
+
+  .results-panel .spot-card .support-badge-note {
+    margin: 4px 0;
+    font-size: 0.72rem;
+  }
+
+  .results-panel .spot-card .spot-frequency-note {
+    padding: 0;
+    margin: 0 0 2px;
+    font-size: 0.7rem;
+  }
+
+  .results-panel .spot-card .detail-btn {
+    justify-self: end;
+    width: auto;
+    margin-top: 2px;
+    padding: 2px 12px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+  }
+
+  /* ---- 一覧を閉じたとき（見本③）：パネルが地図の左上の細いバー1本になる ---- */
+  #app-layout.has-results.form-collapsed.results-list-closed .results-panel {
+    bottom: auto;
+    width: auto;
+    max-width: calc(100% - 24px);
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+    padding: 8px 16px;
+  }
+
+  #app-layout.results-list-closed .results-panel #results-container,
+  #app-layout.results-list-closed .results-panel #detail-container,
+  #app-layout.results-list-closed .results-panel > .data-line,
+  #app-layout.results-list-closed .results-panel #search-summary-toggle,
+  #app-layout.results-list-closed .results-panel #mobile-budget-search-btn,
+  #app-layout.results-list-closed .results-panel #mobile-budget-distance,
+  #app-layout.results-list-closed .results-list-close-btn,
+  #app-layout.results-list-closed .results-departure-open {
+    display: none;
+  }
+
+  #app-layout.results-list-closed .results-departure-closed {
+    display: inline;
+  }
+
+  #app-layout.results-list-closed .results-panel .search-summary,
+  #app-layout.results-list-closed .results-panel .mobile-budget-overlay,
+  #app-layout.results-list-closed .results-legend {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    margin: 0;
+  }
+
+  #app-layout.results-list-closed .results-departure {
+    font-size: 0.8rem;
+  }
+
+  /* 「42か所」と「NEW +8」は、閉じたときは横に並べる */
+  #app-layout.results-list-closed .results-counts {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    margin-left: 4px;
+  }
+
+  /* 「☰ 一覧を開く」はバーのすぐ下（バーと一緒に動くようパネルの中に置いてある） */
+  #app-layout.results-list-closed .results-list-open-btn {
+    display: block;
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    padding: 5px 12px;
+    border: none;
+    border-radius: 8px;
+    background: white;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+    color: var(--color-text);
+    font-size: 0.78rem;
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  /* 閉じている間の「データ出典・免責」：地図の右下の出典の文字のすぐ左（layout-controller.jsが--map-attrib-roomを測る） */
+  #app-layout.has-results.form-collapsed.results-list-closed .map-data-line {
+    display: block;
+    position: absolute;
+    right: var(--map-attrib-room, 40px);
+    bottom: 3px;
+    z-index: 1000;
+    margin: 0;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+    font-size: 0.72rem;
+  }
+
+  /* 名前の帯：閉じている間は、検索前と同じ位置 */
+  #app-layout.has-results.form-collapsed.results-list-closed .spot-info-panel {
+    left: 90px;
+  }
+}

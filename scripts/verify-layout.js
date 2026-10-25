@@ -5180,6 +5180,7 @@ async function measureCircleState(page, dim) {
     document.querySelectorAll('[data-map-overlay]').forEach((el) => {
       const cs = getComputedStyle(el);
       if (el.hidden || cs.display === 'none' || cs.visibility === 'hidden') return;
+      if (el.getAttribute('data-map-overlay') === 'bar') return; // 【58本目】PCで一覧を閉じたときの細いバーは覆う入れ物ではない
       const b = el.getBoundingClientRect();
       if (!(b.width > 0 && b.height > 0)) return;
       const o = { left: b.left - cr.left, top: b.top - cr.top, right: b.right - cr.left, bottom: b.bottom - cr.top };
@@ -7672,6 +7673,9 @@ async function checkRound47(browser, baseUrl, savedPaths) {
           JSON.stringify({ live: c1.live, counts: c1.counts, clusters: c1.clusterCount, kind: c1.clusterKindMismatch, foreign: c1.foreignInCluster, color: c1.colorMismatch, dots: c1.orangeDots })
         );
         if (dim === '2d') {
+          // 【58本目】PCの一覧パネルのカードの上にマウスが残っていると、そのピンが強調（大きく・一番上）になるため、地図の外へ動かす
+          await page.mouse.move(5, 5);
+          await page.waitForTimeout(150);
           const look = await page.evaluate(() => {
             const mv = window.__mapViewForDebug;
             const visible = (cat) => [...mv.markersBySpotId.values()].map((m) => m.getElement())
@@ -8016,8 +8020,10 @@ async function checkRound51(browser, baseUrl, savedPaths) {
         // --- 3. 色の説明・「NEW +◯」 ---
         const legend = await page.evaluate((dim) => {
           const r = (el) => { const b = el.getBoundingClientRect(); return { x: b.left, y: b.top, left: b.left, top: b.top, right: b.right, bottom: b.bottom, width: b.width, height: b.height }; };
-          const lg = document.getElementById('map-legend');
-          const tag = document.getElementById('map-new-count');
+          // 【58本目】PCの結果画面では、色の説明・「NEW +◯」は地図の上ではなく一覧パネルの中に出す
+          const onMap = getComputedStyle(document.getElementById('map-legend')).display !== 'none';
+          const lg = onMap ? document.getElementById('map-legend') : document.querySelector('.results-legend');
+          const tag = onMap ? document.getElementById('map-new-count') : document.getElementById('results-new-count');
           const area = document.getElementById('map-area');
           const obstacles = [...document.querySelectorAll('#map-dimension-toggle, #map-compass-btn, #map-reset-view-btn, #map-rotate-handle, #map-zoom-controls, #map-area .leaflet-control-attribution, #map-area .maplibregl-ctrl-attrib, #map-area .maplibregl-ctrl-group')]
             .filter((el) => { const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0 && getComputedStyle(el).visibility !== 'hidden'; })
@@ -8938,6 +8944,247 @@ async function checkRound57(browser, baseUrl, savedPaths) {
   }
 }
 
+/**
+ * 【2026-10-26、58本目】PCの結果画面（左の一覧パネル・閉じたときの上の細いバー）。PC 1920×1080と、PCとして扱う
+ * 一番小さい幅（760×720）の、2Dと3D。富山駅前・¥800。
+ * 1. パネル・「◀」・バー・「☰ 一覧を開く」が、地図の上の部品（ズーム・方位磁針・戻るボタン・ハンドル）・出典と重ならない。
+ * 2. 「◀」と「☰ 一覧を開く」で開け閉めできる（clickElementChecked）。
+ * 3. 開いても閉じても、出発駅が見えている範囲の真ん中（3px以内）、円の直径が見えている範囲の短辺の0.5〜0.86
+ *    （部品を避けて小さくなることはある）。閉じているとき、円の縁がバー・「☰ 一覧を開く」から3px以上離れている。
+ * 4. 開いても閉じても「データ出典・免責」が見えていて、隠れていない。
+ * 5. パネルの中の一覧がスクロールでき、上の部分（出発〜見出し）は動かない（開いているとき）。
+ * 6. ＋−で金額を変えても、閉じたまま。「条件を変える」で開くとバーは隠れ、検索し直すと閉じたまま戻る。
+ * 7. （3D）閉じた状態で詳細から一覧に戻ると、パネルが開く。
+ * スクリーンショット：開いた・閉じた（2画面×2D/3D）。
+ */
+async function checkRound58(browser, baseUrl, savedPaths) {
+  console.log('\n=== 58本目：PCの結果画面（左の一覧パネルと、閉じたときの上の細いバー） ===');
+  const vps = { pc: VIEWPORTS.pc, pcmin: { width: 760, height: 720 } };
+  for (const [vLabel, viewport] of Object.entries(vps)) {
+    for (const dim of ['2d', '3d']) {
+      const label = `[58/${vLabel}/${dim}]`;
+      const context = await browser.newContext({ viewport });
+      await context.addInitScript(() => { try { localStorage.setItem('reverse-travel-rotate-hint-seen', 'true'); } catch { /* 無視 */ } });
+      const page = await context.newPage();
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+      page.on('console', (msg) => {
+        if (msg.type() === 'error' && !isKnownAcceptableConsoleMessage(msg.text())) errors.push(msg.text());
+      });
+      const shot = async (name) => {
+        await waitForBaseMapLoaded(page, dim);
+        const file = path.join(screenshotDir, name);
+        await page.screenshot({ path: file });
+        savedPaths.push(file);
+      };
+      const waitSettled = async () => {
+        await page.waitForTimeout(1300);
+        if (dim === '3d') await waitForTerrainCameraIdle(page);
+      };
+      // 重なりの確かめ：見えている部品どうし
+      const overlaps = (ownSelectors) => page.evaluate(({ ownSelectors, dim }) => {
+        const vis = (el) => {
+          if (!el || el.hidden) return null;
+          const cs = getComputedStyle(el);
+          if (cs.display === 'none' || cs.visibility === 'hidden') return null;
+          const b = el.getBoundingClientRect();
+          return b.width > 0 && b.height > 0 ? b : null;
+        };
+        const parts = ['#map-zoom-controls', '#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle',
+          dim === '3d' ? '#spots-map-3d .maplibregl-ctrl-attrib' : '#spots-map .leaflet-control-attribution', '#map-data-line'];
+        const out = [];
+        ownSelectors.forEach((o) => {
+          const a = vis(document.querySelector(o));
+          if (!a) return;
+          parts.forEach((p) => {
+            if (p === o) return;
+            const b = vis(document.querySelector(p));
+            if (!b) return;
+            if (a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top) out.push(`${o}×${p}`);
+          });
+        });
+        return out;
+      }, { ownSelectors, dim });
+      const shown = (sel) => page.evaluate((sel) => {
+        const el = document.querySelector(sel);
+        if (!el || el.offsetParent === null) return { ok: false, why: 'hidden' };
+        const b = el.getBoundingClientRect();
+        const t = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+        const inView = b.left >= 0 && b.top >= 0 && b.right <= innerWidth + 1 && b.bottom <= innerHeight + 1;
+        return { ok: b.width > 0 && inView && !!t && el.contains(t), top: t && (t.id || t.className) };
+      }, sel);
+      // 円の縁（72点）が、閉じたときのバー・「☰ 一覧を開く」からどれだけ離れているか（px、負なら重なる）
+      const circleGapToBar = () => page.evaluate((dim) => {
+        const toRad = (d) => (d * Math.PI) / 180;
+        const toDeg = (r) => (r * 180) / Math.PI;
+        const dest = (lat, lon, bearingDeg, km) => {
+          const delta = km / 6371; const th = toRad(bearingDeg); const p1 = toRad(lat); const l1 = toRad(lon);
+          const p2 = Math.asin(Math.sin(p1) * Math.cos(delta) + Math.cos(p1) * Math.sin(delta) * Math.cos(th));
+          const l2 = l1 + Math.atan2(Math.sin(th) * Math.sin(delta) * Math.cos(p1), Math.cos(delta) - Math.sin(p1) * Math.sin(p2));
+          return [toDeg(p2), toDeg(l2)];
+        };
+        let lat; let lon; let km; let project;
+        if (dim === '3d') {
+          const tv = window.__terrainViewForDebug; const m = window.__terrainMapForDebug;
+          lat = tv._lastDepartureStation.stop_lat; lon = tv._lastDepartureStation.stop_lon; km = tv._reachCircleRadiusKm;
+          project = (ll) => m.project([ll[1], ll[0]]);
+        } else {
+          const mv = window.__mapViewForDebug; [lat, lon] = mv.departureLatLng; km = mv._reachCircleRadiusKm;
+          project = (ll) => mv.map.latLngToContainerPoint(ll);
+        }
+        const mapRect = document.getElementById('map-area').getBoundingClientRect();
+        const rects = ['.results-panel', '#results-list-open-btn'].map((s) => document.querySelector(s).getBoundingClientRect())
+          .map((b) => ({ left: b.left - mapRect.left, top: b.top - mapRect.top, right: b.right - mapRect.left, bottom: b.bottom - mapRect.top }));
+        let min = Infinity;
+        for (let i = 0; i < 72; i++) {
+          const p = project(dest(lat, lon, i * 5, km));
+          rects.forEach((r) => {
+            const dx = Math.max(r.left - p.x, 0, p.x - r.right);
+            const dy = Math.max(r.top - p.y, 0, p.y - r.bottom);
+            const inside = dx === 0 && dy === 0;
+            min = Math.min(min, inside ? -1 : Math.hypot(dx, dy));
+          });
+        }
+        return Math.round(min * 10) / 10;
+      }, dim);
+      const desc = (s) => JSON.stringify({ ratio: +s.ratio.toFixed(3), visShort: Math.round(s.visShort), depOffsetPx: +s.depOffsetPx.toFixed(1) });
+      try {
+        await page.goto(baseUrl, { waitUntil: 'load' });
+        await page.waitForSelector('#departure-input');
+        await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+        await searchExactStation(page, '富山駅前', 800, false);
+        if (dim === '3d') {
+          await clickDimensionToggle(page);
+          const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+          record(`${label} 3D化（検証の前提）`, ok);
+          if (!ok) continue;
+          await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+          await waitForTerrainCameraIdle(page);
+        } else {
+          await waitForWaveRevealSettled(page);
+        }
+        await waitSettled();
+
+        // ---- 開いているとき ----
+        const top = await page.evaluate(() => {
+          const t = (sel) => document.querySelector(sel)?.textContent.replace(/\s+/g, ' ').trim();
+          return {
+            departure: t('.results-departure-open'), toggle: t('#search-summary-toggle'), amount: t('#results-budget-value'),
+            label: t('.results-budget-label'), count: t('#results-map-count'), heading: t('#results-band-heading'),
+            legend: t('.results-legend'), mapLegendShown: getComputedStyle(document.getElementById('map-legend')).display !== 'none',
+          };
+        });
+        record(`${label} 開いているとき：「出発：富山駅前」「条件を変える」・「予算（往復）」¥800・「◯か所」・色の説明・見出し「¥601〜¥800 の場所」が出て、地図の上の中央の色の説明は出ない`,
+          top.departure === '出発：富山駅前' && /条件を変える/.test(top.toggle) && top.amount === '¥800' && top.label === '予算（往復）'
+            && /^\d+か所$/.test(top.count) && /みちどころ/.test(top.legend) && /NEW/.test(top.legend)
+            && /^¥601〜¥800 の場所\s*\d+か所$/.test(top.heading) && !top.mapLegendShown, JSON.stringify(top));
+        const ov1 = await overlaps(['.results-panel', '#results-list-close-btn']);
+        record(`${label} 開いているとき：パネル・「◀」が地図の上の部品・出典と重ならない`, ov1.length === 0, ov1.join(', '));
+        const st1 = await measureCircleState(page, dim);
+        console.log(`  ${label} 開いているとき：円の直径÷見えている範囲の短辺=${st1.ratio.toFixed(3)}（短辺${Math.round(st1.visShort)}px）、出発駅と真ん中のずれ=${st1.depOffsetPx.toFixed(1)}px`);
+        record(`${label} 開いているとき：出発駅が見えている範囲の真ん中（3px以内）、円は短辺の0.5〜0.86`, st1.depOffsetPx <= 3 && st1.ratio >= 0.5 && st1.ratio <= 0.86, desc(st1));
+        const dl1 = await shown('.results-panel > .data-line .data-line-btn');
+        record(`${label} 開いているとき：「データ出典・免責」が見えていて隠れていない`, dl1.ok, JSON.stringify(dl1));
+        // 一覧のスクロール
+        const scroll = await page.evaluate(async () => {
+          const list = document.getElementById('results-list');
+          const head = document.getElementById('results-band-heading').getBoundingClientRect().top;
+          const dep = document.getElementById('results-departure').getBoundingClientRect().top;
+          list.scrollTop = 300;
+          await new Promise((r) => setTimeout(r, 100));
+          const res = {
+            scrollable: list.scrollHeight > list.clientHeight + 1, scrollTop: list.scrollTop,
+            headMoved: Math.abs(document.getElementById('results-band-heading').getBoundingClientRect().top - head),
+            depMoved: Math.abs(document.getElementById('results-departure').getBoundingClientRect().top - dep),
+          };
+          list.scrollTop = 0;
+          return res;
+        });
+        record(`${label} パネルの中の一覧がスクロールでき、上の部分（出発〜見出し）は動かない`,
+          scroll.scrollable && scroll.scrollTop > 0 && scroll.headMoved < 1 && scroll.depMoved < 1, JSON.stringify(scroll));
+        await shot(`round58-${vLabel}-${dim}-open.png`);
+
+        // ---- 閉じる ----
+        await clickElementChecked(page, 'results-list-close-btn', `${label} 「◀」`);
+        await waitSettled();
+        const closed = await page.evaluate(() => document.getElementById('app-layout').classList.contains('results-list-closed'));
+        record(`${label} 「◀」を押すと一覧が閉じて細いバーになる`, closed);
+        const bar = await page.evaluate(() => {
+          const t = (sel) => document.querySelector(sel)?.textContent.replace(/\s+/g, ' ').trim();
+          const b = document.querySelector('.results-panel').getBoundingClientRect();
+          const o = document.getElementById('results-list-open-btn').getBoundingClientRect();
+          return { departure: t('.results-departure-closed'), amount: t('#results-budget-value'), h: Math.round(b.height), w: Math.round(b.width),
+            openBelow: o.top >= b.bottom, listHidden: document.getElementById('results-list').offsetParent === null };
+        });
+        record(`${label} 閉じたとき：バーに「富山駅前から」・¥800、その下に「☰ 一覧を開く」、一覧は隠れる（バーの高さ80px以下）`,
+          bar.departure === '富山駅前から' && bar.amount === '¥800' && bar.openBelow && bar.listHidden && bar.h <= 80, JSON.stringify(bar));
+        const ov2 = await overlaps(['.results-panel', '#results-list-open-btn']);
+        record(`${label} 閉じたとき：バー・「☰ 一覧を開く」が地図の上の部品・出典と重ならない`, ov2.length === 0, ov2.join(', '));
+        const st2 = await measureCircleState(page, dim);
+        console.log(`  ${label} 閉じたとき：円の直径÷見えている範囲の短辺=${st2.ratio.toFixed(3)}（短辺${Math.round(st2.visShort)}px）、出発駅と真ん中のずれ=${st2.depOffsetPx.toFixed(1)}px`);
+        record(`${label} 閉じたとき：出発駅が地図全体の真ん中（3px以内）、円は短辺の0.5〜0.86`, st2.depOffsetPx <= 3 && st2.ratio >= 0.5 && st2.ratio <= 0.86, desc(st2));
+        const gap = await circleGapToBar();
+        record(`${label} 閉じたとき：円の縁がバー・「☰ 一覧を開く」から3px以上離れている`, gap >= 3, `最小のすき間=${gap}px`);
+        const dl2 = await shown('#map-data-line .data-line-btn');
+        record(`${label} 閉じたとき：「データ出典・免責」が地図の右下に見えていて隠れていない`, dl2.ok, JSON.stringify(dl2));
+        await shot(`round58-${vLabel}-${dim}-closed.png`);
+
+        // ＋−では閉じたまま
+        await clickElementChecked(page, 'mobile-budget-increment', `${label} 閉じたときの＋`);
+        await page.waitForTimeout(600);
+        const s3 = await page.evaluate(() => ({ closed: document.getElementById('app-layout').classList.contains('results-list-closed'), amount: document.getElementById('results-budget-value').textContent }));
+        record(`${label} 閉じたまま＋を押すと、閉じたまま金額が¥900になる`, s3.closed && s3.amount === '¥900', JSON.stringify(s3));
+        await clickElementChecked(page, 'mobile-budget-decrement', `${label} 閉じたときの−`);
+        await waitSettled();
+        // 「条件を変える」で開くとバーは隠れ、検索し直すと閉じたまま戻る
+        await page.evaluate(() => document.getElementById('search-summary-toggle').click());
+        await page.waitForTimeout(300);
+        const s4 = await page.evaluate(() => ({
+          bar: document.querySelector('.results-panel').offsetParent !== null, open: document.getElementById('results-list-open-btn').offsetParent !== null,
+          card: document.getElementById('layout-left').offsetParent !== null,
+        }));
+        record(`${label} 閉じた状態で「条件を変える」を開くと、検索カードが出てバー・「☰ 一覧を開く」は隠れる`, s4.card && !s4.bar && !s4.open, JSON.stringify(s4));
+        await clickElementChecked(page, 'search-btn', `${label} 「この条件で探す」`);
+        await page.waitForSelector('.spot-card, .no-results', { timeout: 15000, state: 'attached' });
+        await waitSettled();
+        const s5 = await page.evaluate(() => ({ closed: document.getElementById('app-layout').classList.contains('results-list-closed'), bar: document.querySelector('.results-panel').offsetParent !== null }));
+        record(`${label} 検索し直すと、閉じた状態のまま戻る`, s5.closed && s5.bar, JSON.stringify(s5));
+        const st5 = await measureCircleState(page, dim);
+        record(`${label} 閉じたまま検索し直した直後も、出発駅が地図全体の真ん中（3px以内）`, st5.depOffsetPx <= 3, desc(st5));
+
+        // ---- 開く ----
+        await clickElementChecked(page, 'results-list-open-btn', `${label} 「☰ 一覧を開く」`);
+        await waitSettled();
+        const reopened = await page.evaluate(() => !document.getElementById('app-layout').classList.contains('results-list-closed')
+          && document.getElementById('results-list').offsetParent !== null);
+        record(`${label} 「☰ 一覧を開く」を押すとパネルが開く`, reopened);
+        const st6 = await measureCircleState(page, dim);
+        record(`${label} 開き直したとき：出発駅が見えている範囲の真ん中（3px以内）、円は検索した直後と同じ（差0.02以内）`,
+          st6.depOffsetPx <= 3 && Math.abs(st6.ratio - st1.ratio) <= 0.02, desc(st6));
+
+        // ---- （3D）閉じた状態で詳細から一覧に戻ると開く ----
+        if (dim === '3d') {
+          await page.locator('.spot-card').first().click();
+          await page.waitForFunction(() => document.getElementById('app-layout').getAttribute('data-view') === 'detail', { timeout: 10000 });
+          await page.waitForTimeout(500);
+          await clickElementChecked(page, 'results-list-close-btn', `${label} 詳細を出したまま「◀」`);
+          await page.waitForTimeout(300);
+          await page.evaluate(() => window.history.back());
+          const back = await page.waitForFunction(() => document.getElementById('app-layout').getAttribute('data-view') === 'results', { timeout: 10000 }).then(() => true).catch(() => false);
+          await page.waitForTimeout(300);
+          const s7 = await page.evaluate(() => !document.getElementById('app-layout').classList.contains('results-list-closed'));
+          record(`${label} 一覧を閉じた状態で詳細から一覧に戻ると、パネルが開く`, back && s7, JSON.stringify({ back, open: s7 }));
+        }
+        record(`${label} コンソールにエラーが出ない`, errors.length === 0, errors.join(' | '));
+      } catch (e) {
+        record(`${label} 検証中にクラッシュしない`, false, e.message);
+      } finally {
+        await context.close();
+      }
+    }
+  }
+}
+
 async function searchExactStation(page, stationName, budget, isMobile) {
   await ensureFormExpanded(page);
   await fillDeparture(page, '');
@@ -8949,6 +9196,9 @@ async function searchExactStation(page, stationName, budget, isMobile) {
   await page.click('#search-btn');
   await page.waitForSelector('.spot-card, .no-results', { timeout: 15000, state: 'attached' });
   await page.waitForFunction((n) => (window.__maxBudgetPrefetchAppliedCount || 0) > n, before, { timeout: 20000 }).catch(() => {});
+  // 【58本目】PCでは「この条件で探す」の場所に検索後は一覧のカードが来るため、マウスがカードの上に残り、そのピンが
+  // 強調（一番上・大きく）されたままになる。地図の外（ヘッダーの左上）へ動かしておく。
+  await page.mouse.move(5, 5);
   await page.waitForTimeout(300);
   if (isMobile) {
     await showMapTab(page);
@@ -10147,6 +10397,7 @@ async function main() {
     await runWithFreshBrowser(checkRound54, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound56, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound57, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkRound58, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBreadcrumbTrail, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBudgetSlider, baseUrl, savedPaths);
     await runWithFreshBrowser(checkWaveRevealAndCircleScreenshots, baseUrl, savedPaths);

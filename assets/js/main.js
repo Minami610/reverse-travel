@@ -47,9 +47,10 @@ function formatBandLabel(budget) {
 /**
  * 【2026-10-24、51本目、Minami決定】一覧の上の見出し（例: budget=800・12件 → "¥601〜¥800 の場所　12か所"）。
  * 一覧に今出ている金額帯と、その中の数。
+ * 【58本目】PCの一覧パネルでは金額帯を左、数を右に出す（見本②）ため、2つのspanに分ける（文字は51本目のまま）。
  */
-function formatBandHeading(budget, count) {
-  return `¥${formatThousands(budget - BAND_WIDTH + 1)}〜¥${formatThousands(budget)} の場所　${count}か所`;
+function bandHeadingHtml(budget, count) {
+  return `<span class="band-heading-range">¥${formatThousands(budget - BAND_WIDTH + 1)}〜¥${formatThousands(budget)} の場所</span><span class="band-heading-count">　${count}か所</span>`;
 }
 
 /** 数字を3桁区切りにする（例: 1740 → "1,740"。「この先へ」の運賃表記用） */
@@ -220,6 +221,13 @@ class ReverseTravel {
       bandHeading: document.getElementById('results-band-heading'),
       mapLegend: document.getElementById('map-legend'),
       mapNewCount: document.getElementById('map-new-count'),
+      // 【58本目】PCの結果画面（左の一覧パネル・閉じたときの細いバー）
+      resultsListCloseBtn: document.getElementById('results-list-close-btn'),
+      resultsListOpenBtn: document.getElementById('results-list-open-btn'),
+      resultsDeparture: document.getElementById('results-departure'),
+      resultsBudgetValue: document.getElementById('results-budget-value'),
+      resultsMapCount: document.getElementById('results-map-count'),
+      resultsNewCount: document.getElementById('results-new-count'),
       resultsList: document.getElementById('results-list'),
       detailContent: document.getElementById('detail-content'),
       detailContainer: document.getElementById('detail-container'),
@@ -765,6 +773,8 @@ class ReverseTravel {
     const distanceEl = this.elements.mobileBudgetDistance;
     if (!btn) return;
     const pending = this.lastSearchedBudget !== null && budget !== this.lastSearchedBudget;
+    // 【58本目】PCの一覧パネル・細いバーの−と＋の間の金額（今の金額）
+    if (this.elements.resultsBudgetValue) this.elements.resultsBudgetValue.textContent = `¥${formatThousands(budget)}`;
     const radiusKm = this.mapView.computeReachRadiusKm(budget);
     const distanceText = `最大${formatReachRadiusKm(radiusKm)}`;
     if (pending) {
@@ -893,6 +903,15 @@ class ReverseTravel {
     if (tag) {
       tag.textContent = `NEW +${newCount}`;
       tag.hidden = newCount === 0;
+    }
+    // 【58本目】PCの一覧パネル・細いバーの「42か所」（今地図に出ている場所＝今の金額までの場所）と「NEW +8」
+    if (this.elements.resultsMapCount) {
+      const shown = spots.filter((s) => isFiniteNumber(s.latitude) && isFiniteNumber(s.longitude) && s.source_round_trip_fare <= liveBudget).length;
+      this.elements.resultsMapCount.textContent = `${shown}か所`;
+    }
+    if (this.elements.resultsNewCount) {
+      this.elements.resultsNewCount.textContent = `NEW +${newCount}`;
+      this.elements.resultsNewCount.hidden = newCount === 0;
     }
     const spotById = new Map(spots.map((s) => [s.id, s]));
     this.elements.resultsList.querySelectorAll('.spot-card').forEach((card) => {
@@ -1458,7 +1477,7 @@ class ReverseTravel {
     // 検索した結果が0件なのかが分かるよう常に表示する。
     if (this.elements.bandHeading) {
       // 【51本目、Minami決定】「¥601〜¥800 の場所　12か所」（一覧に今出ている金額帯と、その中の数）。
-      this.elements.bandHeading.textContent = formatBandHeading(budget, spots.length);
+      this.elements.bandHeading.innerHTML = bandHeadingHtml(budget, spots.length);
       this.elements.bandHeading.hidden = false;
     }
 
@@ -1672,6 +1691,10 @@ class ReverseTravel {
     };
     this.elements.mapZoomIn?.addEventListener('click', () => zoomBy(1));
     this.elements.mapZoomOut?.addEventListener('click', () => zoomBy(-1));
+
+    // 【58本目】PCの結果画面：パネルの右の縁の「◀」で一覧を閉じ、細いバーの下の「☰ 一覧を開く」で開く
+    this.elements.resultsListCloseBtn?.addEventListener('click', () => this.setResultsListOpen(false));
+    this.elements.resultsListOpenBtn?.addEventListener('click', () => this.setResultsListOpen(true));
 
     // スマホのヘッダーの「☰」：使い方・2D / 3D・マイリストを出す。メニューの外を押したら閉じる。
     this.elements.headerMenuBtn?.addEventListener('click', (e) => {
@@ -2556,6 +2579,20 @@ class ReverseTravel {
     if (!this.elements.searchSummaryText) return;
     const name = this.data.stations?.[departureStationId]?.display_name || this.lastSearchedDepartureText || '';
     this.elements.searchSummaryText.textContent = `${name}・往復¥${formatThousands(budget)}`;
+    // 【58本目】PCの一覧パネルは「出発：○○」、閉じたときの細いバーは「○○から」（見本②③。CSSで出し分ける）
+    const dep = this.elements.resultsDeparture;
+    if (dep) {
+      const openText = document.createElement('span');
+      openText.className = 'results-departure-open';
+      openText.append('出発：');
+      const b = document.createElement('b');
+      b.textContent = name;
+      openText.append(b);
+      const closedText = document.createElement('span');
+      closedText.className = 'results-departure-closed';
+      closedText.textContent = `${name}から`;
+      dep.replaceChildren(openText, closedText);
+    }
   }
 
   /**
@@ -2649,6 +2686,22 @@ class ReverseTravel {
     this.restoreCameraSnapshot(this._cameraSnapshotBeforeFormEdit);
     this._cameraSnapshotBeforeFormEdit = null;
     this.setFormCollapsed(true);
+  }
+
+  /**
+   * 【2026-10-26、58本目】PCの結果画面で、左の一覧パネルを開く・閉じる（閉じると地図の左上の細いバー、見本②③）。
+   * 見えている範囲（57本目のア）が変わるため、地図が最後に円に合わせたときのままなら、新しい見えている範囲の
+   * 真ん中へ出発駅を合わせ直す（map-view.js・terrain-map-view.jsのhandleVisibleAreaChanged()）。
+   * ＋−・検索し直し・「条件を変える」をまたいで状態は変えない（layout-controller.jsが覚えている）。
+   * @param {boolean} open
+   */
+  setResultsListOpen(open) {
+    if (!this.layoutController?.setResultsListOpen(open)) return;
+    this.updateSpotInfoPanelMaxWidth();
+    requestAnimationFrame(() => {
+      this.mapView.handleVisibleAreaChanged();
+      this.terrainMapView?.handleVisibleAreaChanged();
+    });
   }
 
   setFormCollapsed(collapsed) {
@@ -2760,6 +2813,8 @@ class ReverseTravel {
     // 動きの長さは今までどおり0.6秒（「全体を見る」の1.5秒より短い、画面切替に伴う戻り）。
     // 2Dは詳細画面を開いても地図の中心・ズームを変えない（ピンを押したときの
     // revealAboveBand()も、ズームはそのままずらすだけ）ため、ここでは何もしない。
+    // 【58本目】一覧を閉じているときはパネルを開く（3Dの合わせ直しより前に開き、開いた見えている範囲で合わせる）。
+    this.setResultsListOpen(true);
     if (this.terrainMapView?.map) {
       this.terrainMapView.returnToSearchView({ durationMs: 600 });
     }
@@ -2846,6 +2901,8 @@ class ReverseTravel {
    */
   async showSpotDetail(spot, { scrollTo = 'top' } = {}) {
     this._currentDetailSpot = spot; // 詳細画面の☆・共有ボタンから参照する
+    // 【58本目】詳細は一覧パネルの中に出すため、PCで一覧を閉じているときは開く
+    this.setResultsListOpen(true);
     const routeInfoHtml = this.routeFormatter && this.currentDepartureStationId
       ? this.routeFormatter.format(this.currentDepartureStationId, spot)
       : '';

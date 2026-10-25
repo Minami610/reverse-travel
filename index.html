@@ -216,19 +216,34 @@
       <!-- 結果の入れ物（56本目は仮置き：今の一覧と＋−をそのまま白い入れ物に入れる。見た目は57・58本目で作る）。
            PCは地図の左、スマホは地図の下。結果の画面では金額を変えるのは＋−だけ（スライダーは出さない）。 -->
       <div class="layout-right results-panel" data-map-overlay>
+        <!-- 【58本目】PCだけ：パネルの右の縁の「◀」。押すと一覧を閉じ、地図の左上の細いバーになる（見本③） -->
+        <button type="button" id="results-list-close-btn" class="results-list-close-btn" aria-label="一覧を閉じる" title="一覧を閉じる">◀</button>
+        <!-- 【58本目】PCだけ：一覧を閉じているとき、細いバーのすぐ下に出す「☰ 一覧を開く」（バーと一緒に動くようパネルの中に置く） -->
+        <button type="button" id="results-list-open-btn" class="results-list-open-btn">☰ 一覧を開く</button>
         <div id="search-summary" class="search-summary" hidden>
           <span id="search-summary-text"></span>
-          <button type="button" id="search-summary-toggle" aria-expanded="false">▼条件を変える</button>
+          <!-- 【58本目】PCだけ：開いているときは「出発：○○」、閉じているときは「○○から」（main.jsのupdateSearchSummaryText()） -->
+          <span id="results-departure" class="results-departure"></span>
+          <button type="button" id="search-summary-toggle" aria-expanded="false"><span class="summary-toggle-arrow">▼</span>条件を変える</button>
         </div>
 
         <!-- 結果の画面の＋−（PC・スマホ共通。26本目の予算操作帯）。スライダーは置かない。 -->
         <div id="mobile-budget-overlay" class="mobile-budget-overlay" hidden>
           <button type="button" id="mobile-budget-decrement" aria-label="予算を100円減らす">−</button>
+          <!-- 【58本目】PCだけ：−と＋の間に今の金額、右に地図に出ている場所の数と「NEW +8」（見本②③） -->
+          <span class="results-budget-amount"><span class="results-budget-label">予算（往復）</span><span id="results-budget-value"></span></span>
           <button type="button" id="mobile-budget-increment" aria-label="予算を100円増やす">＋</button>
+          <span class="results-counts"><span id="results-map-count"></span><span id="results-new-count" class="new-tag" hidden></span></span>
           <!-- 【2026-10-14、25本目】まだこの金額で検索していない（ボタンが「¥◯で探す」のとき）だけ距離を出す。 -->
           <span id="mobile-budget-distance" hidden></span>
           <button type="button" id="mobile-budget-search-btn"></button>
         </div>
+
+        <!-- 【58本目】PCだけ：色の説明（PCの結果画面では地図の上の中央の色の説明の代わりにここへ出す） -->
+        <p class="results-legend" aria-hidden="true">
+          <span class="map-legend-item"><span class="map-legend-dot map-legend-dot-blue"></span>みちどころ</span>
+          <span class="map-legend-item"><span class="map-legend-dot map-legend-dot-orange"></span>NEW</span>
+        </p>
 
         <div id="results-container">
           <h2 id="results-band-heading" class="results-band-heading" hidden></h2>
@@ -253,6 +268,9 @@
 
         <p class="data-line"><button type="button" class="data-line-btn" data-open-about>データ出典・免責</button></p>
       </div>
+
+      <!-- 【58本目】PCだけ：一覧を閉じている間の「データ出典・免責」（地図の右下の出典の文字の近く。結果画面ではいつも見える） -->
+      <p id="map-data-line" class="map-data-line"><button type="button" class="data-line-btn" data-open-about>データ出典・免責</button></p>
 
     </div>
   </div>

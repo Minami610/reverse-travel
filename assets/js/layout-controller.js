@@ -27,6 +27,8 @@ export function getMapOverlayRects() {
   const out = [];
   document.querySelectorAll(OVERLAY_SELECTOR).forEach((el) => {
     if (el.hidden) return;
+    // 【58本目】PCで一覧を閉じたときの細いバー（data-map-overlay="bar"）は、地図を覆う入れ物ではなく、円が避ける部品として扱う
+    if (el.getAttribute('data-map-overlay') === 'bar') return;
     const cs = getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden') return;
     const r = el.getBoundingClientRect();
@@ -47,9 +49,14 @@ export class LayoutController {
     this.mediaQuery = window.matchMedia(DESKTOP_QUERY);
 
     this.mediaQuery.addEventListener('change', () => {
+      this._applyResultsListState();
       this.updateInsets();
       this.invalidateMapSize();
     });
+    // 【58本目】PCの結果画面で、左の一覧パネルを開いているか（閉じると地図の左上の細いバーになる）。
+    // ＋−・検索し直し・「条件を変える」をまたいで覚えておく。スマホには関係しない（59本目）。
+    this._resultsListOpen = true;
+    this._resultsPanel = document.querySelector('.results-panel');
     window.addEventListener('resize', () => this.updateInsets());
     // 入れ物の大きさ・出し入れが変わったら、地図の下側の余白を測り直す。
     if (typeof ResizeObserver === 'function') {
@@ -75,6 +82,34 @@ export class LayoutController {
 
   isDesktop() {
     return this.mediaQuery.matches;
+  }
+
+  /** 【58本目】PCの結果画面で、左の一覧パネルを開いているか。 */
+  isResultsListOpen() {
+    return this._resultsListOpen;
+  }
+
+  /**
+   * 【58本目】PCの結果画面で、左の一覧パネルを開く・閉じる（#app-layoutの.results-list-closed）。
+   * 閉じている間、パネルは地図の左上の細いバーになり、地図を覆う入れ物（見えている範囲から除く）ではなく、
+   * 円が避ける部品になる（data-map-overlay="bar"。map-view.js・terrain-map-view.jsのvisibleMapRect()と
+   * circleObstacleRects()）。
+   * @param {boolean} open
+   * @returns {boolean} 変わったか
+   */
+  setResultsListOpen(open) {
+    if (this._resultsListOpen === open) return false;
+    this._resultsListOpen = open;
+    this._applyResultsListState();
+    this.updateInsets();
+    return true;
+  }
+
+  _applyResultsListState() {
+    const closed = !this._resultsListOpen && this.isDesktop();
+    this.layoutEl?.classList.toggle('results-list-closed', closed);
+    if (this._resultsPanel) this._resultsPanel.setAttribute('data-map-overlay', closed ? 'bar' : '');
+    if (this._mutationObserver) this._mutationObserver.takeRecords();
   }
 
   /** 地図の上に重ねている入れ物の四角（getMapOverlayRects()と同じ）。 */
@@ -109,6 +144,29 @@ export class LayoutController {
       this.layoutEl.style.setProperty('--map-controls-room', roomValue);
     }
     this.fitSearchCard();
+    this.placeMapDataLine();
+  }
+
+  /**
+   * 【58本目】PCで一覧を閉じている間の「データ出典・免責」（#map-data-line）を、地図の右下の出典の文字の
+   * すぐ左に置く（出典は開くと横に広がるため、出典の左の端から測る。#app-layoutの--map-attrib-room）。
+   */
+  placeMapDataLine() {
+    if (!this.layoutEl || !this.mapEl) return;
+    const mode3d = this.mapEl.classList.contains('mode-3d');
+    const attrib = this.mapEl.querySelector(mode3d ? '#spots-map-3d .maplibregl-ctrl-attrib' : '#spots-map .leaflet-control-attribution');
+    if (attrib && this._resizeObserver && !attrib.dataset.layoutObserved) {
+      // 出典を開く・閉じると幅が変わる。そのたびに置き直す。
+      attrib.dataset.layoutObserved = '1';
+      this._resizeObserver.observe(attrib);
+    }
+    const map = this.mapEl.getBoundingClientRect();
+    const b = attrib?.getBoundingClientRect();
+    const room = b && b.width > 0 ? Math.round(map.right - b.left + 8) : 40;
+    const value = `${Math.max(0, room)}px`;
+    if (this.layoutEl.style.getPropertyValue('--map-attrib-room') !== value) {
+      this.layoutEl.style.setProperty('--map-attrib-room', value);
+    }
   }
 
   /**

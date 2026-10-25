@@ -3724,6 +3724,413 @@ body {
   }
 }
 
+/* ========================================
+   【2026-10-26、58本目】PCの結果画面（見本②：左の一覧パネル、見本③：閉じたときの上の細いバー）
+   スマホ（759px以下）の結果画面は59本目で作るため、ここでは何も変えない（PCだけの部品はスマホでは出さない）。
+   ======================================== */
+.results-list-close-btn,
+.results-list-open-btn,
+.map-data-line,
+.results-legend,
+.results-departure,
+.results-budget-amount,
+.results-counts {
+  display: none;
+}
+
+@media (min-width: 760px) {
+  /* パネルの右の縁の「◀」をパネルの外にはみ出して出すため、パネル自体は切り取らない（中の一覧がスクロールする） */
+  .results-panel {
+    overflow: visible;
+    padding: 14px 16px 6px;
+  }
+
+  .results-list-close-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    top: 36px;
+    right: -18px;
+    width: 18px;
+    height: 44px;
+    padding: 0;
+    border: none;
+    border-radius: 0 8px 8px 0;
+    background: white;
+    box-shadow: 3px 2px 6px rgba(0, 0, 0, 0.15);
+    color: var(--color-text-sub);
+    font-size: 10px;
+    cursor: pointer;
+  }
+
+  .results-list-close-btn:hover {
+    color: var(--color-text);
+  }
+
+  /* 1行目：「出発：○○」と「条件を変える」（小さな灰色の文字） */
+  .results-panel .search-summary {
+    margin: 0 0 10px;
+    padding: 0;
+    background: none;
+    box-shadow: none;
+    border-radius: 0;
+    font-size: 0.85rem;
+    font-weight: 400;
+  }
+
+  .results-panel #search-summary-text,
+  .results-panel .summary-toggle-arrow,
+  .results-departure-closed {
+    display: none;
+  }
+
+  .results-departure {
+    display: inline;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-text-sub);
+  }
+
+  .results-departure b {
+    color: var(--color-text);
+    font-weight: 800;
+  }
+
+  .results-panel #search-summary-toggle {
+    padding: 0;
+    color: var(--color-text-sub);
+    font-size: 0.72rem;
+    font-weight: 400;
+  }
+
+  .results-panel #search-summary-toggle:hover {
+    color: var(--color-text);
+    text-decoration: underline;
+  }
+
+  /* 2行目：−・「予算（往復）」¥800・＋、右に「42か所」「NEW +8」 */
+  .results-panel .mobile-budget-overlay {
+    flex-wrap: wrap;
+    height: auto;
+    margin: 0 0 8px;
+    padding: 0;
+    gap: 8px;
+    border: none;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  .results-panel .mobile-budget-overlay #mobile-budget-decrement,
+  .results-panel .mobile-budget-overlay #mobile-budget-increment {
+    width: 34px;
+    height: 34px;
+    border: 2px solid var(--color-accent);
+    color: var(--color-accent);
+    font-size: 1.25rem;
+    line-height: 1;
+  }
+
+  .results-panel .mobile-budget-overlay #mobile-budget-increment {
+    background: var(--color-accent);
+    color: white;
+  }
+
+  .results-budget-amount {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.1;
+  }
+
+  .results-budget-label {
+    font-size: 0.62rem;
+    color: var(--color-text-sub);
+  }
+
+  #results-budget-value {
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: var(--color-text);
+    white-space: nowrap;
+  }
+
+  .results-counts {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 3px;
+    margin-left: auto;
+  }
+
+  #results-map-count {
+    font-size: 1.05rem;
+    font-weight: 800;
+    color: var(--color-text);
+    white-space: nowrap;
+  }
+
+  /* 金額を変えて、まだその金額で検索していないときだけ「¥◯で探す」を次の行に出す（一覧を更新するのはこのボタン） */
+  .results-panel #mobile-budget-search-btn:not(.mobile-budget-search-btn-pending) {
+    display: none;
+  }
+
+  .results-panel #mobile-budget-search-btn {
+    order: 10;
+    max-width: none;
+  }
+
+  .results-panel #mobile-budget-distance {
+    order: 11;
+  }
+
+  /* 3行目：色の説明（PCの結果画面では地図の上の中央の色の説明の代わり） */
+  .results-legend {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 10px;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 16px;
+    color: #333;
+  }
+
+  #app-layout.has-results.form-collapsed .map-legend {
+    display: none;
+  }
+
+  /* 見出し「¥601〜¥800 の場所」と右に「12か所」、下に紺の線。一覧だけがパネルの中でスクロールする */
+  .results-panel #results-container {
+    overflow: hidden;
+  }
+
+  .results-panel .results-band-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin: 0 0 6px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid #1f3c88;
+    color: var(--color-text);
+    font-size: 0.95rem;
+    font-weight: 800;
+  }
+
+  .results-panel .results-band-heading[hidden] {
+    display: none;
+  }
+
+  .band-heading-count {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--color-text-sub);
+    white-space: nowrap;
+  }
+
+  .results-panel #sort-controls {
+    margin-bottom: 4px;
+    font-size: 0.75rem;
+  }
+
+  .results-panel #sort-select {
+    padding: 0.15rem 0.4rem;
+    font-size: 0.75rem;
+  }
+
+  .results-panel #results-list {
+    gap: 0;
+  }
+
+  /* 一覧のカード：中身は今のまま、写真を左に小さく、名前・運賃などを右に並べる（見本②の並び） */
+  .results-panel .spot-card {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr) auto;
+    column-gap: 10px;
+    align-items: start;
+    min-height: 0;
+    padding: 10px 2px;
+    border-bottom: 1px solid var(--color-border);
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .results-panel .spot-card:hover {
+    transform: none;
+    box-shadow: none;
+  }
+
+  .results-panel .spot-card > * {
+    grid-column: 2 / 4;
+  }
+
+  .results-panel .spot-card .spot-image {
+    grid-column: 1;
+    grid-row: 1 / span 4;
+    width: 64px;
+    height: 64px;
+    border-radius: 8px;
+  }
+
+  .results-panel .spot-card .spot-image-placeholder {
+    font-size: 1.4rem;
+  }
+
+  .results-panel .spot-card h3 {
+    grid-column: 2;
+    grid-row: 1;
+    padding: 0;
+    font-size: 0.9rem;
+  }
+
+  .results-panel .spot-card-actions {
+    position: static;
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    gap: 2px;
+  }
+
+  /* ☆・共有は押しやすさのため44px四方のまま（影だけ消す） */
+  .results-panel .spot-card .favorite-btn,
+  .results-panel .spot-card .share-btn {
+    box-shadow: none;
+  }
+
+  /* 「NEW」は今までどおり写真の左上に重ねる（51本目） */
+  .results-panel .spot-card-new {
+    top: 8px;
+    left: 0;
+    padding: 0 4px;
+    font-size: 10px;
+    line-height: 15px;
+  }
+
+  .results-panel .spot-card .spot-summary {
+    grid-column: 2;
+    grid-row: 2;
+    padding: 0;
+    margin: 2px 0;
+    font-size: 0.8rem;
+  }
+
+  .results-panel .spot-card .spot-description {
+    padding: 0;
+    margin: 0 0 2px;
+    font-size: 0.75rem;
+    -webkit-line-clamp: 1;
+  }
+
+  .results-panel .spot-card .support-badge {
+    padding: 2px 0 0;
+  }
+
+  .results-panel .spot-card .support-badge-note {
+    margin: 4px 0;
+    font-size: 0.72rem;
+  }
+
+  .results-panel .spot-card .spot-frequency-note {
+    padding: 0;
+    margin: 0 0 2px;
+    font-size: 0.7rem;
+  }
+
+  .results-panel .spot-card .detail-btn {
+    justify-self: end;
+    width: auto;
+    margin-top: 2px;
+    padding: 2px 12px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+  }
+
+  /* ---- 一覧を閉じたとき（見本③）：パネルが地図の左上の細いバー1本になる ---- */
+  #app-layout.has-results.form-collapsed.results-list-closed .results-panel {
+    bottom: auto;
+    width: auto;
+    max-width: calc(100% - 24px);
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+    padding: 8px 16px;
+  }
+
+  #app-layout.results-list-closed .results-panel #results-container,
+  #app-layout.results-list-closed .results-panel #detail-container,
+  #app-layout.results-list-closed .results-panel > .data-line,
+  #app-layout.results-list-closed .results-panel #search-summary-toggle,
+  #app-layout.results-list-closed .results-panel #mobile-budget-search-btn,
+  #app-layout.results-list-closed .results-panel #mobile-budget-distance,
+  #app-layout.results-list-closed .results-list-close-btn,
+  #app-layout.results-list-closed .results-departure-open {
+    display: none;
+  }
+
+  #app-layout.results-list-closed .results-departure-closed {
+    display: inline;
+  }
+
+  #app-layout.results-list-closed .results-panel .search-summary,
+  #app-layout.results-list-closed .results-panel .mobile-budget-overlay,
+  #app-layout.results-list-closed .results-legend {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    margin: 0;
+  }
+
+  #app-layout.results-list-closed .results-departure {
+    font-size: 0.8rem;
+  }
+
+  /* 「42か所」と「NEW +8」は、閉じたときは横に並べる */
+  #app-layout.results-list-closed .results-counts {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    margin-left: 4px;
+  }
+
+  /* 「☰ 一覧を開く」はバーのすぐ下（バーと一緒に動くようパネルの中に置いてある） */
+  #app-layout.results-list-closed .results-list-open-btn {
+    display: block;
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    padding: 5px 12px;
+    border: none;
+    border-radius: 8px;
+    background: white;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+    color: var(--color-text);
+    font-size: 0.78rem;
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  /* 閉じている間の「データ出典・免責」：地図の右下の出典の文字のすぐ左（layout-controller.jsが--map-attrib-roomを測る） */
+  #app-layout.has-results.form-collapsed.results-list-closed .map-data-line {
+    display: block;
+    position: absolute;
+    right: var(--map-attrib-room, 40px);
+    bottom: 3px;
+    z-index: 1000;
+    margin: 0;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+    font-size: 0.72rem;
+  }
+
+  /* 名前の帯：閉じている間は、検索前と同じ位置 */
+  #app-layout.has-results.form-collapsed.results-list-closed .spot-info-panel {
+    left: 90px;
+  }
+}
+
 </style>
 </head>
 <body>
@@ -3924,19 +4331,34 @@ body {
       <!-- 結果の入れ物（56本目は仮置き：今の一覧と＋−をそのまま白い入れ物に入れる。見た目は57・58本目で作る）。
            PCは地図の左、スマホは地図の下。結果の画面では金額を変えるのは＋−だけ（スライダーは出さない）。 -->
       <div class="layout-right results-panel" data-map-overlay>
+        <!-- 【58本目】PCだけ：パネルの右の縁の「◀」。押すと一覧を閉じ、地図の左上の細いバーになる（見本③） -->
+        <button type="button" id="results-list-close-btn" class="results-list-close-btn" aria-label="一覧を閉じる" title="一覧を閉じる">◀</button>
+        <!-- 【58本目】PCだけ：一覧を閉じているとき、細いバーのすぐ下に出す「☰ 一覧を開く」（バーと一緒に動くようパネルの中に置く） -->
+        <button type="button" id="results-list-open-btn" class="results-list-open-btn">☰ 一覧を開く</button>
         <div id="search-summary" class="search-summary" hidden>
           <span id="search-summary-text"></span>
-          <button type="button" id="search-summary-toggle" aria-expanded="false">▼条件を変える</button>
+          <!-- 【58本目】PCだけ：開いているときは「出発：○○」、閉じているときは「○○から」（main.jsのupdateSearchSummaryText()） -->
+          <span id="results-departure" class="results-departure"></span>
+          <button type="button" id="search-summary-toggle" aria-expanded="false"><span class="summary-toggle-arrow">▼</span>条件を変える</button>
         </div>
 
         <!-- 結果の画面の＋−（PC・スマホ共通。26本目の予算操作帯）。スライダーは置かない。 -->
         <div id="mobile-budget-overlay" class="mobile-budget-overlay" hidden>
           <button type="button" id="mobile-budget-decrement" aria-label="予算を100円減らす">−</button>
+          <!-- 【58本目】PCだけ：−と＋の間に今の金額、右に地図に出ている場所の数と「NEW +8」（見本②③） -->
+          <span class="results-budget-amount"><span class="results-budget-label">予算（往復）</span><span id="results-budget-value"></span></span>
           <button type="button" id="mobile-budget-increment" aria-label="予算を100円増やす">＋</button>
+          <span class="results-counts"><span id="results-map-count"></span><span id="results-new-count" class="new-tag" hidden></span></span>
           <!-- 【2026-10-14、25本目】まだこの金額で検索していない（ボタンが「¥◯で探す」のとき）だけ距離を出す。 -->
           <span id="mobile-budget-distance" hidden></span>
           <button type="button" id="mobile-budget-search-btn"></button>
         </div>
+
+        <!-- 【58本目】PCだけ：色の説明（PCの結果画面では地図の上の中央の色の説明の代わりにここへ出す） -->
+        <p class="results-legend" aria-hidden="true">
+          <span class="map-legend-item"><span class="map-legend-dot map-legend-dot-blue"></span>みちどころ</span>
+          <span class="map-legend-item"><span class="map-legend-dot map-legend-dot-orange"></span>NEW</span>
+        </p>
 
         <div id="results-container">
           <h2 id="results-band-heading" class="results-band-heading" hidden></h2>
@@ -3961,6 +4383,9 @@ body {
 
         <p class="data-line"><button type="button" class="data-line-btn" data-open-about>データ出典・免責</button></p>
       </div>
+
+      <!-- 【58本目】PCだけ：一覧を閉じている間の「データ出典・免責」（地図の右下の出典の文字の近く。結果画面ではいつも見える） -->
+      <p id="map-data-line" class="map-data-line"><button type="button" class="data-line-btn" data-open-about>データ出典・免責</button></p>
 
     </div>
   </div>
@@ -5495,9 +5920,10 @@ const MAP_CIRCLE_ZOOM_IN_TARGET_RATIO = 0.85;
 // （39本目の決まり。実測：400×464の3Dで0.85→0.67に縮んだ）。
 // 【57本目、Minami決定：ア】予算操作帯（#mobile-budget-overlay）は結果の入れ物の一部として扱い、ここからは外した
 // （入れ物ごと「見えている範囲」から除く。visibleMapRect()）。ここに残す部品は、見えている範囲の中で4px避ける。
+// 【58本目】PCで一覧を閉じたときの細いバー・「☰ 一覧を開く」、開いているときのパネルの右の縁の「◀」も避ける。
 const MAP_CIRCLE_OBSTACLE_SELECTORS = [
   '#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle', '#map-dimension-toggle',
-  '#map-zoom-controls',
+  '#map-zoom-controls', '[data-map-overlay="bar"]', '#results-list-open-btn', '#results-list-close-btn',
 ];
 const MAP_CIRCLE_OBSTACLE_GAP_PX = 4;
 
@@ -5520,6 +5946,8 @@ function visibleMapRect(container) {
   const area = (v) => Math.max(0, v.right - v.left) * Math.max(0, v.bottom - v.top);
   document.querySelectorAll('[data-map-overlay]').forEach((el) => {
     if (el.hidden) return;
+    // 【58本目】PCで一覧を閉じたときの細いバー（data-map-overlay="bar"）は、覆う入れ物ではなく円が避ける部品
+    if (el.getAttribute('data-map-overlay') === 'bar') return;
     const cs = getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden') return;
     const b = el.getBoundingClientRect();
@@ -6375,6 +6803,11 @@ class MapView {
     if (forceRefit || this._needsSearchFit) {
       this.refitBounds();
       this._needsSearchFit = false;
+      this._pendingVisibleAreaRefit = false;
+    } else if (this._pendingVisibleAreaRefit) {
+      // 【58本目】見えていない間に一覧パネルを開け閉めしていたら、見えたここで合わせ直す
+      this._pendingVisibleAreaRefit = false;
+      this.fitCircleToView({ radiusKm: this._reachCircleRadiusKm, animate: false });
     }
     this.forceMarkerReposition();
     if (this.lastBudget != null) {
@@ -6697,11 +7130,46 @@ class MapView {
     if (reachPrefersReducedMotion() || !animate) {
       this._circleFitAnim = null;
       this.map.setView(center, zoom, { animate: false });
+      this._rememberFitCamera();
     } else {
       this._circleFitAnim = { zoom, endsAt: performance.now() + durationSec * 1000 + 100 };
+      this.map.once('moveend', () => this._rememberFitCamera());
       this.map.flyTo(center, zoom, { duration: durationSec });
     }
     return zoom;
+  }
+
+  /** 【58本目】円に合わせ終えたときの地図の中心・ズーム（開け閉めのとき、そのあと地図が動いたかを見るため）。 */
+  _rememberFitCamera() {
+    if (!this.map) return;
+    this._lastFitCamera = { center: this.map.getCenter(), zoom: this.map.getZoom() };
+  }
+
+  /** 【58本目】地図が、最後に円に合わせたときのまま（利用者が動かしていない・ピンへ寄っていない）か。 */
+  isAtLastCircleFit() {
+    const f = this._lastFitCamera;
+    if (!this.map || !f) return false;
+    if (Math.abs(this.map.getZoom() - f.zoom) > 0.01) return false;
+    const a = this.map.latLngToContainerPoint(f.center);
+    const b = this.map.latLngToContainerPoint(this.map.getCenter());
+    return Math.hypot(a.x - b.x, a.y - b.y) < 2;
+  }
+
+  /**
+   * 【58本目】見えている範囲が変わったとき（PCの一覧パネルを開け閉めしたとき）。地図が最後に円に合わせたときの
+   * ままなら、新しい見えている範囲の真ん中へ出発駅を合わせ直す（円の大きさの決め方・動きの時間は今までの
+   * 地図合わせと同じ）。利用者が地図を動かしたあと（ピンへ寄ったあとを含む）は合わせ直さない（58本目の報告で
+   * 確認中）。地図が見えていない（3D表示中）ときは、次に見えたとき（handleShown()）に合わせ直す。
+   */
+  handleVisibleAreaChanged() {
+    if (!this.map || !this.departureLatLng || !(this._reachCircleRadiusKm > 0)) return;
+    if (!this.isContainerVisible()) {
+      if (this.isAtLastCircleFit()) this._pendingVisibleAreaRefit = true;
+      return;
+    }
+    this._pendingVisibleAreaRefit = false;
+    if (!this.isAtLastCircleFit()) return;
+    this.fitCircleToView({ radiusKm: this._reachCircleRadiusKm });
   }
 
   /**
@@ -7147,6 +7615,8 @@ function getMapOverlayRects() {
   const out = [];
   document.querySelectorAll(OVERLAY_SELECTOR).forEach((el) => {
     if (el.hidden) return;
+    // 【58本目】PCで一覧を閉じたときの細いバー（data-map-overlay="bar"）は、地図を覆う入れ物ではなく、円が避ける部品として扱う
+    if (el.getAttribute('data-map-overlay') === 'bar') return;
     const cs = getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden') return;
     const r = el.getBoundingClientRect();
@@ -7167,9 +7637,14 @@ class LayoutController {
     this.mediaQuery = window.matchMedia(DESKTOP_QUERY);
 
     this.mediaQuery.addEventListener('change', () => {
+      this._applyResultsListState();
       this.updateInsets();
       this.invalidateMapSize();
     });
+    // 【58本目】PCの結果画面で、左の一覧パネルを開いているか（閉じると地図の左上の細いバーになる）。
+    // ＋−・検索し直し・「条件を変える」をまたいで覚えておく。スマホには関係しない（59本目）。
+    this._resultsListOpen = true;
+    this._resultsPanel = document.querySelector('.results-panel');
     window.addEventListener('resize', () => this.updateInsets());
     // 入れ物の大きさ・出し入れが変わったら、地図の下側の余白を測り直す。
     if (typeof ResizeObserver === 'function') {
@@ -7195,6 +7670,34 @@ class LayoutController {
 
   isDesktop() {
     return this.mediaQuery.matches;
+  }
+
+  /** 【58本目】PCの結果画面で、左の一覧パネルを開いているか。 */
+  isResultsListOpen() {
+    return this._resultsListOpen;
+  }
+
+  /**
+   * 【58本目】PCの結果画面で、左の一覧パネルを開く・閉じる（#app-layoutの.results-list-closed）。
+   * 閉じている間、パネルは地図の左上の細いバーになり、地図を覆う入れ物（見えている範囲から除く）ではなく、
+   * 円が避ける部品になる（data-map-overlay="bar"。map-view.js・terrain-map-view.jsのvisibleMapRect()と
+   * circleObstacleRects()）。
+   * @param {boolean} open
+   * @returns {boolean} 変わったか
+   */
+  setResultsListOpen(open) {
+    if (this._resultsListOpen === open) return false;
+    this._resultsListOpen = open;
+    this._applyResultsListState();
+    this.updateInsets();
+    return true;
+  }
+
+  _applyResultsListState() {
+    const closed = !this._resultsListOpen && this.isDesktop();
+    this.layoutEl?.classList.toggle('results-list-closed', closed);
+    if (this._resultsPanel) this._resultsPanel.setAttribute('data-map-overlay', closed ? 'bar' : '');
+    if (this._mutationObserver) this._mutationObserver.takeRecords();
   }
 
   /** 地図の上に重ねている入れ物の四角（getMapOverlayRects()と同じ）。 */
@@ -7229,6 +7732,29 @@ class LayoutController {
       this.layoutEl.style.setProperty('--map-controls-room', roomValue);
     }
     this.fitSearchCard();
+    this.placeMapDataLine();
+  }
+
+  /**
+   * 【58本目】PCで一覧を閉じている間の「データ出典・免責」（#map-data-line）を、地図の右下の出典の文字の
+   * すぐ左に置く（出典は開くと横に広がるため、出典の左の端から測る。#app-layoutの--map-attrib-room）。
+   */
+  placeMapDataLine() {
+    if (!this.layoutEl || !this.mapEl) return;
+    const mode3d = this.mapEl.classList.contains('mode-3d');
+    const attrib = this.mapEl.querySelector(mode3d ? '#spots-map-3d .maplibregl-ctrl-attrib' : '#spots-map .leaflet-control-attribution');
+    if (attrib && this._resizeObserver && !attrib.dataset.layoutObserved) {
+      // 出典を開く・閉じると幅が変わる。そのたびに置き直す。
+      attrib.dataset.layoutObserved = '1';
+      this._resizeObserver.observe(attrib);
+    }
+    const map = this.mapEl.getBoundingClientRect();
+    const b = attrib?.getBoundingClientRect();
+    const room = b && b.width > 0 ? Math.round(map.right - b.left + 8) : 40;
+    const value = `${Math.max(0, room)}px`;
+    if (this.layoutEl.style.getPropertyValue('--map-attrib-room') !== value) {
+      this.layoutEl.style.setProperty('--map-attrib-room', value);
+    }
   }
 
   /**
@@ -7702,9 +8228,10 @@ function formatBandLabel(budget) {
 /**
  * 【2026-10-24、51本目、Minami決定】一覧の上の見出し（例: budget=800・12件 → "¥601〜¥800 の場所　12か所"）。
  * 一覧に今出ている金額帯と、その中の数。
+ * 【58本目】PCの一覧パネルでは金額帯を左、数を右に出す（見本②）ため、2つのspanに分ける（文字は51本目のまま）。
  */
-function formatBandHeading(budget, count) {
-  return `¥${formatThousands(budget - BAND_WIDTH + 1)}〜¥${formatThousands(budget)} の場所　${count}か所`;
+function bandHeadingHtml(budget, count) {
+  return `<span class="band-heading-range">¥${formatThousands(budget - BAND_WIDTH + 1)}〜¥${formatThousands(budget)} の場所</span><span class="band-heading-count">　${count}か所</span>`;
 }
 
 /** 数字を3桁区切りにする（例: 1740 → "1,740"。「この先へ」の運賃表記用） */
@@ -7875,6 +8402,13 @@ class ReverseTravel {
       bandHeading: document.getElementById('results-band-heading'),
       mapLegend: document.getElementById('map-legend'),
       mapNewCount: document.getElementById('map-new-count'),
+      // 【58本目】PCの結果画面（左の一覧パネル・閉じたときの細いバー）
+      resultsListCloseBtn: document.getElementById('results-list-close-btn'),
+      resultsListOpenBtn: document.getElementById('results-list-open-btn'),
+      resultsDeparture: document.getElementById('results-departure'),
+      resultsBudgetValue: document.getElementById('results-budget-value'),
+      resultsMapCount: document.getElementById('results-map-count'),
+      resultsNewCount: document.getElementById('results-new-count'),
       resultsList: document.getElementById('results-list'),
       detailContent: document.getElementById('detail-content'),
       detailContainer: document.getElementById('detail-container'),
@@ -8420,6 +8954,8 @@ class ReverseTravel {
     const distanceEl = this.elements.mobileBudgetDistance;
     if (!btn) return;
     const pending = this.lastSearchedBudget !== null && budget !== this.lastSearchedBudget;
+    // 【58本目】PCの一覧パネル・細いバーの−と＋の間の金額（今の金額）
+    if (this.elements.resultsBudgetValue) this.elements.resultsBudgetValue.textContent = `¥${formatThousands(budget)}`;
     const radiusKm = this.mapView.computeReachRadiusKm(budget);
     const distanceText = `最大${formatReachRadiusKm(radiusKm)}`;
     if (pending) {
@@ -8548,6 +9084,15 @@ class ReverseTravel {
     if (tag) {
       tag.textContent = `NEW +${newCount}`;
       tag.hidden = newCount === 0;
+    }
+    // 【58本目】PCの一覧パネル・細いバーの「42か所」（今地図に出ている場所＝今の金額までの場所）と「NEW +8」
+    if (this.elements.resultsMapCount) {
+      const shown = spots.filter((s) => isFiniteNumber(s.latitude) && isFiniteNumber(s.longitude) && s.source_round_trip_fare <= liveBudget).length;
+      this.elements.resultsMapCount.textContent = `${shown}か所`;
+    }
+    if (this.elements.resultsNewCount) {
+      this.elements.resultsNewCount.textContent = `NEW +${newCount}`;
+      this.elements.resultsNewCount.hidden = newCount === 0;
     }
     const spotById = new Map(spots.map((s) => [s.id, s]));
     this.elements.resultsList.querySelectorAll('.spot-card').forEach((card) => {
@@ -9113,7 +9658,7 @@ class ReverseTravel {
     // 検索した結果が0件なのかが分かるよう常に表示する。
     if (this.elements.bandHeading) {
       // 【51本目、Minami決定】「¥601〜¥800 の場所　12か所」（一覧に今出ている金額帯と、その中の数）。
-      this.elements.bandHeading.textContent = formatBandHeading(budget, spots.length);
+      this.elements.bandHeading.innerHTML = bandHeadingHtml(budget, spots.length);
       this.elements.bandHeading.hidden = false;
     }
 
@@ -9327,6 +9872,10 @@ class ReverseTravel {
     };
     this.elements.mapZoomIn?.addEventListener('click', () => zoomBy(1));
     this.elements.mapZoomOut?.addEventListener('click', () => zoomBy(-1));
+
+    // 【58本目】PCの結果画面：パネルの右の縁の「◀」で一覧を閉じ、細いバーの下の「☰ 一覧を開く」で開く
+    this.elements.resultsListCloseBtn?.addEventListener('click', () => this.setResultsListOpen(false));
+    this.elements.resultsListOpenBtn?.addEventListener('click', () => this.setResultsListOpen(true));
 
     // スマホのヘッダーの「☰」：使い方・2D / 3D・マイリストを出す。メニューの外を押したら閉じる。
     this.elements.headerMenuBtn?.addEventListener('click', (e) => {
@@ -10211,6 +10760,20 @@ class ReverseTravel {
     if (!this.elements.searchSummaryText) return;
     const name = this.data.stations?.[departureStationId]?.display_name || this.lastSearchedDepartureText || '';
     this.elements.searchSummaryText.textContent = `${name}・往復¥${formatThousands(budget)}`;
+    // 【58本目】PCの一覧パネルは「出発：○○」、閉じたときの細いバーは「○○から」（見本②③。CSSで出し分ける）
+    const dep = this.elements.resultsDeparture;
+    if (dep) {
+      const openText = document.createElement('span');
+      openText.className = 'results-departure-open';
+      openText.append('出発：');
+      const b = document.createElement('b');
+      b.textContent = name;
+      openText.append(b);
+      const closedText = document.createElement('span');
+      closedText.className = 'results-departure-closed';
+      closedText.textContent = `${name}から`;
+      dep.replaceChildren(openText, closedText);
+    }
   }
 
   /**
@@ -10304,6 +10867,22 @@ class ReverseTravel {
     this.restoreCameraSnapshot(this._cameraSnapshotBeforeFormEdit);
     this._cameraSnapshotBeforeFormEdit = null;
     this.setFormCollapsed(true);
+  }
+
+  /**
+   * 【2026-10-26、58本目】PCの結果画面で、左の一覧パネルを開く・閉じる（閉じると地図の左上の細いバー、見本②③）。
+   * 見えている範囲（57本目のア）が変わるため、地図が最後に円に合わせたときのままなら、新しい見えている範囲の
+   * 真ん中へ出発駅を合わせ直す（map-view.js・terrain-map-view.jsのhandleVisibleAreaChanged()）。
+   * ＋−・検索し直し・「条件を変える」をまたいで状態は変えない（layout-controller.jsが覚えている）。
+   * @param {boolean} open
+   */
+  setResultsListOpen(open) {
+    if (!this.layoutController?.setResultsListOpen(open)) return;
+    this.updateSpotInfoPanelMaxWidth();
+    requestAnimationFrame(() => {
+      this.mapView.handleVisibleAreaChanged();
+      this.terrainMapView?.handleVisibleAreaChanged();
+    });
   }
 
   setFormCollapsed(collapsed) {
@@ -10415,6 +10994,8 @@ class ReverseTravel {
     // 動きの長さは今までどおり0.6秒（「全体を見る」の1.5秒より短い、画面切替に伴う戻り）。
     // 2Dは詳細画面を開いても地図の中心・ズームを変えない（ピンを押したときの
     // revealAboveBand()も、ズームはそのままずらすだけ）ため、ここでは何もしない。
+    // 【58本目】一覧を閉じているときはパネルを開く（3Dの合わせ直しより前に開き、開いた見えている範囲で合わせる）。
+    this.setResultsListOpen(true);
     if (this.terrainMapView?.map) {
       this.terrainMapView.returnToSearchView({ durationMs: 600 });
     }
@@ -10501,6 +11082,8 @@ class ReverseTravel {
    */
   async showSpotDetail(spot, { scrollTo = 'top' } = {}) {
     this._currentDetailSpot = spot; // 詳細画面の☆・共有ボタンから参照する
+    // 【58本目】詳細は一覧パネルの中に出すため、PCで一覧を閉じているときは開く
+    this.setResultsListOpen(true);
     const routeInfoHtml = this.routeFormatter && this.currentDepartureStationId
       ? this.routeFormatter.format(this.currentDepartureStationId, spot)
       : '';
