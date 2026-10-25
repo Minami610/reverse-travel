@@ -3640,6 +3640,12 @@ body {
   overflow-y: auto;
 }
 
+/* 入れ物がとても低いとき（400×464の3Dなど）も、見出し・並び替えごと中でスクロールし、一番下の「データ出典・免責」の1行に
+   重ならないようにする */
+.results-panel #results-container {
+  overflow-y: auto;
+}
+
 /* 入れ物の幅（PC 400px）では一覧のカードは1列にする */
 .results-panel #results-list {
   grid-template-columns: 1fr;
