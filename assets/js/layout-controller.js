@@ -55,6 +55,9 @@ export class LayoutController {
     if (typeof ResizeObserver === 'function') {
       this._resizeObserver = new ResizeObserver(() => this.updateInsets());
       document.querySelectorAll(OVERLAY_SELECTOR).forEach((el) => this._resizeObserver.observe(el));
+      // 部品の列の高さ（2D/3Dの切り替え・戻るボタンの出し入れで変わる）も見る
+      const cluster = document.getElementById('map-controls-cluster');
+      if (cluster) this._resizeObserver.observe(cluster);
     }
     if (typeof MutationObserver === 'function' && this.layoutEl) {
       // 検索カード⇔結果の入れ物の切り替え（#app-layoutのクラス・hidden属性）でも測り直す。
@@ -93,6 +96,14 @@ export class LayoutController {
     const value = `${Math.max(0, Math.round(insetBottom))}px`;
     if (this.layoutEl.style.getPropertyValue('--map-inset-bottom') !== value) {
       this.layoutEl.style.setProperty('--map-inset-bottom', value);
+    }
+    // 右下の部品の列（ズーム＋−・方位磁針・戻るボタン・ハンドル）と出典が入るのに要る高さ。スマホでは、地図の下に
+    // 重ねる入れ物がこの分を空けて縮む（style.cssの--map-controls-room）。部品の列の高さは2D/3D・検索の前後で変わる。
+    const cluster = document.getElementById('map-controls-cluster');
+    const room = cluster ? Math.round(cluster.getBoundingClientRect().height + 52) : 120;
+    const roomValue = `${room}px`;
+    if (this.layoutEl.style.getPropertyValue('--map-controls-room') !== roomValue) {
+      this.layoutEl.style.setProperty('--map-controls-room', roomValue);
     }
   }
 

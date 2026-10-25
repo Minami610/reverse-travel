@@ -392,6 +392,15 @@ class ReverseTravel {
       this.updateSearchButtonState();
     });
 
+    // 【56本目】候補一覧の外（入力欄・候補一覧以外）を押したら、候補一覧を閉じる。スマホでは候補一覧が入力欄の
+    // 上に開き、検索カードの「▲閉じる」などに重なることがあるため、外を押せば閉じられるようにする。
+    document.addEventListener('click', (e) => {
+      if (!this.elements.departureSuggestions.innerHTML) return;
+      if (e.target === this.elements.departureInput) return;
+      if (this.elements.departureSuggestions.contains(e.target)) return;
+      this.elements.departureSuggestions.innerHTML = '';
+    });
+
     // position:fixedの候補一覧は画面リサイズ（スマホの回転等）に追従しないため、
     // 表示中であれば位置を再計算する
     window.addEventListener('resize', () => {
@@ -1032,8 +1041,11 @@ class ReverseTravel {
     // 【56本目】スマホでは検索カードが画面の下にあり、入力欄の下に候補を出すと画面の外にはみ出す。
     // 下に十分な余地が無く、上のほうが広いときは、入力欄の上に出す。
     const below = window.innerHeight - rect.bottom - 8;
-    const above = rect.top - 8;
-    if (below < 200 && above > below) {
+    // 上に出すときは、ヘッダーの下まで（ヘッダーは検索カードより上に描くため、重なると候補が隠れる）
+    const ceiling = this.elements.appHeader ? this.elements.appHeader.getBoundingClientRect().bottom : 0;
+    const above = rect.top - ceiling - 8;
+    // 候補の箱（最大300px）が下に収まらず、上のほうが広いときは上に出す。
+    if (below < 300 && above > below) {
       box.style.top = 'auto';
       box.style.bottom = `${window.innerHeight - rect.top}px`;
       box.style.maxHeight = `${Math.min(300, above)}px`;

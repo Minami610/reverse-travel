@@ -3328,7 +3328,8 @@ body {
 .map-controls-cluster {
   top: auto;
   right: 10px;
-  bottom: calc(var(--map-inset-bottom, 0px) + 36px);
+  /* 出典（ⓘ、下から34px）の上に8px以上のすき間 */
+  bottom: calc(var(--map-inset-bottom, 0px) + 44px);
 }
 
 .map-zoom-controls {
@@ -3411,7 +3412,9 @@ body {
     left: 8px;
     right: 8px;
     bottom: 8px;
-    max-height: calc(100% - 16px);
+    /* 上に右下の部品の列（ズーム＋−など）と出典が入る余地を残す（--map-controls-room、layout-controller.jsが測る）。
+       入りきらないときは検索カードの中をスクロールする（400×464など）。 */
+    max-height: calc(100% - 16px - var(--map-controls-room, 120px));
     padding: 12px 16px 6px;
   }
 }
@@ -3610,7 +3613,8 @@ body {
     left: 0;
     right: 0;
     bottom: 0;
-    height: 52%;
+    /* 上に右下の部品の列と出典が入る余地を残す（検索カードと同じ） */
+    height: min(52%, calc(100% - var(--map-controls-room, 120px)));
     border-radius: 12px 12px 0 0;
   }
 }
@@ -3639,6 +3643,24 @@ body {
 /* 入れ物の幅（PC 400px）では一覧のカードは1列にする */
 .results-panel #results-list {
   grid-template-columns: 1fr;
+}
+
+/* 【56本目】検索カードが小さい画面（400×464など）で中をスクロールするときも、「データ出典・免責」の1行は
+   いつも見える場所（検索カードの一番下）に留める（必須の表示3点への入り口、決定4：A'）。 */
+.search-card .data-line {
+  position: sticky;
+  bottom: -10px;
+  margin: 8px -20px -10px;
+  padding: 6px 0 8px;
+  background: white;
+}
+
+@media (max-width: 759px) {
+  .search-card .data-line {
+    bottom: -6px;
+    margin: 6px -16px -6px;
+    padding: 6px 0;
+  }
 }
 
 </style>
@@ -7041,6 +7063,9 @@ class LayoutController {
     if (typeof ResizeObserver === 'function') {
       this._resizeObserver = new ResizeObserver(() => this.updateInsets());
       document.querySelectorAll(OVERLAY_SELECTOR).forEach((el) => this._resizeObserver.observe(el));
+      // 部品の列の高さ（2D/3Dの切り替え・戻るボタンの出し入れで変わる）も見る
+      const cluster = document.getElementById('map-controls-cluster');
+      if (cluster) this._resizeObserver.observe(cluster);
     }
     if (typeof MutationObserver === 'function' && this.layoutEl) {
       // 検索カード⇔結果の入れ物の切り替え（#app-layoutのクラス・hidden属性）でも測り直す。
@@ -7079,6 +7104,14 @@ class LayoutController {
     const value = `${Math.max(0, Math.round(insetBottom))}px`;
     if (this.layoutEl.style.getPropertyValue('--map-inset-bottom') !== value) {
       this.layoutEl.style.setProperty('--map-inset-bottom', value);
+    }
+    // 右下の部品の列（ズーム＋−・方位磁針・戻るボタン・ハンドル）と出典が入るのに要る高さ。スマホでは、地図の下に
+    // 重ねる入れ物がこの分を空けて縮む（style.cssの--map-controls-room）。部品の列の高さは2D/3D・検索の前後で変わる。
+    const cluster = document.getElementById('map-controls-cluster');
+    const room = cluster ? Math.round(cluster.getBoundingClientRect().height + 52) : 120;
+    const roomValue = `${room}px`;
+    if (this.layoutEl.style.getPropertyValue('--map-controls-room') !== roomValue) {
+      this.layoutEl.style.setProperty('--map-controls-room', roomValue);
     }
   }
 
@@ -7875,6 +7908,15 @@ class ReverseTravel {
       this.updateSearchButtonState();
     });
 
+    // 【56本目】候補一覧の外（入力欄・候補一覧以外）を押したら、候補一覧を閉じる。スマホでは候補一覧が入力欄の
+    // 上に開き、検索カードの「▲閉じる」などに重なることがあるため、外を押せば閉じられるようにする。
+    document.addEventListener('click', (e) => {
+      if (!this.elements.departureSuggestions.innerHTML) return;
+      if (e.target === this.elements.departureInput) return;
+      if (this.elements.departureSuggestions.contains(e.target)) return;
+      this.elements.departureSuggestions.innerHTML = '';
+    });
+
     // position:fixedの候補一覧は画面リサイズ（スマホの回転等）に追従しないため、
     // 表示中であれば位置を再計算する
     window.addEventListener('resize', () => {
@@ -8515,8 +8557,11 @@ class ReverseTravel {
     // 【56本目】スマホでは検索カードが画面の下にあり、入力欄の下に候補を出すと画面の外にはみ出す。
     // 下に十分な余地が無く、上のほうが広いときは、入力欄の上に出す。
     const below = window.innerHeight - rect.bottom - 8;
-    const above = rect.top - 8;
-    if (below < 200 && above > below) {
+    // 上に出すときは、ヘッダーの下まで（ヘッダーは検索カードより上に描くため、重なると候補が隠れる）
+    const ceiling = this.elements.appHeader ? this.elements.appHeader.getBoundingClientRect().bottom : 0;
+    const above = rect.top - ceiling - 8;
+    // 候補の箱（最大300px）が下に収まらず、上のほうが広いときは上に出す。
+    if (below < 300 && above > below) {
       box.style.top = 'auto';
       box.style.bottom = `${window.innerHeight - rect.top}px`;
       box.style.maxHeight = `${Math.min(300, above)}px`;

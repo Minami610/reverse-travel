@@ -72,6 +72,74 @@ function startServer() {
 }
 
 /**
+ * 【2026-10-25、56本目】2D/3Dの切り替えは地図の上からヘッダーへ移した。スマホでは「☰」の中にあるため、
+ * 見えていなければメニューを開いてから押す（押すとメニューは閉じる）。
+ */
+async function clickDimensionToggle(page) {
+  await clickHeaderItem(page, 'map-dimension-toggle');
+}
+
+/** 【56本目】ヘッダーの「使い方」「2D / 3D」「マイリスト」を押す。スマホでは「☰」の中にあるため、見えていなければ開いてから押す。 */
+async function clickHeaderItem(page, id) {
+  const visible = await page.evaluate((id) => {
+    const el = document.getElementById(id);
+    return !!el && el.offsetParent !== null && el.getBoundingClientRect().width > 0;
+  }, id);
+  if (!visible) {
+    await page.click('#header-menu-btn');
+    await page.waitForTimeout(100);
+  }
+  await page.click(`#${id}`);
+}
+
+/**
+ * 【2026-10-25、56本目】スマホの「一覧／地図」タブはやめた（地図はいつも画面いっぱい、一覧は地図の上の結果の
+ * 入れ物）。以前タブを押していた検証の手順は、ここを呼ぶだけで何もしない（地図・一覧ともいつも見えている）。
+ */
+/**
+ * 【56本目】出発駅の入力欄に文字を入れる。結果の画面ではトップの検索カードが隠れているため、隠れていれば
+ * 「▼条件を変える」で開いてから入れる（ensureFormExpanded()）。
+ */
+async function fillDeparture(page, text) {
+  await ensureFormExpanded(page);
+  await page.fill('#departure-input', text);
+}
+
+/**
+ * 【56本目】2Dで、ほかの部品・入れ物に隠れていない（中心で一番上にある）ピンを1つ選ぶ。地図は画面いっぱいになり、
+ * スマホでは結果の入れ物が地図の下側に重なるため、「見えている最初のピン」が入れ物の下にあることがある。
+ */
+async function uncoveredPin(page) {
+  await page.evaluate(() => {
+    document.querySelectorAll('[data-test-pick]').forEach((e) => e.removeAttribute('data-test-pick'));
+    for (const el of document.querySelectorAll('#spots-map .map-pin-spot')) {
+      const b = el.getBoundingClientRect();
+      if (!(b.width > 0 && b.height > 0)) continue;
+      const t = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+      if (t && el.contains(t)) { el.setAttribute('data-test-pick', '1'); return; }
+    }
+  });
+  const found = await page.locator('[data-test-pick="1"]').count();
+  return found ? page.locator('[data-test-pick="1"]').first() : page.locator('.map-pin-spot:visible').first();
+}
+
+/** 【56本目】予算の＋（dir=+1）・−（dir=-1）を押す（clickBudgetStep）。 */
+async function clickBudgetStep(page, dir) {
+  const id = dir > 0 ? 'mobile-budget-increment' : 'mobile-budget-decrement';
+  const visible = await page.evaluate((id) => document.getElementById(id)?.offsetParent !== null, id);
+  if (visible) await page.click(`#${id}`);
+  else await page.evaluate((id) => document.getElementById(id).click(), dir > 0 ? 'budget-increment' : 'budget-decrement');
+}
+
+async function showMapTab(page) {
+  await page.waitForTimeout(50);
+}
+
+async function showListTab(page) {
+  await page.waitForTimeout(50);
+}
+
+/**
  * 【2026-10-13、12本目②A】検索成功後、スマホ幅ではフォームが要約バーへ畳まれ
  * display:noneになる（main.jsのsetFormCollapsed()参照）。同じpageを使い回す
  * 複数の検証関数が、1回目の検索後にフォーム要素を直接操作しようとすると
@@ -84,7 +152,8 @@ async function ensureFormExpanded(page) {
   // クラスの有無ではなく実際の見た目（computed display）で判定する
   // （PCでは#search-summary-toggle自体がdisplay:noneで押せないため、
   // クラスだけで判定するとPCでクリックに失敗する）。
-  const hidden = await page.evaluate(() => getComputedStyle(document.getElementById('search-form')).display === 'none');
+  // 【56本目】結果の画面では、フォームを含む検索カード（#layout-left）ごと隠れるため、祖先も含めて見えているかで見る。
+  const hidden = await page.evaluate(() => document.getElementById('search-form').offsetParent === null);
   if (hidden) {
     await page.click('#search-summary-toggle');
     await page.waitForTimeout(100);
@@ -93,8 +162,8 @@ async function ensureFormExpanded(page) {
 
 async function searchAt(page, stationText, budget) {
   await ensureFormExpanded(page);
-  await page.fill('#departure-input', '');
-  await page.fill('#departure-input', stationText);
+  await fillDeparture(page, '');
+  await fillDeparture(page, stationText);
   await page.waitForTimeout(400);
   const item = page.locator('.suggestion-item', { hasText: stationText }).first();
   await item.click();
@@ -436,7 +505,8 @@ async function checkDepartureBudgetGap(page, viewportLabel) {
   // 「出発駅の入力欄が横幅いっぱいに広がっていない」もあわせて確認する
   // （同じ修正で解消するため、ここでまとめて見る）。PCは出発駅・予算が横並びで
   // 入力欄が行幅いっぱいにならないのが正しい設計のため、スマホ幅のみ見る。
-  const formRowBox = viewportLabel === 'sp' ? await page.locator('.form-row').boundingBox() : null;
+  // 【56本目】出発駅・予算を並べていた.form-rowはやめた（検索カードの中で縦に並ぶ）。フォームの幅と比べる。
+  const formRowBox = viewportLabel === 'sp' ? await page.locator('#search-form').boundingBox() : null;
   if (formRowBox) {
     const widthDiff = formRowBox.width - inputBox.width;
     record(
@@ -484,6 +554,9 @@ async function checkHeaderNotTruncated(page, viewportLabel) {
 
 async function captureNoResultsScreen(page, viewportLabel) {
   await searchAt(page, 'ＪＲ栗林駅', 300);
+  // 【56本目】一覧は結果の入れ物の中でスクロールする（スマホは画面の下の半分ほど）。案内のボタンが入れ物の中で
+  // 下のほうにあるときはスクロールして見せてから、画面の外にはみ出していないかを見る。
+  await page.locator('.budget-retry-btn').first().scrollIntoViewIfNeeded().catch(() => {});
   const screenshotPath = path.join(screenshotDir, `no-results-${viewportLabel}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: true });
 
@@ -515,8 +588,8 @@ async function captureNoResultsScreen(page, viewportLabel) {
 
 async function captureSuggestionsScreen(page, viewportLabel) {
   await ensureFormExpanded(page);
-  await page.fill('#departure-input', '');
-  await page.fill('#departure-input', '魚');
+  await fillDeparture(page, '');
+  await fillDeparture(page, '魚');
   await page.waitForTimeout(400);
   const screenshotPath = path.join(screenshotDir, `suggestions-${viewportLabel}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: false });
@@ -526,7 +599,7 @@ async function captureSuggestionsScreen(page, viewportLabel) {
   let visibleCount = 0;
   const otherBoxes = {
     searchBtn: await page.locator('#search-btn').boundingBox(),
-    map: await page.locator('#map-slot-desktop, #map-slot-mobile').first().boundingBox().catch(() => null),
+    map: null, // 【56本目】地図の置き場所（#map-slot-*）はやめた（地図は候補一覧の下、画面いっぱい）
   };
 
   for (const item of items) {
@@ -576,12 +649,8 @@ async function captureResultsListScreen(page, viewportLabel) {
 }
 
 async function captureHowToScreen(page, viewportLabel) {
-  // 【2026-10-13、12本目②C】スマホでは#howto-btnの親（.footer-summary）が
-  // display:noneになり、ボタン自身のcomputed displayには表れない
-  // （displayは継承プロパティではないため）。isVisible()で実際の見え方を見て、
-  // 隠れていれば代わりに#howto-btn-mobileを押す。
-  const howtoBtnVisible = await page.locator('#howto-btn').isVisible();
-  await page.click(howtoBtnVisible ? '#howto-btn' : '#howto-btn-mobile');
+  // 【56本目】「使い方」はヘッダー（スマホは「☰」の中）。
+  await clickHeaderItem(page, 'howto-btn');
   await page.waitForTimeout(200);
   const screenshotPath = path.join(screenshotDir, `howto-${viewportLabel}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: true });
@@ -617,7 +686,8 @@ async function captureSearchButtonPendingScreen(page, viewportLabel) {
 
   const btnText = await page.locator('#search-btn').textContent();
   const hasPendingClass = await page.locator('#search-btn.search-btn-pending').count();
-  record(`[${viewportLabel}] 検索ボタン状態変化: 文言が「この条件で検索」になっている`, btnText.trim() === 'この条件で検索', `実際: "${btnText.trim()}"`);
+  // 【56本目】文言は見本どおりいつも「この条件で探す」。まだこの条件で検索していないことは強調クラス（色）で伝える。
+  record(`[${viewportLabel}] 検索ボタン状態変化: 文言が「この条件で探す」のまま`, btnText.trim() === 'この条件で探す', `実際: "${btnText.trim()}"`);
   record(`[${viewportLabel}] 検索ボタン状態変化: 強調クラスが付いている`, hasPendingClass === 1);
 
   const viewport = VIEWPORTS[viewportLabel];
@@ -702,7 +772,7 @@ async function captureMylistScreen(page, viewportLabel) {
     await page.waitForTimeout(100);
   }
 
-  await page.click('#mylist-btn');
+  await clickHeaderItem(page, 'mylist-btn'); // 【56本目】スマホは「☰」の中
   await page.waitForSelector('#mylist-body .mylist-row', { timeout: 15000 });
   const screenshotPath = path.join(screenshotDir, `mylist-${viewportLabel}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: true });
@@ -1122,6 +1192,9 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
     await searchAt(page, '富山駅前', 1000);
     await page.waitForTimeout(1500); // ¥2000全域の裏取得が終わり、距離の値が確定するまで待つ
     await waitForWaveRevealSettled(page);
+    // 【56本目】検索したあとは検索カードが隠れる。帯件数プレビューは「条件を変える」で開いた検索カードに出る。
+    await ensureFormExpanded(page);
+    await page.waitForTimeout(200);
 
     const formBox = await page.locator('#layout-left').boundingBox();
     const settledPath = path.join(screenshotDir, 'budget-distance-pc-settled.png');
@@ -1149,9 +1222,9 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '富山駅前', 1000);
-    await page.click('.tab-btn[data-tab="map"]');
+    await showMapTab(page);
     await page.waitForTimeout(200);
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     const became3d = await page.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
@@ -1179,7 +1252,7 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
       }
 
       // 2Dで¥1000の1枚
-      await page.click('#map-dimension-toggle');
+      await clickDimensionToggle(page);
       await page.waitForTimeout(300);
       await page.evaluate(() => {
         const el = document.getElementById('budget-slider');
@@ -1217,20 +1290,20 @@ async function checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths)
     await page.goto(baseUrl, { waitUntil: 'load' });
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
-    await page.fill('#departure-input', '富山駅前');
+    await fillDeparture(page, '富山駅前');
     await page.waitForTimeout(400);
     await page.locator('.suggestion-item', { hasText: '富山駅前' }).first().click();
     for (let i = 0; i < 20; i++) {
       const value = parseInt(await page.inputValue('#budget-input'), 10);
       if (value === 1000) break;
-      if (value < 1000) await page.click('#budget-increment'); else await page.click('#budget-decrement');
+      if (value < 1000) await clickBudgetStep(page, 1); else await clickBudgetStep(page, -1);
     }
     // 【不具合修正】地図タブが非表示（一覧タブ側）のままだと#spots-mapのコンテナが
     // 0×0のままで、Leafletがマーカーのアイコン要素をまだ作らない
     // （marker.getElement()がundefinedを返す。MapView.applyBudget()が同じ理由で
     // コンテナサイズ0の間は塗り替えを保留するのと同じ制約）。地図タブを検索前に
     // 開いておき、コンテナに実寸がある状態で検索する。
-    await page.click('.tab-btn[data-tab="map"]');
+    await showMapTab(page);
     await page.waitForTimeout(200);
     await page.click('#search-btn');
     // 一覧タブが非表示のため.spot-cardは「存在するが不可視」になりうる。
@@ -1259,13 +1332,13 @@ async function checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths)
     await page.goto(baseUrl, { waitUntil: 'load' });
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
-    await page.fill('#departure-input', '富山駅前');
+    await fillDeparture(page, '富山駅前');
     await page.waitForTimeout(400);
     await page.locator('.suggestion-item', { hasText: '富山駅前' }).first().click();
     for (let i = 0; i < 20; i++) {
       const value = parseInt(await page.inputValue('#budget-input'), 10);
       if (value === 1000) break;
-      if (value < 1000) await page.click('#budget-increment'); else await page.click('#budget-decrement');
+      if (value < 1000) await clickBudgetStep(page, 1); else await clickBudgetStep(page, -1);
     }
     // 一覧タブのまま（地図タブへは切り替えない）検索する。
     await page.click('#search-btn');
@@ -1276,7 +1349,7 @@ async function checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths)
     // layout-controller.jsのinvalidateMapSize()はrequestAnimationFrame 1コマ分
     // 遅れて実行されるため、クリック直後ではなく、保留フラグが落ちる
     // （＝やり直しが実行された）のをポーリングで待つ。
-    await page.click('.tab-btn[data-tab="map"]');
+    await showMapTab(page);
     await page.waitForFunction(
       () => window.__mapViewForDebug._pendingWaveReveal === false,
       { timeout: 2000 }
@@ -1317,7 +1390,7 @@ async function checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths)
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '富山駅前', 1000);
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     const became3d = await page.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
@@ -1328,7 +1401,7 @@ async function checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths)
       for (let i = 0; i < 20; i++) {
         const value = parseInt(await page.inputValue('#budget-input'), 10);
         if (value === 1600) break;
-        if (value < 1600) await page.click('#budget-increment'); else await page.click('#budget-decrement');
+        if (value < 1600) await clickBudgetStep(page, 1); else await clickBudgetStep(page, -1);
       }
       await ensureFormExpanded(page);
       await page.click('#search-btn');
@@ -1380,9 +1453,9 @@ async function checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths)
       await page.waitForSelector('#departure-input');
       await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
       await searchAt(page, '富山駅前', 1000);
-      if (label === 'sp') await page.click('.tab-btn[data-tab="map"]').catch(() => {});
+      if (label === 'sp') await showMapTab(page).catch(() => {});
       if (dim === '3d') {
-        await page.click('#map-dimension-toggle');
+        await clickDimensionToggle(page);
         const became3d = await page.waitForFunction(
           () => document.getElementById('map-area').classList.contains('mode-3d'),
           { timeout: 30000 }
@@ -1453,7 +1526,7 @@ async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '富山駅前', 1600);
     if (label === 'sp') {
-      await page.click('.tab-btn[data-tab="map"]');
+      await showMapTab(page);
       await page.waitForTimeout(200);
     }
 
@@ -1465,7 +1538,7 @@ async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
     // flat map load（ensureMap()が解決する基準）とterrain load（修正後の
     // waitForTerrainLoaded()が解決する基準）の両方のタイムスタンプを記録し、
     // 「地形 >= 平らな地図」の順序が常に成り立つことを回帰チェックする。
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     await page.waitForFunction(() => !!window.__terrainMapForDebug, { timeout: 10000 }).catch(() => {});
     await page.evaluate(() => {
       window.__perfTiming = {};
@@ -1624,7 +1697,7 @@ async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
     }
 
     // 2Dに戻せる
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     await page.waitForTimeout(400);
     const backTo2d = await page.evaluate(() => !document.getElementById('map-area').classList.contains('mode-3d'));
     const leafletVisible = await page.evaluate(() => getComputedStyle(document.getElementById('spots-map')).display !== 'none');
@@ -1656,10 +1729,10 @@ async function checkTerrainMapToggle(browser, baseUrl, savedPaths) {
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '富山駅前', 1600);
-    await page.click('.tab-btn[data-tab="map"]');
+    await showMapTab(page);
     await page.waitForTimeout(200);
 
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     await page.waitForTimeout(1500);
     const stayed2d = await page.evaluate(() => !document.getElementById('map-area').classList.contains('mode-3d'));
     const errorElements = await page.evaluate(() => document.querySelectorAll('.error-message, [role="alert"]').length);
@@ -1694,7 +1767,7 @@ async function checkTerrainMapOpensForBaselineStations(browser, baseUrl) {
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, station, 1000);
 
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     const became3d = await page.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
@@ -1744,11 +1817,11 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
     // 帯¥201〜¥400に城生城を含める。
     await searchAt(page, '八尾駅', 400);
     if (label === 'sp') {
-      await page.click('.tab-btn[data-tab="map"]');
+      await showMapTab(page);
       await page.waitForTimeout(200);
     }
 
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     const became3d = await page.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
@@ -1788,7 +1861,7 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
     // 【2026-10-11修正】予算¥2000に変える前（帯¥201〜¥400のうちに）カードを
     // 探す。帯は「budget-199〜budget」だけを表示するため、先に¥2000へ
     // 変えてしまうと城生城（¥400）が一覧から消えて見つからなくなる。
-    await page.click('.tab-btn[data-tab="list"]').catch(() => {});
+    await showListTab(page).catch(() => {});
     await page.waitForTimeout(200);
     const card = page.locator('.spot-card', { hasText: '城生城' }).first();
     const cardExists = await card.count().then((n) => n > 0).catch(() => false);
@@ -1809,10 +1882,10 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
           // 経由しないようにする。
           await page.evaluate(() => document.querySelector('.detail-map-btn')?.click());
           await page.waitForTimeout(SPOT_FOCUS_WAIT_MS);
-          const mapTabActive = await page.evaluate(
-            () => document.querySelector('.tab-btn[data-tab="map"]')?.classList.contains('active')
-          );
-          record(`[${label}] 「地図で見る」で地図タブに切り替わる`, mapTabActive);
+          // 【56本目】一覧／地図タブはやめた（地図はいつも画面いっぱい）。「地図で見る」で詳細の画面を閉じて一覧に戻り、地図が見える。
+          const backToList = await page.evaluate(() => document.getElementById('app-layout').getAttribute('data-view') === 'results'
+            && document.getElementById('map-area').getBoundingClientRect().height > 0);
+          record(`[${label}] 「地図で見る」で詳細の画面を閉じ、地図と一覧が見える`, backToList);
         }
       }
       const zoomAfterSelect = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
@@ -1928,7 +2001,7 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
     // 検証の期待値も9.5のままでは成立しない（高松築港で実測：8.76）。
     // 待ち方も、0.4秒のデバウンスを経てから動き出す新しい仕組みに合わせ、
     // 固定800msの「余韻」ではなくmoveendベースで確実に止まるまで待つ。
-    if (label === 'sp') await page.click('.tab-btn[data-tab="list"]').catch(() => {});
+    if (label === 'sp') await showListTab(page).catch(() => {});
     await page.evaluate(() => {
       const slider = document.getElementById('budget-slider');
       slider.value = '2000';
@@ -1940,7 +2013,7 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
     const zoomOverview = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
     record(`[${label}] 3Dで予算¥2000のときのズームが8.5以上`, zoomOverview >= 8.45, `zoom=${zoomOverview.toFixed(2)}`);
 
-    if (label === 'sp') await page.click('.tab-btn[data-tab="map"]').catch(() => {});
+    if (label === 'sp') await showMapTab(page).catch(() => {});
     const overviewBox = await page.locator('#map-area').boundingBox();
     const overviewPath = path.join(screenshotDir, `terrain-3d-overview-2000-${label}.png`);
     await page.screenshot({ path: overviewPath, clip: overviewBox });
@@ -1969,7 +2042,7 @@ async function checkDefaultStyleD(browser, baseUrl, savedPaths) {
   await page.waitForSelector('#departure-input');
   await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
   await searchAt(page, '八尾駅', 400);
-  await page.click('#map-dimension-toggle');
+  await clickDimensionToggle(page);
   const became3d = await page.waitForFunction(
     () => document.getElementById('map-area').classList.contains('mode-3d'),
     { timeout: 30000 }
@@ -2095,7 +2168,7 @@ async function checkDescendTiltChoreography(browser, baseUrl, savedPaths) {
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '八尾駅', 400);
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     const became3d = await page.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
@@ -2156,8 +2229,8 @@ async function checkDescendTiltChoreography(browser, baseUrl, savedPaths) {
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '八尾駅', 400);
-    await page.click('.tab-btn[data-tab="map"]').catch(() => {});
-    await page.click('#map-dimension-toggle');
+    await showMapTab(page).catch(() => {});
+    await clickDimensionToggle(page);
     const became3dSp = await page.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
@@ -2196,7 +2269,7 @@ async function checkDescendTiltChoreography(browser, baseUrl, savedPaths) {
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '八尾駅', 400);
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).catch(() => {});
     await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
     const { spot, station } = await findSpotAndStation(page, '城生城');
@@ -2240,7 +2313,7 @@ async function checkDescendTiltChoreography(browser, baseUrl, savedPaths) {
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '八尾駅', 400);
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).catch(() => {});
     await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
     const { spot, station } = await findSpotAndStation(page, '城生城');
@@ -2284,8 +2357,8 @@ async function checkDescendTiltChoreography(browser, baseUrl, savedPaths) {
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '富山駅前', 2000);
-    if (label === 'sp') await page.click('.tab-btn[data-tab="map"]').catch(() => {});
-    await page.click('#map-dimension-toggle');
+    if (label === 'sp') await showMapTab(page).catch(() => {});
+    await clickDimensionToggle(page);
     const became3d = await page.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
@@ -2345,7 +2418,7 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '高松築港', 1000);
     if (label === 'sp') {
-      await page.click('.tab-btn[data-tab="map"]');
+      await showMapTab(page);
       await page.waitForTimeout(200);
     }
 
@@ -2354,7 +2427,7 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
     // ピンに絞り、boundingBox()を取ってmouse.click()で座標指定して押す
     // （locator.click()はピン密集時に別マーカーに「intercepts pointer
     // events」で奪われることがあったため）。
-    const pinLocator = page.locator('.map-pin-spot:visible').first();
+    const pinLocator = (await uncoveredPin(page));
     const pinBox = await pinLocator.boundingBox();
     if (pinBox) await page.mouse.click(pinBox.x + pinBox.width / 2, pinBox.y + pinBox.height / 2);
     await page.waitForTimeout(150);
@@ -2447,10 +2520,10 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '高松築港', 1000);
     if (label === 'sp') {
-      await page.click('.tab-btn[data-tab="map"]');
+      await showMapTab(page);
       await page.waitForTimeout(200);
     }
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     const became3d = await page.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
@@ -2664,7 +2737,7 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
     const again = await pinsAgain.nth(0).boundingBox();
     if (again) await page.mouse.click(again.x + again.width / 2, again.y + again.height / 2);
     await page.waitForTimeout(100);
-    await page.click('#budget-increment');
+    await clickBudgetStep(page, 1);
     const afterBudget = {
       panelHidden: await page.locator('#spot-info-panel').isHidden(),
       selectedCount: await page.locator('.map-pin-spot.map-pin-selected:visible').count(),
@@ -2770,15 +2843,16 @@ async function checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths) {
 
     await searchAt(page, '富山駅前', 500);
 
+    // 【56本目】検索したあとは、フォームを含む検索カードごと隠れ、結果の入れ物の一番上に要約バーが出る。
     const postSearch = await page.evaluate(() => ({
       collapsed: document.getElementById('layout-left').classList.contains('form-collapsed'),
-      formDisplay: getComputedStyle(document.getElementById('search-form')).display,
-      summaryDisplay: getComputedStyle(document.getElementById('search-summary')).display,
+      formVisible: document.getElementById('search-form').offsetParent !== null,
+      summaryVisible: document.getElementById('search-summary').offsetParent !== null,
       summaryText: document.getElementById('search-summary-text')?.textContent || '',
     }));
     record(
-      `[${label}] 検索後、スマホではフォームが1行の要約バーに畳まれる`,
-      postSearch.collapsed && postSearch.formDisplay === 'none' && postSearch.summaryDisplay !== 'none',
+      `[${label}] 検索後、フォーム（検索カード）は隠れ、結果の入れ物の一番上に1行の要約バーが出る`,
+      postSearch.collapsed && !postSearch.formVisible && postSearch.summaryVisible,
       JSON.stringify(postSearch)
     );
     record(
@@ -2789,7 +2863,7 @@ async function checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths) {
 
     // 地図タブ：残り高さの半分以上を地図が占める（検索前のフォームが
     // 畳まれたことで、一覧・地図タブが細い帯になる不具合が解消したことの検証）
-    await page.click('.tab-btn[data-tab="map"]');
+    await showMapTab(page);
     // 【2026-10-13、20本目修正、再修正3回】タイルの読み込み中（灰色のまま）を
     // スクショに撮らないよう待つ。
     // 1回目：単純な待ち時間の延長（3秒→15秒）→直らなかった（タイル0件のまま＝
@@ -2856,22 +2930,14 @@ async function checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths) {
       mapHeight >= viewport.height * 0.5,
       `mapHeight=${mapHeight} / viewportHeight=${viewport.height}`
     );
-    // 「2D表示」ボタンが「一覧／地図」タブ（画面上部、地図タブより前にある
-    // 要素）と重ならないこと（Minamiがスクリーンショットで報告した不具合）
-    const toggleBox = await page.locator('#map-dimension-toggle').boundingBox();
-    const tabsBox = await page.locator('.mobile-tabs').boundingBox();
-    record(
-      `[${label}] 「2D表示」ボタンが「一覧／地図」タブと重ならない`,
-      !rectsOverlap(toggleBox, tabsBox),
-      JSON.stringify({ toggleBox, tabsBox })
-    );
+    // 【56本目】「2D表示」ボタンと「一覧／地図」タブの重なりの検証は消した（2D/3Dはヘッダーへ移し、タブはやめた）。
     const mapTabPath = path.join(screenshotDir, `mobile-form-collapse-map-tab-${label}.png`);
     await page.screenshot({ path: mapTabPath });
     savedPaths.push(mapTabPath);
 
     // 【2026-10-13、12本目⑥】必要スクリーンショット「375×667・390×844の両方で
     // ピンを選んだ状態」を、この地図タブの流れの中で撮る（2D、実クリック）。
-    const pinLocatorMobile = page.locator('.map-pin-spot:visible').first();
+    const pinLocatorMobile = (await uncoveredPin(page));
     const pinBoxMobile = await pinLocatorMobile.boundingBox().catch(() => null);
     if (pinBoxMobile) {
       await page.mouse.click(pinBoxMobile.x + pinBoxMobile.width / 2, pinBoxMobile.y + pinBoxMobile.height / 2);
@@ -2887,7 +2953,7 @@ async function checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths) {
     // 自身ではなく、その子の#results-list（overflow-y:auto、style.css参照）。
     // #results-containerはflex-columnの器でoverflow指定を持たないため、
     // そちらを見ると常にoverflowY:'visible'になり誤って検証失敗していた。
-    await page.click('.tab-btn[data-tab="list"]');
+    await showListTab(page);
     await page.waitForTimeout(200);
     const listInfo = await page.evaluate(() => {
       const container = document.getElementById('results-container');
@@ -2900,8 +2966,9 @@ async function checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths) {
       };
     });
     record(
-      `[${label}] 一覧タブが画面高さの半分以上を占め、スクロール可能なoverflow設定`,
-      listInfo.height >= listInfo.viewportHeight * 0.5 && (listInfo.overflowY === 'auto' || listInfo.overflowY === 'scroll'),
+      // 【56本目】一覧タブはやめた。一覧は地図の下に重ねた結果の入れ物の中で、スクロールできる（入れ物の高さは58本目で作る）。
+      `[${label}] 一覧（結果の入れ物の中）が見えていて、スクロール可能なoverflow設定`,
+      listInfo.height > 0 && (listInfo.overflowY === 'auto' || listInfo.overflowY === 'scroll'),
       JSON.stringify(listInfo)
     );
     const listTabPath = path.join(screenshotDir, `mobile-form-collapse-list-tab-${label}.png`);
@@ -2935,13 +3002,17 @@ async function checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths) {
 
     // 【32本目A、不具合修正】「▲閉じる」を押すと、検索せずにフォームが畳まれ、
     // 開く前（最後に検索した）条件に戻る（入力しかけた出発駅・予算は捨てる）。
-    await page.fill('#departure-input', '高岡駅');
+    await fillDeparture(page, '高岡駅');
     await page.waitForTimeout(300);
     await page.evaluate((v) => {
       const el = document.getElementById('budget-slider');
       el.value = v;
       el.dispatchEvent(new Event('input'));
     }, 1500);
+    // 【56本目】スマホでは候補一覧が入力欄の上に開いて「▲閉じる」に重なるため、候補一覧の外（検索カードの見出し）を
+    // 押して閉じてから「▲閉じる」を押す（候補一覧の外を押すと閉じる）。
+    await page.click('.search-card-title');
+    await page.waitForTimeout(100);
     await page.click('#form-close-btn');
     await page.waitForTimeout(150);
     const afterClose = await page.evaluate(() => ({
@@ -2971,25 +3042,25 @@ async function checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths) {
     const afterResearch = await page.evaluate(() => document.getElementById('layout-left').classList.contains('form-collapsed'));
     record(`[${label}] 再検索すると要約バーへ再び畳まれる`, afterResearch);
 
-    // フッターのスマホ用リンク（使い方・データ出典/免責）
-    await page.click('#about-data-btn-mobile');
+    // 【56本目】フッターはやめた。結果の入れ物の一番下の「データ出典・免責」と、ヘッダー（「☰」の中）の「使い方」
+    await page.click('.results-panel [data-open-about]');
     await page.waitForTimeout(150);
     const aboutOpen = await page.evaluate(() => !document.getElementById('about-modal').hidden);
-    record(`[${label}] フッターの「データ出典・免責」リンクがモーダルを開く`, aboutOpen);
+    record(`[${label}] 結果の入れ物の「データ出典・免責」がモーダルを開く`, aboutOpen);
     await page.click('#about-modal-close').catch(() => {});
     await page.waitForTimeout(100);
 
-    await page.click('#howto-btn-mobile');
+    await clickHeaderItem(page, 'howto-btn');
     await page.waitForTimeout(150);
     const howtoOpen = await page.evaluate(() => !document.getElementById('howto-modal').hidden);
-    record(`[${label}] フッターの「使い方」リンクがモーダルを開く`, howtoOpen);
+    record(`[${label}] ヘッダーの「使い方」がモーダルを開く`, howtoOpen);
     await page.click('#howto-modal-close').catch(() => {});
 
     // Minami実機確認の再現手順：富山駅前・スマホ幅・検索・3D切替で
     // コンソールに赤いエラー・警告が出ないこと（既知の許容分を除く）。
-    await page.click('.tab-btn[data-tab="map"]');
+    await showMapTab(page);
     await page.waitForTimeout(150);
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).catch(() => {});
     await page.evaluate(() => window.__terrainViewForDebug?.waitForTerrainLoaded(20000)).catch(() => {});
     await page.waitForTimeout(500);
@@ -3031,14 +3102,14 @@ async function checkTapOutsideClosesForm(browser, baseUrl, savedPaths) {
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
 
     await searchAt(page, '富山駅前', 500);
-    await page.click('.tab-btn[data-tab="map"]');
+    await showMapTab(page);
     await page.waitForTimeout(300);
 
     // ピンを1つ選んでから明示的に閉じておく（#spot-info-panelがhiddenな
     // 状態を作る）。これにより「タップで閉じる」操作のあと、もしその
     // タップがピン選択へ横流れしていれば#spot-info-panelが再び開くはずで、
     // hiddenのままであることが「ピンが選ばれなかった」ことの検証になる。
-    const pinLocator = page.locator('.map-pin-spot:visible').first();
+    const pinLocator = (await uncoveredPin(page));
     const pinBox = await pinLocator.boundingBox().catch(() => null);
     if (pinBox) {
       await page.mouse.click(pinBox.x + pinBox.width / 2, pinBox.y + pinBox.height / 2);
@@ -3062,7 +3133,7 @@ async function checkTapOutsideClosesForm(browser, baseUrl, savedPaths) {
     const closeBtnVisible = await page.locator('#form-close-btn').isVisible().catch(() => false);
     record(`[${label}] フォームを開くと「▲閉じる」が見える（タップ閉じ検証の前提）`, closeBtnVisible);
 
-    await page.fill('#departure-input', '高岡駅');
+    await fillDeparture(page, '高岡駅');
     await page.waitForTimeout(300);
     const suggestionVisible = await page.locator('#departure-suggestions .suggestion-item').first().isVisible().catch(() => false);
 
@@ -3085,7 +3156,7 @@ async function checkTapOutsideClosesForm(browser, baseUrl, savedPaths) {
     }
 
     // 編集しかけの状態に戻す（候補一覧タップで駅が確定している可能性があるため）
-    await page.fill('#departure-input', '高岡駅');
+    await fillDeparture(page, '高岡駅');
     await page.waitForTimeout(300);
     await page.evaluate((v) => {
       const el = document.getElementById('budget-slider');
@@ -3185,8 +3256,9 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
     // 以前は#mobile-budget-overlayが#map-area（地図タブ選択時しかDOM上の
     // 見える位置に無いラッパー）の中にあり、一覧タブでは触れなかった
     // （Cowork指摘）。タブパネルの外に出した効果をここで確認する。
-    const listTabActive = await page.evaluate(() => document.querySelector('.tab-btn.active')?.dataset.tab === 'list');
-    record(`[${label}/一覧タブ] 検索直後は一覧タブが選ばれている（この検証の前提）`, listTabActive);
+    const listTabActive = await page.evaluate(() => document.getElementById('results-list').offsetParent !== null);
+    // 【56本目】一覧／地図タブはやめた。一覧は結果の入れ物の中にいつも見えている。
+    record(`[${label}/一覧] 検索直後は一覧が見えている（この検証の前提）`, listTabActive);
     const overlayVisibleOnList = await page.locator('#mobile-budget-overlay').isVisible().catch(() => false);
     record(`[${label}/一覧タブ] 予算操作帯が表示される`, overlayVisibleOnList);
     const cardsBeforeListDrag = await page.locator('.spot-card').count();
@@ -3194,9 +3266,9 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
     await page.click('#mobile-budget-increment');
     await page.waitForTimeout(200);
     const cardsAfterListDrag = await page.locator('.spot-card').count();
-    const tabStillListAfterDrag = await page.evaluate(() => document.querySelector('.tab-btn.active')?.dataset.tab === 'list');
+    const tabStillListAfterDrag = await page.evaluate(() => document.getElementById('results-list').offsetParent !== null);
     record(
-      `[${label}/一覧タブ] 予算操作帯の＋を2回押しても一覧タブのまま・一覧は変わらない（帯の文言だけ変わる）`,
+      `[${label}/一覧] 予算操作帯の＋を2回押しても一覧は見えたまま・変わらない（帯の文言だけ変わる）`,
       cardsBeforeListDrag === cardsAfterListDrag && tabStillListAfterDrag,
       JSON.stringify({ cardsBeforeListDrag, cardsAfterListDrag, tabStillListAfterDrag })
     );
@@ -3228,9 +3300,9 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
     );
     await page.waitForTimeout(200);
     const cardsAfterListSearch = await page.locator('.spot-card').count();
-    const tabStillListAfterSearch = await page.evaluate(() => document.querySelector('.tab-btn.active')?.dataset.tab === 'list');
+    const tabStillListAfterSearch = await page.evaluate(() => document.getElementById('results-list').offsetParent !== null);
     record(
-      `[${label}/一覧タブ] 「¥◯で探す」を押すと一覧タブのまま一覧が変わる`,
+      `[${label}/一覧] 「¥◯で探す」を押すと一覧は見えたまま変わる`,
       cardsAfterListSearch !== cardsAfterListDrag && tabStillListAfterSearch,
       JSON.stringify({ cardsAfterListDrag, cardsAfterListSearch, tabStillListAfterSearch })
     );
@@ -3257,7 +3329,7 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
     await page.screenshot({ path: listTabBandPath });
     savedPaths.push(listTabBandPath);
 
-    await page.click('.tab-btn[data-tab="map"]');
+    await showMapTab(page);
     await page.waitForTimeout(300);
 
     // --- 2D：地図の高さ・重なり ---
@@ -3267,23 +3339,12 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
     const overlayVisible = await page.locator('#mobile-budget-overlay').isVisible().catch(() => false);
     record(`[${label}/2D] 検索後、予算操作帯が表示される`, overlayVisible);
 
-    const toggleBox = await page.locator('#map-dimension-toggle').boundingBox();
-    const tabsBox = await page.locator('.mobile-tabs').boundingBox();
+    // 【56本目】タブ・フッターはやめ、2D/3D切替はヘッダー（スマホは「☰」の中）へ移したため、それらとの重なりの
+    // 検証は消した。予算操作帯は結果の入れ物の中。出典（右下）が予算操作帯・結果の入れ物と重ならないことを見る。
     const overlayBox = await page.locator('#mobile-budget-overlay').boundingBox();
-    const footerBox = await page.locator('#app-footer').boundingBox();
-    record(`[${label}/2D] 予算操作帯がタブと重ならない`, !rectsOverlap(overlayBox, tabsBox), JSON.stringify({ overlayBox, tabsBox }));
-    record(`[${label}/2D] 予算操作帯がフッターと重ならない`, !rectsOverlap(overlayBox, footerBox), JSON.stringify({ overlayBox, footerBox }));
-    record(`[${label}/2D] 2D/3D切替ボタンがタブと重ならない`, !rectsOverlap(toggleBox, tabsBox), JSON.stringify({ toggleBox, tabsBox }));
-    record(`[${label}/2D] 2D/3D切替ボタンが予算操作帯と重ならない`, !rectsOverlap(toggleBox, overlayBox), JSON.stringify({ toggleBox, overlayBox }));
     const attribBox2d = await page.locator('#map-area .leaflet-control-attribution').boundingBox().catch(() => null);
-    if (attribBox2d) {
-      const gap2d = verticalGap(toggleBox, attribBox2d);
-      record(
-        `[${label}/2D] 出典ボタンが2D/3D切替ボタンと重ならず、はっきりした隙間がある（8px以上）`,
-        gap2d === null || gap2d >= 8,
-        `gap=${gap2d}px, ${JSON.stringify({ attribBox2d, toggleBox })}`
-      );
-    }
+    const panelBox2d = await page.locator('.results-panel').boundingBox().catch(() => null);
+    record(`[${label}/2D] 出典ボタンが結果の入れ物（予算操作帯を含む）と重ならない`, !rectsOverlap(attribBox2d, panelBox2d) && !rectsOverlap(attribBox2d, overlayBox), JSON.stringify({ attribBox2d, panelBox2d }));
 
     // 波の演出（検索直後、近い順にピンが広がって出る）が終わるまで待ってから撮る
     // （Cowork指摘。待たずに撮るとピンが1つも写らない画面になる）。
@@ -3307,7 +3368,7 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
     savedPaths.push(mapTab2dPath);
 
     // 名前の帯（ピン選択）が予算操作帯と重ならない
-    const pinBox2d = await page.locator('.map-pin-spot:visible').first().boundingBox().catch(() => null);
+    const pinBox2d = await (await uncoveredPin(page)).boundingBox().catch(() => null);
     if (pinBox2d) {
       await page.mouse.click(pinBox2d.x + pinBox2d.width / 2, pinBox2d.y + pinBox2d.height / 2);
       await page.waitForTimeout(150);
@@ -3475,7 +3536,7 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
     page.on('console', (msg) => {
       if (msg.type() === 'error' || msg.type() === 'warning') consoleMessages3d.push(`[${msg.type()}] ${msg.text()}`);
     });
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     const became3d = await page.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
@@ -3490,23 +3551,14 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       record(`[${label}/3D] 地図の高さが240px以上`, mapHeight3d >= 240, `height=${mapHeight3d}`);
 
       const overlayBox3d = await page.locator('#mobile-budget-overlay').boundingBox();
-      const toggleBox3d = await page.locator('#map-dimension-toggle').boundingBox();
-      const tabsBox3d = await page.locator('.mobile-tabs').boundingBox();
+      // 【56本目】2D/3D切替はヘッダー（スマホは「☰」の中で、閉じているときは見えない）へ移し、タブはやめた。
+      const toggleBox3d = null;
       // 【23本目、不具合修正】方位磁針（.maplibregl-ctrl-top-right）は
       // 回転ハンドルに置き換えて廃止したため、代わりにハンドルとの重なりを見る。
       const compassBox3d = await page.locator('#map-rotate-handle').boundingBox().catch(() => null);
       const attribBox3d = await page.locator('#map-area .maplibregl-ctrl-bottom-right').boundingBox().catch(() => null);
-      record(`[${label}/3D] 予算操作帯がタブと重ならない`, !rectsOverlap(overlayBox3d, tabsBox3d), JSON.stringify({ overlayBox3d, tabsBox3d }));
-      record(`[${label}/3D] 2D/3D切替ボタンがタブと重ならない`, !rectsOverlap(toggleBox3d, tabsBox3d), JSON.stringify({ toggleBox3d, tabsBox3d }));
-      record(`[${label}/3D] 2D/3D切替ボタンが予算操作帯と重ならない`, !rectsOverlap(toggleBox3d, overlayBox3d), JSON.stringify({ toggleBox3d, overlayBox3d }));
-      if (attribBox3d) {
-        const gap3d = verticalGap(toggleBox3d, attribBox3d);
-        record(
-          `[${label}/3D] 出典ボタンが2D/3D切替ボタンと重ならず、はっきりした隙間がある（8px以上）`,
-          gap3d === null || gap3d >= 8,
-          `gap=${gap3d}px, ${JSON.stringify({ attribBox3d, toggleBox3d })}`
-        );
-      }
+      const panelBox3d = await page.locator('.results-panel').boundingBox().catch(() => null);
+      record(`[${label}/3D] 出典ボタンが結果の入れ物（予算操作帯を含む）と重ならない`, !rectsOverlap(attribBox3d, panelBox3d), JSON.stringify({ attribBox3d, panelBox3d }));
       if (compassBox3d) {
         record(`[${label}/3D] 回転ハンドルが2D/3D切替ボタンと重ならない`, !rectsOverlap(compassBox3d, toggleBox3d), JSON.stringify({ compassBox3d, toggleBox3d }));
       }
@@ -3796,7 +3848,7 @@ async function checkCrossDimensionSelectionScroll(browser, baseUrl, savedPaths) 
   }
 
   // --- PC・3D：最後のカードに対応するピンを選ぶ ---
-  await page.click('#map-dimension-toggle');
+  await clickDimensionToggle(page);
   const became3d = await page.waitForFunction(
     () => document.getElementById('map-area').classList.contains('mode-3d'),
     { timeout: 30000 }
@@ -3858,7 +3910,7 @@ async function checkCrossDimensionSelectionScroll(browser, baseUrl, savedPaths) 
   }
 
   // --- PC・2D：最初のカードに対応するピンを選ぶ（別のカードへ切り替わることを見る） ---
-  await page.click('#map-dimension-toggle');
+  await clickDimensionToggle(page);
   await page.waitForTimeout(300);
   const firstCardSpotId = await page.locator('.spot-card').first().getAttribute('data-spot-id');
   record('[選択→スクロール] 検証用の最初のカードが見つかる', !!firstCardSpotId);
@@ -3896,7 +3948,7 @@ async function checkCrossDimensionSelectionScroll(browser, baseUrl, savedPaths) 
   //     一覧がそちらへスクロールし直すこと ---
   if (lastCardSpotId && firstCardSpotId && lastCardSpotId !== firstCardSpotId) {
     // すでにPC/2Dでfirstを選んだ状態。3Dへ切り替え、同じ選択が保たれることを見る。
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     const became3dAgain = await page.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
@@ -3954,7 +4006,7 @@ async function checkReturnToOverview(browser, baseUrl, savedPaths) {
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '八尾駅', 400);
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     const became3d = await page.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
@@ -4169,7 +4221,26 @@ async function waitForTerrainCameraIdle(page, { timeoutMs = 20000 } = {}) {
  * @param {string} elementId - id属性（#なし）
  * @param {string} label - record()に渡す検証名の接頭辞
  */
+/**
+ * 【56本目】結果の画面では、トップの検索カード（#budget-increment等・#search-btn）は隠れていて、
+ * 金額を変えるのは結果の入れ物の＋−・「¥◯で探す」だけ（PC・スマホ共通）。隠れているときはそちらの部品のIDを返す。
+ */
+async function resultScreenEquivalentId(page, elementId) {
+  const RESULT_SCREEN_EQUIVALENT = {
+    'budget-increment': 'mobile-budget-increment',
+    'budget-decrement': 'mobile-budget-decrement',
+    'search-btn': 'mobile-budget-search-btn',
+  };
+  if (!RESULT_SCREEN_EQUIVALENT[elementId]) return elementId;
+  const hiddenHere = await page.evaluate((id) => {
+    const el = document.getElementById(id);
+    return !el || el.offsetParent === null;
+  }, elementId);
+  return hiddenHere ? RESULT_SCREEN_EQUIVALENT[elementId] : elementId;
+}
+
 async function clickElementChecked(page, elementId, label) {
+  elementId = await resultScreenEquivalentId(page, elementId);
   const check = await page.evaluate((id) => {
     const el = document.getElementById(id);
     if (!el) return { found: false };
@@ -4293,11 +4364,11 @@ async function checkInitialSearchCircleFit(browser, baseUrl, savedPaths) {
         // セットアップ検索（3D切替をこの時点で済ませておく）。
         await searchAt(page, '富山駅前', 1000);
         if (vLabel !== 'pc') {
-          await page.click('.tab-btn[data-tab="map"]');
+          await showMapTab(page);
           await page.waitForTimeout(300);
         }
         if (dim === '3d') {
-          await page.click('#map-dimension-toggle');
+          await clickDimensionToggle(page);
           const became3d = await page.waitForFunction(
             () => document.getElementById('map-area').classList.contains('mode-3d'),
             { timeout: 30000 }
@@ -4323,8 +4394,8 @@ async function checkInitialSearchCircleFit(browser, baseUrl, savedPaths) {
         // 検索できるよう、.spot-cardの出現をstate:'attached'（表示状態を
         // 問わない）で待つ専用の検索処理に差し替える。
         await ensureFormExpanded(page);
-        await page.fill('#departure-input', '');
-        await page.fill('#departure-input', '富山駅前');
+        await fillDeparture(page, '');
+        await fillDeparture(page, '富山駅前');
         await page.waitForTimeout(400);
         await page.locator('.suggestion-item', { hasText: '富山駅前' }).first().click();
         await page.evaluate((v) => {
@@ -4336,7 +4407,7 @@ async function checkInitialSearchCircleFit(browser, baseUrl, savedPaths) {
         await page.waitForSelector('.spot-card, .no-results', { timeout: 15000, state: 'attached' });
         await page.waitForTimeout(300);
         if (vLabel !== 'pc') {
-          await page.click('.tab-btn[data-tab="map"]');
+          await showMapTab(page);
           await page.waitForTimeout(300);
         }
         await page.waitForTimeout(500);
@@ -4479,7 +4550,7 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '高松築港', 1000);
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     const became3d = await page.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
@@ -4950,11 +5021,11 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       // 安定すれば、この後3Dへ切り替えた際のrender()も完了済みのデータを使う）。
       await waitForAllSpotsPrefetchSettled(page);
       if (label !== 'pc') {
-        await page.click('.tab-btn[data-tab="map"]');
+        await showMapTab(page);
         await page.waitForTimeout(300);
       }
       if (dim === '3d') {
-        await page.click('#map-dimension-toggle');
+        await clickDimensionToggle(page);
         const became3d = await page.waitForFunction(
           () => document.getElementById('map-area').classList.contains('mode-3d'),
           { timeout: 30000 }
@@ -5012,10 +5083,10 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
       await searchAt(page, '高松築港', 1000);
       await waitForAllSpotsPrefetchSettled(page);
-      await page.click('.tab-btn[data-tab="map"]');
+      await showMapTab(page);
       await page.waitForTimeout(300);
       if (dim === '3d') {
-        await page.click('#map-dimension-toggle');
+        await clickDimensionToggle(page);
         const became3d = await page.waitForFunction(
           () => document.getElementById('map-area').classList.contains('mode-3d'),
           { timeout: 30000 }
@@ -5025,7 +5096,8 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
         await page.waitForTimeout(1500);
       }
       await page.evaluate(() => {
-        const el = document.getElementById('mobile-budget-slider');
+        // 【56本目】結果の画面のスライダー（#mobile-budget-slider）はやめた。同じ処理を通るトップのスライダーで¥2000にする。
+        const el = document.getElementById('budget-slider');
         el.value = 2000;
         el.dispatchEvent(new Event('input'));
       });
@@ -5049,10 +5121,10 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
     await searchAt(page, '高松築港', 1000);
     await waitForAllSpotsPrefetchSettled(page);
     if (label !== 'pc') {
-      await page.click('.tab-btn[data-tab="map"]');
+      await showMapTab(page);
       await page.waitForTimeout(300);
     }
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     const became3d = await page.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
@@ -5267,8 +5339,8 @@ async function setBudgetSlider(page, value) {
  * 一覧タブへ戻すと3Dのコンテナが0×0になり、検索直後の地図合わせが空振りするため）。 */
 async function searchKeepingMapVisible(page, stationText, budget, isMobile) {
   await ensureFormExpanded(page);
-  await page.fill('#departure-input', '');
-  await page.fill('#departure-input', stationText);
+  await fillDeparture(page, '');
+  await fillDeparture(page, stationText);
   await page.waitForTimeout(400);
   await page.locator('.suggestion-item', { hasText: stationText }).first().click();
   await setBudgetSlider(page, budget);
@@ -5276,7 +5348,7 @@ async function searchKeepingMapVisible(page, stationText, budget, isMobile) {
   await page.waitForSelector('.spot-card, .no-results', { timeout: 15000, state: 'attached' });
   await page.waitForTimeout(300);
   if (isMobile) {
-    await page.click('.tab-btn[data-tab="map"]');
+    await showMapTab(page);
     await page.waitForTimeout(300);
   }
 }
@@ -5353,6 +5425,7 @@ async function clickSelectorChecked(page, selector, label) {
 
 /** 【37本目】clickElementChecked()の「隠れていないか」の確認だけを行う（押さない）。 */
 async function assertNotObscured(page, elementId, label) {
+  elementId = await resultScreenEquivalentId(page, elementId); // 【56本目】
   const check = await page.evaluate((id) => {
     const el = document.getElementById(id);
     if (!el) return { found: false };
@@ -5395,7 +5468,7 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
     return { page, errors };
   };
   const to3d = async (page, label) => {
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     const became3d = await page.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
@@ -5866,7 +5939,7 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
         await searchAt(page, '富山駅前', 500);
         await waitForAllSpotsPrefetchSettled(page);
         if (isMobile) {
-          await page.click('.tab-btn[data-tab="map"]');
+          await showMapTab(page);
           await page.waitForTimeout(300);
         }
         if (dim === '3d') {
@@ -6022,10 +6095,10 @@ async function checkReturnToListMatchesSearchView(browser, baseUrl, savedPaths) 
       await searchAt(page, '富山駅前', 500);
       await waitForAllSpotsPrefetchSettled(page);
       if (isMobile) {
-        await page.click('.tab-btn[data-tab="map"]');
+        await showMapTab(page);
         await page.waitForTimeout(300);
       }
-      await page.click('#map-dimension-toggle');
+      await clickDimensionToggle(page);
       const became3d = await page.waitForFunction(
         () => document.getElementById('map-area').classList.contains('mode-3d'),
         { timeout: 30000 }
@@ -6052,7 +6125,7 @@ async function checkReturnToListMatchesSearchView(browser, baseUrl, savedPaths) 
         await clickSelectorChecked(page, '.spot-info-detail-btn', `${label} 「詳細を見る」`);
       } else {
         // 一覧タブのカードから詳細を開く（地図タブは隠れている）。
-        await page.click('.tab-btn[data-tab="list"]');
+        await showListTab(page);
         await page.waitForTimeout(300);
         await page.locator('.spot-card').first().click();
       }
@@ -6065,7 +6138,7 @@ async function checkReturnToListMatchesSearchView(browser, baseUrl, savedPaths) 
       await page.waitForFunction(() => document.getElementById('app-layout').getAttribute('data-view') === 'results', { timeout: 10000 });
       if (mode === 'card') {
         // 一覧に戻った時点では地図タブは隠れている。地図タブを開いた時点で合わせ直される。
-        await page.click('.tab-btn[data-tab="map"]');
+        await showMapTab(page);
       }
       await page.waitForTimeout(200);
       await waitForTerrainCameraIdle(page);
@@ -6150,14 +6223,14 @@ async function checkTwoDSearchViewAfterModeSwitch(browser, baseUrl, savedPaths) 
     );
   };
   const to3d = async (page, label) => {
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
     record(`${label} 3D化（検証の前提）`, ok);
     if (ok) await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
     return ok;
   };
   const to2d = async (page) => {
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     await page.waitForFunction(() => !document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).catch(() => {});
   };
   const newPage = async () => {
@@ -6249,24 +6322,24 @@ async function checkResetViewButton(browser, baseUrl, savedPaths) {
       await page.waitForSelector('#departure-input');
       await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
       if (isMobile) {
-        await page.click('.tab-btn[data-tab="map"]');
+        await showMapTab(page);
         await page.waitForTimeout(300);
       }
       const shownBeforeSearch = await page.locator('#map-reset-view-btn').isVisible().catch(() => false);
       record(`[41/reset-btn/${vLabel}] 一度も検索していないときは、最初の見え方に戻るボタンが出ない`, !shownBeforeSearch);
       if (isMobile) {
-        await page.click('.tab-btn[data-tab="list"]');
+        await showListTab(page);
         await page.waitForTimeout(200);
       }
       await searchAtAndWaitPrefetch(page, '富山駅前', 500);
       if (isMobile) {
-        await page.click('.tab-btn[data-tab="map"]');
+        await showMapTab(page);
         await page.waitForTimeout(400);
       }
       for (const dim of ['2d', '3d']) {
         const label = `[41/reset-btn/${vLabel}/${dim}]`;
         if (dim === '3d') {
-          await page.click('#map-dimension-toggle');
+          await clickDimensionToggle(page);
           const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
           record(`${label} 3D化（検証の前提）`, ok);
           if (!ok) break;
@@ -6293,7 +6366,7 @@ async function checkResetViewButton(browser, baseUrl, savedPaths) {
             compass: document.getElementById('map-compass-btn'),
             handle: document.getElementById('map-rotate-handle'),
             dimensionToggle: document.getElementById('map-dimension-toggle'),
-            leafletZoom: document.querySelector('#map-area .leaflet-control-zoom'),
+            leafletZoom: document.querySelector('#map-zoom-controls'),
             leafletAttribution: document.querySelector('#map-area .leaflet-control-attribution'),
             maplibreAttribution: document.querySelector('#map-area .maplibregl-ctrl-attrib'),
             budgetOverlay: document.getElementById('mobile-budget-overlay'),
@@ -6313,11 +6386,13 @@ async function checkResetViewButton(browser, baseUrl, savedPaths) {
         record(`${label} aria-labelが「出発駅を中心に、最初の見え方に戻す」`, info.ariaLabel === '出発駅を中心に、最初の見え方に戻す', info.ariaLabel);
         record(`${label} 出発駅と同じオレンジのしずく形が入っている`, info.pinFill === 'rgb(224, 108, 44)', info.pinFill);
         const ma = info.mapArea;
+        // 【56本目】部品の列は地図の右下（上から：ズーム＋− → 方位磁針 → 戻るボタン → ハンドル）。
+        const zoomBox = await page.evaluate(() => { const b = document.getElementById('map-zoom-controls').getBoundingClientRect(); return { x: b.left, y: b.top, width: b.width, height: b.height }; });
         record(
-          `${label} 地図の中に収まり、右上にある`,
+          `${label} 地図の中に収まり、右下の部品の列（ズーム＋−の下）にある`,
           info.btn.x >= ma.x && info.btn.y >= ma.y && info.btn.x + info.btn.width <= ma.x + ma.width && info.btn.y + info.btn.height <= ma.y + ma.height
-            && info.btn.x + info.btn.width >= ma.x + ma.width - 60 && info.btn.y <= ma.y + (dim === '3d' ? 60 : 20),
-          JSON.stringify({ btn: info.btn, mapArea: ma })
+            && info.btn.x + info.btn.width >= ma.x + ma.width - 60 && info.btn.y >= zoomBox.y + zoomBox.height,
+          JSON.stringify({ btn: info.btn, mapArea: ma, zoomBox })
         );
         const tooClose = Object.entries(info.others)
           .filter(([, r]) => r)
@@ -6409,10 +6484,10 @@ async function checkSelectedPinVisibleAfterFocus3d(browser, baseUrl, savedPaths)
         await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
         await searchAtAndWaitPrefetch(page, '大池', 1500);
         if (isMobile) {
-          await page.click('.tab-btn[data-tab="map"]');
+          await showMapTab(page);
           await page.waitForTimeout(300);
         }
-        await page.click('#map-dimension-toggle');
+        await clickDimensionToggle(page);
         const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
         record(`${label} 3D化（検証の前提）`, ok);
         if (!ok) continue;
@@ -6562,7 +6637,7 @@ async function checkPinColorsAndClusters(browser, baseUrl, savedPaths) {
     };
     return [
       '#map-reset-view-btn', '#map-compass-btn', '#map-rotate-handle', '#map-dimension-toggle',
-      '#map-area .leaflet-control-zoom', '#map-area .leaflet-control-attribution', '#map-area .maplibregl-ctrl-attrib',
+      '#map-zoom-controls', '#map-area .leaflet-control-attribution', '#map-area .maplibregl-ctrl-attrib',
       '#mobile-budget-overlay',
     ].map((sel) => ({ sel, rect: rectOf(document.querySelector(sel)) })).filter((x) => x.rect);
   });
@@ -6585,11 +6660,11 @@ async function checkPinColorsAndClusters(browser, baseUrl, savedPaths) {
           await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
           await searchAtAndWaitPrefetch(page, '大池', 600);
           if (isMobile) {
-            await page.click('.tab-btn[data-tab="map"]');
+            await showMapTab(page);
             await page.waitForTimeout(400);
           }
           if (dim === '3d') {
-            await page.click('#map-dimension-toggle');
+            await clickDimensionToggle(page);
             const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
             record(`${label} 3D化（検証の前提）`, ok);
             if (!ok) continue;
@@ -6915,11 +6990,11 @@ async function checkLiveBudgetPins(browser, baseUrl, savedPaths) {
           await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
           await searchAtAndWaitPrefetch(page, station, 600);
           if (isMobile) {
-            await page.click('.tab-btn[data-tab="map"]');
+            await showMapTab(page);
             await page.waitForTimeout(400);
           }
           if (dim === '3d') {
-            await page.click('#map-dimension-toggle');
+            await clickDimensionToggle(page);
             const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
             record(`${label} 3D化（検証の前提）`, ok);
             if (!ok) continue;
@@ -7071,7 +7146,7 @@ async function checkRound45(browser, baseUrl, savedPaths) {
     return { context, page, errors };
   };
   const to3d = async (page) => {
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
     if (ok) await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
     return ok;
@@ -7097,7 +7172,7 @@ async function checkRound45(browser, baseUrl, savedPaths) {
       await searchAtAndWaitPrefetch(page, STATION, 2000);
       if (!(await to3d(page))) return false;
       await waitForTerrainCameraIdle(page);
-      await page.click('#map-dimension-toggle');
+      await clickDimensionToggle(page);
       await page.waitForFunction(() => !document.getElementById('map-area').classList.contains('mode-3d'));
       await searchAtAndWaitPrefetch(page, STATION, 500); // 裏取得の反映（render()）が終わるまで待つ
       await page.waitForTimeout(500);
@@ -7139,11 +7214,23 @@ async function checkRound45(browser, baseUrl, savedPaths) {
     if (dim === '3d') {
       const map = window.__terrainMapForDebug;
       const els = [...document.querySelectorAll('#spots-map-3d .map-cluster-3d')];
+      // 【56本目】3Dも2Dと同じく、まとめる色の1つずつの点どうしで、画面上14px以内（重なる）の組の数を数える。
+      const kind = window.__terrainViewForDebug._clusterKind;
+      const seen = new Set();
+      const pts = [];
+      map.queryRenderedFeatures({ layers: ['spots-circle'] }).forEach((f) => {
+        if (window.__terrainViewForDebug?._absorbedIds?.has(f.properties.id) || f.properties.cat !== kind || seen.has(f.properties.id)) return;
+        seen.add(f.properties.id);
+        pts.push(map.project(f.geometry.coordinates));
+      });
+      let overlapPairs = 0;
+      for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) if (Math.hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y) <= 14) overlapPairs++;
       return {
         zoom: +map.getZoom().toFixed(2),
         clusters: els.length,
         pins: map.queryRenderedFeatures({ layers: ['spots-circle', 'spots-plain-circle'] }).filter((f) => !window.__terrainViewForDebug?._absorbedIds?.has(f.properties.id)).length,
         signature: els.map((e) => e.textContent.trim()).sort().join(','),
+        overlapPairs,
       };
     }
     const mv = window.__mapViewForDebug;
@@ -7195,7 +7282,7 @@ async function checkRound45(browser, baseUrl, savedPaths) {
       const inClusters = (st) => st.signature.split(',').filter(Boolean).reduce((sum, n) => sum + Number(n), 0);
       const step = async (dir) => {
         if (dim === '2d') {
-          await page.click(dir < 0 ? '#spots-map .leaflet-control-zoom-out' : '#spots-map .leaflet-control-zoom-in');
+          await page.click(dir < 0 ? '#map-zoom-out' : '#map-zoom-in'); // 【56本目】自前のズーム＋−
           await page.waitForTimeout(700);
         } else {
           await page.evaluate((dir) => { const m = window.__terrainMapForDebug; m.easeTo({ zoom: m.getZoom() + dir, duration: 300 }); }, dir);
@@ -7217,8 +7304,10 @@ async function checkRound45(browser, baseUrl, savedPaths) {
       record(
         // 【48本目】まとめるのはピン同士が重なるときだけ（14px）になったため、2段縮小しても重ならなければ
         // まとまらないのが正しい（山下・¥500のPC・2Dは7か所が重ならないまま）。重なる組が残っていないことで見る。
-        `${label} 検索した直後から2段縮小すると、重なるピンはまとまる（まとめた丸に入った場所が増え、ばらのピンが減る。2Dで重なる組が無いときは、まとまらないのが正しい）`,
-        (inClusters(s1) > inClusters(s0) && s1.pins < s0.pins) || (dim === '2d' && s1.overlapPairs === 0),
+        // 【56本目】地図が画面いっぱい（PCは1920×1032、以前は491×745）になり、検索した直後のズームが1段ほど高くなったため、
+        // 3Dでも2段縮小して重なる組が無いことがある。3Dも、重なる組が残っていないことで見る（48本目の決まりどおり）。
+        `${label} 検索した直後から2段縮小すると、重なるピンはまとまる（まとめた丸に入った場所が増え、ばらのピンが減る。重なる組が無いときは、まとまらないのが正しい）`,
+        (inClusters(s1) > inClusters(s0) && s1.pins < s0.pins) || s1.overlapPairs === 0,
         JSON.stringify({ before: s0, after: s1 })
       );
       if (dim === '2d') {
@@ -7345,7 +7434,7 @@ async function checkRound45(browser, baseUrl, savedPaths) {
     try {
       await searchAtAndWaitPrefetch(page, station, budget);
       if (vLabel !== 'pc') {
-        await page.click('.tab-btn[data-tab="map"]');
+        await showMapTab(page);
         await page.waitForTimeout(400);
       }
       if (!(await to3d(page))) { record(`${label} 3D化（検証の前提）`, false); continue; }
@@ -7378,7 +7467,7 @@ async function checkRound45(browser, baseUrl, savedPaths) {
         await page.screenshot({ path: shotPath });
         savedPaths.push(shotPath);
       }
-      await page.click('#map-dimension-toggle');
+      await clickDimensionToggle(page);
       await page.waitForFunction(() => !document.getElementById('map-area').classList.contains('mode-3d'));
       const hiddenIn2d = await page.evaluate(() => {
         const r = document.getElementById('map-rotate-hint').getBoundingClientRect();
@@ -7445,7 +7534,7 @@ async function circleEdgeControlGaps(page, dim) {
       const rect = map.getContainer().getBoundingClientRect();
       for (let i = 0; i < 72; i++) { const p = dest(lat, lon, i * 5, km); const s = map.latLngToContainerPoint([p.lat, p.lon]); pts.push({ x: rect.left + s.x, y: rect.top + s.y }); }
     }
-    const sels = ['#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle', '#map-dimension-toggle', '#spot-info-panel', '#mobile-budget-overlay', '#map-area .leaflet-control-zoom'];
+    const sels = ['#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle', '#map-dimension-toggle', '#spot-info-panel', '#mobile-budget-overlay', '#map-zoom-controls'];
     const gaps = {};
     sels.forEach((sel) => {
       const el = document.querySelector(sel);
@@ -7527,12 +7616,12 @@ async function checkRound47(browser, baseUrl, savedPaths) {
         await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
         await searchAtAndWaitPrefetch(page, '富山駅前', 1000);
         if (isMobile) {
-          await page.click('.tab-btn[data-tab="map"]');
+          await showMapTab(page);
           await page.waitForTimeout(400);
         }
         if (dim === '3d') {
           // 検索したあと初めて3Dにしたとき（全体の見え方に合わせる）
-          await page.click('#map-dimension-toggle');
+          await clickDimensionToggle(page);
           const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
           record(`${label} 3D化（検証の前提）`, ok);
           if (!ok) continue;
@@ -7870,7 +7959,7 @@ async function checkRound51(browser, baseUrl, savedPaths) {
         record(`${label} ブラウザのタブの名前が「みちどころ」`, title.startsWith('みちどころ'), title);
         await searchExactStation(page, '富山駅前', 800, isMobile);
         if (dim === '3d') {
-          await page.click('#map-dimension-toggle');
+          await clickDimensionToggle(page);
           const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
           record(`${label} 3D化（検証の前提）`, ok);
           if (!ok) continue;
@@ -7911,14 +8000,25 @@ async function checkRound51(browser, baseUrl, savedPaths) {
             subVisible: getComputedStyle(sub).display !== 'none',
           };
         });
-        record(
-          `${label} 見出し「みちどころ」と副題「―近くの未知の場所を探そう―」が画面内に出ていて、切れていない・マイリストと重ならない`,
-          header.h1 === 'みちどころ' && header.sub === '―近くの未知の場所を探そう―' && header.subVisible
-            && !header.h1Cut && !header.subCut
-            && isFullyVisible(header.h1Rect, viewport) && isFullyVisible(header.subRect, viewport)
-            && !rectsOverlap(header.subRect, header.mylist) && !rectsOverlap(header.h1Rect, header.mylist),
-          JSON.stringify(header)
-        );
+        if (isMobile) {
+          // 【56本目】スマホでは副題をヘッダーに出さず、トップの検索カードの1行目に出す（マイリストは「☰」の中）。
+          const brand = await page.evaluate(() => document.querySelector('.search-card-brand span')?.textContent.trim());
+          record(
+            `${label} 見出し「みちどころ」がヘッダーに出ていて切れていない。副題「―近くの未知の場所を探そう―」はヘッダーではなく検索カードの1行目（56本目）`,
+            header.h1 === 'みちどころ' && !header.h1Cut && isFullyVisible(header.h1Rect, viewport) && !header.subVisible
+              && brand === '―近くの未知の場所を探そう―',
+            JSON.stringify({ ...header, brand })
+          );
+        } else {
+          record(
+            `${label} 見出し「みちどころ」と副題「―近くの未知の場所を探そう―」が画面内に出ていて、切れていない・マイリストと重ならない`,
+            header.h1 === 'みちどころ' && header.sub === '―近くの未知の場所を探そう―' && header.subVisible
+              && !header.h1Cut && !header.subCut
+              && isFullyVisible(header.h1Rect, viewport) && isFullyVisible(header.subRect, viewport)
+              && !rectsOverlap(header.subRect, header.mylist) && !rectsOverlap(header.h1Rect, header.mylist),
+            JSON.stringify(header)
+          );
+        }
 
         // --- 3. 色の説明・「NEW +◯」 ---
         const legend = await page.evaluate((dim) => {
@@ -7926,7 +8026,7 @@ async function checkRound51(browser, baseUrl, savedPaths) {
           const lg = document.getElementById('map-legend');
           const tag = document.getElementById('map-new-count');
           const area = document.getElementById('map-area');
-          const obstacles = [...document.querySelectorAll('#map-dimension-toggle, #map-compass-btn, #map-reset-view-btn, #map-rotate-handle, #map-area .leaflet-control-zoom, #map-area .leaflet-control-attribution, #map-area .maplibregl-ctrl-attrib, #map-area .maplibregl-ctrl-group')]
+          const obstacles = [...document.querySelectorAll('#map-dimension-toggle, #map-compass-btn, #map-reset-view-btn, #map-rotate-handle, #map-zoom-controls, #map-area .leaflet-control-attribution, #map-area .maplibregl-ctrl-attrib, #map-area .maplibregl-ctrl-group')]
             .filter((el) => { const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0 && getComputedStyle(el).visibility !== 'hidden'; })
             .map((el) => ({ id: el.id || String(el.className).split(' ')[0], rect: r(el) }));
           const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
@@ -7959,7 +8059,7 @@ async function checkRound51(browser, baseUrl, savedPaths) {
         // --- 4. 一覧の見出し・カードの「NEW」 ---
         const readList = async () => {
           if (isMobile) {
-            await page.click('.tab-btn[data-tab="list"]');
+            await showListTab(page);
             await page.waitForTimeout(400);
           }
           return page.evaluate(() => {
@@ -8062,7 +8162,7 @@ async function checkRound53(browser, baseUrl, savedPaths) {
       await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
       await searchExactStation(page, '富山駅前', 500, isMobile);
       if (dim === '3d') {
-        await page.click('#map-dimension-toggle');
+        await clickDimensionToggle(page);
         const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
         record(`${label} 3D化（検証の前提）`, ok);
         if (!ok) continue;
@@ -8161,7 +8261,7 @@ async function checkRound54(browser, baseUrl, savedPaths) {
       await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
       await searchExactStation(page, '富山駅前', 500, isMobile);
       if (dim === '3d') {
-        await page.click('#map-dimension-toggle');
+        await clickDimensionToggle(page);
         const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
         record(`${label} 3D化（検証の前提）`, ok);
         if (!ok) continue;
@@ -8291,6 +8391,259 @@ async function checkRound54(browser, baseUrl, savedPaths) {
 }
 
 /**
+ * 【2026-10-25、56本目】地図を画面いっぱいに出す骨組み・トップ画面・結果画面の仮置き。
+ * PC（1920×1080）・スマホ（390×844）・400×464で、2Dと3D。
+ * 1. ページ全体が縦にも横にもスクロールしない（トップ・結果とも）。
+ * 2. トップ画面：検索カードが画面内に収まり、見出し・出発駅・予算（往復）・スライダー・「この条件で探す」・例・
+ *    「データ出典・免責」が見える。ヘッダー：PCは「使い方」「2D / 3D」「マイリスト」、スマホは「☰」（押すと3つが出る）。
+ * 3. 地図のズーム＋−が、ほかの部品・入れ物に隠れていない（トップ・結果とも。400×464の2Dで「3D表示」と「i」の
+ *    下に隠れていた件の確認）。
+ * 4. 結果画面：スライダーがどこにも見えない。検索カードは隠れ、結果の入れ物が見える。結果の入れ物の一番下に
+ *    「データ出典・免責」が見える。「▼条件を変える」でトップの検索カードに戻り、結果の入れ物は隠れる
+ *    （PCで検索カードの件数と一覧の見出しが同時に見えることはない）。「▲閉じる」で結果の画面に戻る。
+ * 5. 右下の部品の列・出典が、結果の入れ物・検索カードと重ならない。
+ * 6. 地図の右下の出典（ⓘ）を開くと、必須の表示3点（出典・正確性の非保証・問い合わせ先）が出る（2D）。
+ * スクリーンショット：round56-{top|result}-{2d|3d}-{pc|std|own}.png（画面全体）。3Dのトップは、3Dで検索した
+ * あと「条件を変える」で検索カードを開いたところ（検索前は2Dで出すため）。
+ */
+async function checkRound56(browser, baseUrl, savedPaths) {
+  console.log('\n=== 56本目：地図を画面いっぱいに出す骨組み・トップ画面・結果画面の仮置き ===');
+  const viewports = { pc: VIEWPORTS.pc, std: { width: 390, height: 844 }, own: { width: 400, height: 464 } };
+  const rect = (el) => { const b = el.getBoundingClientRect(); return { x: b.left, y: b.top, width: b.width, height: b.height }; };
+  for (const [vLabel, viewport] of Object.entries(viewports)) {
+    for (const dim of ['2d', '3d']) {
+      const label = `[56/${vLabel}/${dim}]`;
+      const isMobile = vLabel !== 'pc';
+      const context = await browser.newContext({ viewport });
+      await context.addInitScript(() => { try { localStorage.setItem('reverse-travel-rotate-hint-seen', 'true'); } catch { /* 無視 */ } });
+      const page = await context.newPage();
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+      page.on('console', (msg) => {
+        if (msg.type() === 'error' && !isKnownAcceptableConsoleMessage(msg.text())) errors.push(msg.text());
+      });
+      // 共通の見た目の確かめ
+      const noPageScroll = async (where) => {
+        const sc = await page.evaluate(() => ({
+          sh: document.documentElement.scrollHeight, ih: innerHeight, sw: document.documentElement.scrollWidth, iw: innerWidth,
+          bodyOverflow: getComputedStyle(document.body).overflowY,
+        }));
+        record(`${label} ${where}：ページ全体が縦にも横にもスクロールしない`, sc.sh <= sc.ih + 1 && sc.sw <= sc.iw + 1, JSON.stringify(sc));
+      };
+      const notCovered = async (selector, what, where) => {
+        const r = await page.evaluate((sel) => {
+          const el = document.querySelector(sel);
+          if (!el) return { found: false };
+          const b = el.getBoundingClientRect();
+          const visible = b.width > 0 && b.height > 0 && getComputedStyle(el).visibility !== 'hidden' && el.offsetParent !== null;
+          const top = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+          const inView = b.left >= 0 && b.top >= 0 && b.right <= innerWidth + 1 && b.bottom <= innerHeight + 1;
+          const describe = (n) => (n ? (n.id ? `#${n.id}` : `${n.tagName}.${String(n.className).split(' ')[0]}`) : null);
+          return { found: true, visible, inView, onTop: !!top && el.contains(top), topIs: describe(top) };
+        }, selector);
+        record(`${label} ${where}：${what}が見えていて、ほかの部品・入れ物に隠れていない`, r.found && r.visible && r.inView && r.onTop, JSON.stringify(r));
+      };
+      const shot = async (name) => {
+        await waitForBaseMapLoaded(page, dim === '3d' && name.includes('result') ? '3d' : (await page.evaluate(() => document.getElementById('map-area').classList.contains('mode-3d') ? '3d' : '2d')));
+        const file = path.join(screenshotDir, name);
+        await page.screenshot({ path: file });
+        savedPaths.push(file);
+      };
+      try {
+        await page.goto(baseUrl, { waitUntil: 'load' });
+        await page.waitForSelector('#departure-input');
+        await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+        await page.waitForFunction(() => !!window.__mapViewForDebug?.map, { timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(500);
+
+        // ---- トップ画面（2D） ----
+        await noPageScroll('トップ画面');
+        const top = await page.evaluate(() => {
+          const r = (el) => { if (!el) return null; const b = el.getBoundingClientRect(); return { left: b.left, top: b.top, right: b.right, bottom: b.bottom, w: b.width, h: b.height }; };
+          const card = document.getElementById('layout-left');
+          const area = document.getElementById('map-area');
+          const vis = (sel) => { const el = document.querySelector(sel); return !!el && el.offsetParent !== null && el.getBoundingClientRect().width > 0; };
+          return {
+            card: r(card), area: r(area),
+            cardScrollable: card.scrollHeight > card.clientHeight + 1,
+            title: document.querySelector('.search-card-title')?.textContent.replace(/\s+/g, ''),
+            lead: document.querySelector('.search-card-lead')?.textContent.trim(),
+            budgetLabel: document.querySelector('.budget-label')?.textContent.trim(),
+            visible: {
+              departure: vis('#departure-input'), slider: vis('#budget-slider'), search: vis('#search-btn'),
+              examples: document.querySelectorAll('.example-chip').length === 3 && vis('.example-chip'),
+              dataLine: vis('#about-data-btn'), brand: vis('.search-card-brand'),
+              subtitleInHeader: vis('#app-header .app-subtitle'), menuBtn: vis('#header-menu-btn'),
+              howto: vis('#howto-btn'), dim: vis('#map-dimension-toggle'), mylist: vis('#mylist-btn'),
+            },
+            searchLabel: document.getElementById('search-btn').textContent.trim(),
+            mapReady: !!window.__mapViewForDebug?.map,
+          };
+        });
+        const cardInside = top.card && top.area && top.card.left >= top.area.left && top.card.right <= top.area.right + 1
+          && top.card.top >= top.area.top && top.card.bottom <= top.area.bottom + 1;
+        record(
+          `${label} トップ画面：検索カードが地図の中に収まり、見出し・出発駅・予算（往復）・スライダー・「この条件で探す」・例・「データ出典・免責」が見える`,
+          cardInside && top.title === 'いくらで、どこまで行ける？' && top.lead === '予算を決めると、行ける場所が地図に出ます'
+            && top.budgetLabel === '予算（往復）' && top.searchLabel === 'この条件で探す'
+            && top.visible.departure && top.visible.slider && top.visible.search && top.visible.examples && top.visible.dataLine && top.mapReady,
+          JSON.stringify(top)
+        );
+        if (isMobile) {
+          record(`${label} トップ画面（スマホ）：副題はヘッダーではなく検索カードの1行目。ヘッダーは「☰」`,
+            top.visible.brand && !top.visible.subtitleInHeader && top.visible.menuBtn && !top.visible.howto, JSON.stringify(top.visible));
+          await page.click('#header-menu-btn');
+          await page.waitForTimeout(150);
+          const menu = await page.evaluate(() => ['#howto-btn', '#map-dimension-toggle', '#mylist-btn'].map((sel) => {
+            const el = document.querySelector(sel);
+            const b = el.getBoundingClientRect();
+            const t = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+            return { sel, ok: b.width > 0 && b.right <= innerWidth && b.bottom <= innerHeight && !!t && el.contains(t) };
+          }));
+          record(`${label} 「☰」を押すと「使い方」「2D / 3D」「マイリスト」が出て、押せる`, menu.every((m) => m.ok), JSON.stringify(menu));
+          await page.click('#header-menu-btn');
+          await page.waitForTimeout(150);
+        } else {
+          record(`${label} トップ画面（PC）：ヘッダー右に「使い方」「2D / 3D」「マイリスト」、副題もヘッダーに出る`,
+            top.visible.howto && top.visible.dim && top.visible.mylist && top.visible.subtitleInHeader && !top.visible.menuBtn && !top.visible.brand, JSON.stringify(top.visible));
+        }
+        await notCovered('#map-zoom-in', '地図の＋', 'トップ画面');
+        await notCovered('#map-zoom-out', '地図の−', 'トップ画面');
+        await notCovered('#about-data-btn', '「データ出典・免責」', 'トップ画面');
+        // 出典（ⓘ）を開くと必須の表示3点（2D）
+        const attrib = await page.evaluate(async () => {
+          const el = document.querySelector('#spots-map .leaflet-control-attribution');
+          if (!el) return { found: false };
+          el.click();
+          await new Promise((r) => setTimeout(r, 200));
+          const text = el.textContent;
+          const b = el.getBoundingClientRect();
+          const res = { found: true, open: el.classList.contains('is-open'), source: /交通データ/.test(text) && /国土地理院ベクトルタイル提供実験/.test(text),
+            disclaimer: /正確性・完全性は保証されません/.test(text), contact: /お問い合わせは開発者へ/.test(text),
+            link: !!el.querySelector('.open-about-data'), inView: b.left >= 0 && b.right <= innerWidth + 1 && b.top >= 0 && b.bottom <= innerHeight + 1 };
+          el.click();
+          return res;
+        });
+        record(`${label} 地図の右下の出典（ⓘ）を開くと、必須の表示3点（出典・正確性の非保証・問い合わせ先）と「出典の詳細・免責・お問い合わせ」が出る`,
+          attrib.found && attrib.open && attrib.source && attrib.disclaimer && attrib.contact && attrib.link && attrib.inView, JSON.stringify(attrib));
+        if (dim === '2d') await shot(`round56-top-2d-${vLabel}.png`);
+
+        // ---- 検索して結果画面へ ----
+        await page.click('.example-chip[data-station-name="富山駅前"]');
+        const chip = await page.evaluate(() => ({ v: document.getElementById('departure-input').value, pref: document.getElementById('departure-input').dataset.prefCode, idx: document.getElementById('departure-input').dataset.localIndex }));
+        record(`${label} 例の「富山」を押すと、出発駅が富山駅前になる`, chip.v === '富山駅前' && chip.pref === '16' && chip.idx === '13', JSON.stringify(chip));
+        await setBudgetSlider(page, 800);
+        const prefetchBefore = await page.evaluate(() => window.__maxBudgetPrefetchAppliedCount || 0);
+        await clickElementChecked(page, 'search-btn', `${label} トップ画面の「この条件で探す」`);
+        await page.waitForSelector('.spot-card, .no-results', { timeout: 15000, state: 'attached' });
+        await page.waitForFunction((n) => (window.__maxBudgetPrefetchAppliedCount || 0) > n, prefetchBefore, { timeout: 20000 }).catch(() => {});
+        if (dim === '3d') {
+          await clickDimensionToggle(page);
+          const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+          record(`${label} 3D化（検証の前提）`, ok);
+          if (!ok) continue;
+          await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+          await waitForTerrainCameraIdle(page);
+          await waitForTerrainTilesLoaded(page);
+        } else {
+          await waitForWaveRevealSettled(page);
+        }
+        await page.waitForTimeout(800);
+
+        await noPageScroll('結果画面');
+        const res = await page.evaluate(() => {
+          const vis = (el) => !!el && el.offsetParent !== null && el.getBoundingClientRect().width > 0 && getComputedStyle(el).visibility !== 'hidden';
+          const sliders = [...document.querySelectorAll('input[type="range"]')].filter(vis).map((el) => el.id);
+          const panel = document.querySelector('.results-panel');
+          const r = (el) => { const b = el.getBoundingClientRect(); return { left: b.left, top: b.top, right: b.right, bottom: b.bottom }; };
+          return {
+            sliders, cardVisible: vis(document.getElementById('layout-left')), panelVisible: vis(panel),
+            dataLine: vis(panel.querySelector('[data-open-about]')),
+            panel: r(panel), cluster: r(document.getElementById('map-controls-cluster')),
+            attrib: r(document.querySelector(document.getElementById('map-area').classList.contains('mode-3d') ? '#spots-map-3d .maplibregl-ctrl-attrib' : '#spots-map .leaflet-control-attribution')),
+            heading: document.getElementById('results-band-heading').textContent,
+            cards: document.querySelectorAll('.spot-card').length,
+          };
+        });
+        record(`${label} 結果画面：スライダーがどこにも見えない（金額を変えるのは＋−だけ）`, res.sliders.length === 0, JSON.stringify(res.sliders));
+        record(`${label} 結果画面：検索カードは隠れ、結果の入れ物（一覧${res.cards}か所）が見える`, !res.cardVisible && res.panelVisible && res.cards > 0, JSON.stringify({ cardVisible: res.cardVisible, panelVisible: res.panelVisible, cards: res.cards }));
+        const ov = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+        record(`${label} 結果画面：右下の部品の列・出典が、結果の入れ物と重ならない`, !ov(res.cluster, res.panel) && !ov(res.attrib, res.panel), JSON.stringify({ panel: res.panel, cluster: res.cluster, attrib: res.attrib }));
+        await notCovered('#map-zoom-in', '地図の＋', '結果画面');
+        await notCovered('#map-zoom-out', '地図の−', '結果画面');
+        await notCovered('.results-panel [data-open-about]', '結果の入れ物の一番下の「データ出典・免責」', '結果画面');
+        // 地図の＋で実際に地図が拡大する
+        const zBefore = await page.evaluate((dim) => (dim === '3d' ? window.__terrainMapForDebug.getZoom() : window.__mapViewForDebug.map.getZoom()), dim);
+        await clickElementChecked(page, 'map-zoom-in', `${label} 地図の＋`);
+        await page.waitForTimeout(900);
+        if (dim === '3d') await waitForTerrainCameraIdle(page);
+        const zAfter = await page.evaluate((dim) => (dim === '3d' ? window.__terrainMapForDebug.getZoom() : window.__mapViewForDebug.map.getZoom()), dim);
+        record(`${label} 地図の＋を押すと、地図が拡大する`, zAfter > zBefore + 0.5, JSON.stringify({ zBefore, zAfter }));
+        await page.click('#map-reset-view-btn');
+        await page.waitForTimeout(1800);
+        if (dim === '3d') { await waitForTerrainCameraIdle(page); await waitForTerrainTilesLoaded(page); }
+        await shot(`round56-result-${dim}-${vLabel}.png`);
+
+        // ---- 「▼条件を変える」でトップの検索カードに戻る ----
+        await clickElementChecked(page, 'search-summary-toggle', `${label} 「▼条件を変える」`);
+        await page.waitForTimeout(400);
+        const back = await page.evaluate(() => {
+          const vis = (el) => !!el && el.offsetParent !== null && el.getBoundingClientRect().width > 0;
+          return {
+            cardVisible: vis(document.getElementById('layout-left')), panelVisible: vis(document.querySelector('.results-panel')),
+            sliderVisible: vis(document.getElementById('budget-slider')), headingVisible: vis(document.getElementById('results-band-heading')),
+            closeVisible: vis(document.getElementById('form-close-btn')),
+          };
+        });
+        record(`${label} 「▼条件を変える」でトップの検索カード（スライダーあり・「▲閉じる」あり）に戻り、結果の入れ物（一覧の見出し）は隠れる`,
+          back.cardVisible && back.sliderVisible && back.closeVisible && !back.panelVisible && !back.headingVisible, JSON.stringify(back));
+        await noPageScroll('「条件を変える」で開いた検索カード');
+        if (dim === '3d') await shot(`round56-top-3d-${vLabel}.png`);
+        await clickElementChecked(page, 'form-close-btn', `${label} 「▲閉じる」`);
+        await page.waitForTimeout(400);
+        const closed = await page.evaluate(() => ({
+          cardVisible: document.getElementById('layout-left').offsetParent !== null,
+          panelVisible: document.querySelector('.results-panel').offsetParent !== null,
+        }));
+        record(`${label} 「▲閉じる」で結果の画面に戻る`, !closed.cardVisible && closed.panelVisible, JSON.stringify(closed));
+        record(`${label} コンソールにエラーが出ていない（標高タイルの404を除く）`, errors.length === 0, errors.join(' / '));
+      } catch (e) {
+        record(`${label} 検証中にクラッシュしない`, false, e.message);
+      } finally {
+        await context.close();
+      }
+    }
+  }
+
+  // ---- 検索前の地図（決定3：C）：初めての人は富山駅前のあたり、検索したあとは前回の出発駅のあたり ----
+  {
+    const context = await browser.newContext({ viewport: VIEWPORTS.pc });
+    const page = await context.newPage();
+    try {
+      await page.goto(baseUrl, { waitUntil: 'load' });
+      await page.waitForFunction(() => !!window.__mapViewForDebug?.map, { timeout: 15000 });
+      const dist = (a, b) => {
+        const toRad = (d) => (d * Math.PI) / 180;
+        const x = Math.sin(toRad(b.lat - a.lat) / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(toRad(b.lng - a.lng) / 2) ** 2;
+        return 2 * 6371 * Math.asin(Math.sqrt(x));
+      };
+      const first = await page.evaluate(() => { const c = window.__mapViewForDebug.map.getCenter(); return { lat: c.lat, lng: c.lng, zoom: window.__mapViewForDebug.map.getZoom(), mode3d: document.getElementById('map-area').classList.contains('mode-3d') }; });
+      record('[56/初めての人] 検索前の地図は、2Dで富山駅前のあたり（5km以内）', !first.mode3d && dist(first, { lat: 36.7016, lng: 137.2131 }) < 5, JSON.stringify(first));
+      await searchAt(page, '高松築港', 500);
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForFunction(() => !!window.__mapViewForDebug?.map, { timeout: 15000 });
+      const again = await page.evaluate(() => { const c = window.__mapViewForDebug.map.getCenter(); return { lat: c.lat, lng: c.lng }; });
+      const dep = await page.evaluate(() => JSON.parse(localStorage.getItem('michidokoro-last-departure') || 'null'));
+      record('[56/2回目] 検索したあとに開き直すと、検索前の地図は前回の出発駅（高松築港）のあたり（5km以内）', !!dep && dist(again, { lat: dep.lat, lng: dep.lon }) < 5, JSON.stringify({ again, dep }));
+    } catch (e) {
+      record('[56/検索前の地図] 検証中にクラッシュしない', false, e.message);
+    } finally {
+      await context.close();
+    }
+  }
+}
+
+/**
  * 【2026-10-23、49本目、Minami決定】ピンの色を紺とオレンジの2色にする（灰色をやめる）。
  * 富山駅前で（岡は¥501〜¥800の場所が無く、例の②③が成り立たないため。富山駅前はどの金額帯にも場所がある）、
  * ¥500で検索（¥500までが紺）→ ＋で¥800（¥501〜¥800がオレンジ）→ ¥800で再検索（¥500までが紺、
@@ -8348,7 +8701,7 @@ async function checkRound49(browser, baseUrl, savedPaths) {
         await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
         await searchExactStation(page, '富山駅前', 500, isMobile);
         if (dim === '3d') {
-          await page.click('#map-dimension-toggle');
+          await clickDimensionToggle(page);
           const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
           record(`${label} 3D化（検証の前提）`, ok);
           if (!ok) continue;
@@ -8407,8 +8760,8 @@ async function checkRound49(browser, baseUrl, savedPaths) {
 /** 【48本目】出発駅の候補を、駅名がちょうど一致するもので選んで検索する（「岡」で「岡山…」を選ばないように）。 */
 async function searchExactStation(page, stationName, budget, isMobile) {
   await ensureFormExpanded(page);
-  await page.fill('#departure-input', '');
-  await page.fill('#departure-input', stationName);
+  await fillDeparture(page, '');
+  await fillDeparture(page, stationName);
   await page.waitForTimeout(500);
   await page.locator(`.suggestion-item[data-station-name="${stationName}"]`).first().click();
   await setBudgetSlider(page, budget);
@@ -8418,7 +8771,7 @@ async function searchExactStation(page, stationName, budget, isMobile) {
   await page.waitForFunction((n) => (window.__maxBudgetPrefetchAppliedCount || 0) > n, before, { timeout: 20000 }).catch(() => {});
   await page.waitForTimeout(300);
   if (isMobile) {
-    await page.click('.tab-btn[data-tab="map"]');
+    await showMapTab(page);
     await page.waitForTimeout(400);
   }
 }
@@ -8476,7 +8829,7 @@ async function checkRound48(browser, baseUrl, savedPaths) {
         await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
         await searchExactStation(page, '岡', 500, isMobile);
         if (dim === '3d') {
-          await page.click('#map-dimension-toggle');
+          await clickDimensionToggle(page);
           const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
           record(`${label} 3D化（検証の前提）`, ok);
           if (!ok) continue;
@@ -8621,7 +8974,7 @@ async function checkRound48(browser, baseUrl, savedPaths) {
     await page.goto(baseUrl, { waitUntil: 'load' });
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchExactStation(page, '岡', 500, true);
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 });
     await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
     await waitForTerrainCameraIdle(page);
@@ -8701,7 +9054,7 @@ async function checkVectorBaseMap(browser, baseUrl, savedPaths) {
 
     tileRequests.length = 0;
     await page.evaluate(() => window.__mapViewForDebug.refitBounds());
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
     record('[43/D/3D] 3D化（検証の前提）', ok);
     if (ok) {
@@ -8740,7 +9093,7 @@ async function checkBreadcrumbTrail(browser, baseUrl, savedPaths) {
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '高松築港', 1000);
-    if (label === 'sp') await page.click('.tab-btn[data-tab="list"]').catch(() => {});
+    if (label === 'sp') await showListTab(page).catch(() => {});
 
     // 一覧から1件目を開く：「一覧 ＞ 今の場所」の2項目だけになる
     await page.locator('.spot-card').first().click();
@@ -8836,7 +9189,7 @@ async function checkBreadcrumbTrail(browser, baseUrl, savedPaths) {
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '高松築港', 1000);
-    await page.click('.tab-btn[data-tab="list"]').catch(() => {});
+    await showListTab(page).catch(() => {});
     await page.locator('.spot-card').first().click();
     await page.waitForSelector('#detail-content h2', { timeout: 15000 });
     const originalHeading = await page.locator('#detail-content h2').textContent();
@@ -8947,7 +9300,7 @@ async function checkRotateHintPersistence(baseUrl, savedPaths) {
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '高松築港', 1000);
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     const became3d = await page.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
@@ -9041,7 +9394,7 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '高松築港', 1000);
     if (label !== 'pc') {
-      await page.click('.tab-btn[data-tab="map"]');
+      await showMapTab(page);
       await page.waitForTimeout(300);
     }
 
@@ -9052,7 +9405,7 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
     const handleVisibleIn2d = await page.locator('#map-rotate-handle').isVisible().catch(() => false);
     record(`[${label}] 2Dでは方位磁針・ハンドルが出ない`, !compassVisibleIn2d && !handleVisibleIn2d);
 
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     const became3d = await page.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
@@ -9127,7 +9480,7 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
       savedPaths.push(hintPath);
 
       // 吹き出しを押すと消える
-      await page.locator('#map-rotate-hint').click();
+      await page.evaluate(() => document.getElementById('map-rotate-hint').click()); // 【56本目】3秒で自動で消えるため、待たずに押す
       const hintHiddenAfterClick = await page.locator('#map-rotate-hint').isVisible().catch(() => false);
       record(`[${label}] 吹き出しを押すと消える`, !hintHiddenAfterClick);
     }
@@ -9447,9 +9800,9 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '富山駅前', 800);
-    await page.click('.tab-btn[data-tab="map"]');
+    await showMapTab(page);
     await page.waitForTimeout(300);
-    await page.click('#map-dimension-toggle');
+    await clickDimensionToggle(page);
     const became3d = await page.waitForFunction(
       () => document.getElementById('map-area').classList.contains('mode-3d'),
       { timeout: 30000 }
@@ -9612,6 +9965,7 @@ async function main() {
     await runWithFreshBrowser(checkRound51, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound53, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound54, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkRound56, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBreadcrumbTrail, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBudgetSlider, baseUrl, savedPaths);
     await runWithFreshBrowser(checkWaveRevealAndCircleScreenshots, baseUrl, savedPaths);
