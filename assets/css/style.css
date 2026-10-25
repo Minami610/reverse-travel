@@ -58,80 +58,12 @@ body {
 }
 
 /* ========================================
-   ヘッダー（約40px・1行に収める）
-   ======================================== */
 
-header {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
-  background: linear-gradient(135deg, var(--color-main) 0%, var(--color-main-deep) 100%);
-  color: white;
-  padding: 0.4rem 1rem;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  overflow: hidden;
-  white-space: nowrap;
-}
 
-/* 【2026-10-24、51本目、Minami決定】アプリの名前「みちどころ」と副題「―近くの未知の場所を探そう―」。
-   PCは1行に並べ、スマホ幅では名前の下に副題を小さく出す（下の@media）。 */
-.app-title {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
-}
 
-header h1 {
-  font-size: 1.1rem;
-  letter-spacing: 0.08em;
-  flex: 0 0 auto;
-}
 
-header p {
-  font-size: 0.75rem;
-  opacity: 0.9;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1 1 auto;
-  min-width: 0; /* これが無いとテキストコンテンツの最小幅ぶん縮まず、見出しより先にmylist-btnが押し出される */
-}
 
-/* ヘッダーのマイリスト入り口。2026-10-08追加（Minamiさんの判断：フッターは
-   スマホでスクロールの一番下になり見つけにくいため使わない）。h1と同じく
-   flex:0 0 autoで、幅が狭いときは隣のpが先に省略される側に回る。 */
-#mylist-btn {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  background: rgba(255, 255, 255, 0.15);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  color: white;
-  padding: 0.3rem 0.6rem;
-  border-radius: 999px;
-  font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
-  min-height: 32px;
-}
 
-#mylist-btn:hover {
-  background: rgba(255, 255, 255, 0.25);
-}
-
-#mylist-count {
-  background: white;
-  color: var(--color-main-deep);
-  border-radius: 999px;
-  padding: 0.05rem 0.45rem;
-  font-size: 0.75rem;
-  font-weight: 700;
-  min-width: 1.2em;
-  text-align: center;
-}
 
 /* ========================================
    コンテナ（本体：flex:1で残り高さ全部を使う）
@@ -202,20 +134,7 @@ header p {
   padding: 0.2rem 0.3rem;
 }
 
-@media (min-width: 760px) {
-  .search-summary {
-    display: none !important; /* PCは常にフォームを開いたまま */
-  }
-}
 
-@media (max-width: 759px) {
-  .layout-left:not(.form-collapsed) .search-summary {
-    display: none;
-  }
-  .layout-left.form-collapsed #search-form {
-    display: none;
-  }
-}
 
 /* 【2026-10-17、32本目A、不具合修正】フォームを開いている間、#search-summary
    （中に閉じるボタンがある）はCSS（上の規則）でdisplay:noneになるため、
@@ -237,11 +156,6 @@ header p {
   padding: 0.2rem 0;
 }
 
-@media (max-width: 759px) {
-  #app-layout.has-results .layout-left:not(.form-collapsed) .form-close-btn {
-    display: block;
-  }
-}
 
 .form-group {
   margin-bottom: 0.6rem;
@@ -452,99 +366,15 @@ header p {
    全体レイアウト（アプリシェル：PC二段組／スマホ：タブ切替）
    ======================================== */
 
-/* #app-layoutは常に表示する（検索フォームまで一緒に隠さない。過去に
-   app-layoutごとhiddenにして検索フォームが消えた不具合の反省）。
-   本体（.container）のflex:1を受けて、#app-layout自身もflex:1＋
-   min-height:0で残り高さいっぱいに広がる。中身（左右カラム）が
-   それぞれ独立してoverflow-y:autoでスクロールする構造にすることで、
-   ページ全体（body）はスクロールさせない。 */
-.app-layout {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
 
-/* 検索フォーム＋地図（PC）／検索フォームのみ（スマホ）を格納する左カラム。
-   内部もflex-columnにして「検索フォームは自然な高さ、地図は残り全部」
-   という配分にする。min-height:0がないとflexの子（地図）が縮まず
-   高さが確定しない＝地図の枠が定まらない不具合の直接原因になる。 */
-.layout-left {
-  flex: 0 0 auto; /* スマホ：検索フォームだけなので自然な高さ */
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow-y: auto;
-}
 
-/* PCでは#spots-mapがここに入る。スマホでは空になるため高さ0に畳む */
-#map-slot-desktop {
-  flex: 0 0 auto;
-  height: 0;
-  overflow: hidden;
-}
 
-.mobile-tabs {
-  flex: 0 0 auto;
-  display: flex;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
-}
 
-.tab-btn {
-  flex: 1;
-  padding: 0.5rem;
-  border: 1px solid var(--color-border);
-  background-color: white;
-  color: var(--color-text-sub);
-  border-radius: 6px;
-  font-size: 0.9rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 0.2s, color 0.2s, border-color 0.2s;
-}
 
-.tab-btn.active {
-  background-color: var(--color-main);
-  color: white;
-  border-color: var(--color-main);
-}
 
-/* 右カラム：スマホでは検索フォームの残り全部（flex:1）、
-   PCではグリッドの1カラム分。中はタブ＋タブパネルのflex-column。 */
-.layout-right {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
 
-.tab-panel {
-  display: none;
-}
 
-/* アクティブなタブパネルも「残り高さいっぱい」を引き継ぐflex-column
-   にする。中の要素（並び替えUIは自然な高さ、一覧本体はflex:1で
-   スクロール）がこれに乗る。 */
-.tab-panel.active {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
 
-/* スマホの「地図」タブ：パネルの残り高さいっぱいに広がる。
-   【2026-10-13、22本目、Minami決定】min-height:0のままだと、画面が低い・
-   検索後の要約バー等で上側が伸びた場合に地図が70px程度まで潰れることが
-   実機で起きていた（地図がほぼ見えない・3Dのpaddingが地図の高さを超えて
-   MapLibreの警告が出る、の両方の原因）。240pxを下回らないようにし、
-   それでも収まらない場合はbody側のスクロールに任せる（上のbody定義参照）。 */
-#map-slot-mobile {
-  flex: 1;
-  min-height: 240px;
-}
 
 /* 検索前は非表示。JSが#app-layoutに has-results クラスを付けたときのみ表示する。
    data-view="results" の条件も含めることで、詳細画面表示中に
@@ -568,98 +398,12 @@ header p {
   min-height: 0;
 }
 
-#app-layout[data-view="detail"] .mobile-tabs,
-#app-layout[data-view="detail"] .tab-panel,
-#app-layout[data-view="detail"] .mobile-budget-overlay {
-  display: none;
-}
 
 #app-layout[data-view="detail"] #detail-container {
   display: flex;
   flex: 1;
 }
 
-/* ブレークポイント：CSSピクセル基準のため高倍率ズームでは実効幅が縮む
-   （150%ズームなら実際の画面幅の2/3）。900pxだと125〜150%ズームで
-   簡単に下回ってしまうため760pxまで下げ、さらに左カラムをminmax()で
-   可変にすることで、より狭い実効幅でも二段組を維持できるようにする。
-   layout-controller.js の DESKTOP_QUERY もこの値と必ず一致させること。 */
-@media (min-width: 760px) {
-  .app-layout {
-    display: grid;
-    grid-template-columns: minmax(280px, 42%) 1fr;
-    gap: 1.25rem;
-    /* align-items未指定＝stretchで左右カラムを同じ高さに揃え、
-       それぞれの内部でoverflow-y:autoさせる */
-  }
-
-  .container {
-    max-width: 1200px;
-  }
-
-  /* PCでは地図を左カラムに表示するため、タブUIは不要 */
-  .mobile-tabs {
-    display: none;
-  }
-
-  .tab-panel[data-tab-panel="list"] {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 0;
-  }
-
-  .tab-panel[data-tab-panel="map"] {
-    display: none;
-  }
-
-  /* #app-layout[data-view="detail"] はID+属性2つでこれらより必ず優先される */
-  #app-layout[data-view="detail"] .tab-panel {
-    display: none;
-  }
-
-  /* PCでは左カラムが「検索フォーム＋地図」の2要素になる */
-  /* 【2026-10-20、35本目、不具合修正・原因特定】overflow:visibleだった
-     （最初のUI実装（74317e5）からこの値のまま、3Dの方位磁針・ハンドル等
-     どの機能追加でも見直されていなかった）。
-     根本原因を特定した：回転ハンドル（#map-rotate-dial、72×72pxの正方形を
-     border-radius:50%で丸く見せているだけ）にbearingに応じたCSS transform:
-     rotate()を適用すると（terrain-map-view.jsの_setupRotateHandle()）、
-     90度の倍数以外の角度では「見た目の円」は変わらないのに、要素の
-     軸並行バウンディングボックス（getBoundingClientRect()・scrollWidthが
-     見る値）が72×72より大きくなる（正方形を回転させると外接矩形が膨らむ、
-     純粋な幾何の性質。例：35度では一辺あたり約72×(|cos35°|+|sin35°|)
-     ≈100pxまで膨らむ）。この膨らみ分が.map-rotate-handle（はみ出しを
-     切り取っていない）→#map-area→このスロットと素通りし、.layout-left
-     （overflow-y:autoによりoverflow-xも暗黙にautoへ計算される）で横
-     スクロールバーとして表面化する（Cowork報告の再現条件・PC/富山駅前/
-     往復¥700/3D表示で実測確認：#map-rotate-dialの右端がmap-areaの右端を
-     約6〜14px超えていた。ハンドルの向きを変えるcheckRotateHandle()には
-     以前から横スクロール検証が無く、このテスト側の盲点がバグを長期間
-     見落とす一因だった）。
-     根本原因そのものの修正は.map-rotate-handle{overflow:hidden}（下記）で
-     行った（見た目の円の外側、どのみち見えない正方形の角だけを切り取る
-     ため副作用が無い）。このスロット側のoverflow:hiddenは、そもそも
-     このスロットの外へ意図して見せる要素が無い設計であることに変わりは
-     ないため、同種の不具合の再発に備える保険として維持する（常設の
-     checkNoHorizontalOverflow()をcheckCircleThenFit()・checkRotateHandle()の
-     両方に追加し、以後の回帰を検出できるようにした）。 */
-  #map-slot-desktop {
-    flex: 1;
-    min-height: 200px;
-    height: auto;
-    margin-top: 0.75rem;
-    overflow: hidden;
-  }
-
-  /* PC二段組では左カラム幅（minmax）自体が制約になるため、
-     縦積み用の最大幅指定は解除する */
-  .form-row {
-    max-width: none;
-    margin-left: 0;
-    margin-right: 0;
-  }
-}
 
 /* 検索結果の見出し（「往復¥801〜¥1000で行ける場所」）。帯の範囲を常に明示する */
 .results-band-heading {
@@ -727,37 +471,8 @@ header p {
   display: block;
 }
 
-/* 2D/3D切替ボタン（デザイン①：地図エリア左下に重ねて配置） */
-#map-dimension-toggle {
-  position: absolute;
-  left: 8px;
-  bottom: 8px;
-  z-index: 1000;
-  padding: 0.4rem 0.75rem;
-  border: none;
-  border-radius: 999px;
-  background-color: rgba(255, 255, 255, 0.92);
-  color: var(--color-text);
-  font-size: 0.8rem;
-  font-weight: 600;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-  cursor: pointer;
-}
 
-#map-area.mode-3d #map-dimension-toggle {
-  background-color: var(--color-main);
-  color: white;
-}
 
-/* 【2026-10-13、22本目、Minami決定】スマホでは地図の下端いっぱいに予算操作帯
-   （#mobile-budget-overlay）を出すため、2D/3D切替ボタンは左下から左上へ
-   移す（出典ボタンも下記で左上・2D/3Dボタンの下へ移す）。 */
-@media (max-width: 759px) {
-  #map-dimension-toggle {
-    top: 8px;
-    bottom: auto;
-  }
-}
 
 /* 3D準備中インジケータ（4本目②）。2Dの地図は消さず、これを右下に小さく重ねるだけ */
 #terrain-loading-indicator {
@@ -776,25 +491,6 @@ header p {
   font-weight: 600;
 }
 
-/* 【2026-10-13、22本目、Minami決定】スマホでは地図の下端いっぱいに予算操作帯
-   を出すため、出典（attribution）コントロール（2D=Leaflet・3D=MapLibreとも
-   既定は右下）を左上・2D/3D切替ボタンの下へ移す。方位磁針（MapLibre既定は
-   右上）・最初の見え方に戻るボタン（右上、#map-controls-cluster参照）は右側のまま変更しない。 */
-@media (max-width: 759px) {
-  #map-area .leaflet-bottom.leaflet-right,
-  #map-area .maplibregl-ctrl-bottom-right {
-    /* 【2026-10-14、24本目④、不具合修正】46pxは2D/3D切替ボタン
-       （top:8px、実測の高さ約32.8px→下端は約40.8px）との間が5px前後しか
-       無く、見た目には触れ合っているように見える（Coworkのスクリーン
-       ショット指摘で発覚。verify-layoutの「重ならない」判定は交差の有無しか
-       見ておらず、この僅差を検出できていなかった）。54pxに広げて
-       はっきりした隙間（約13px）を確保した。 */
-    top: 54px;
-    left: 8px;
-    bottom: auto;
-    right: auto;
-  }
-}
 
 /* 【2026-10-16、12本目①、Minami決定：A＋C】地図の下に固定で出す情報「帯」
    （11本目の大きな枠から、高さ40px前後の細い1行に変更。選んだピンが隠れる
@@ -878,11 +574,6 @@ header p {
   padding: 0 0.5rem;
 }
 
-@media (min-width: 760px) {
-  .mobile-budget-overlay {
-    display: none !important;
-  }
-}
 
 .mobile-budget-overlay #mobile-budget-decrement,
 .mobile-budget-overlay #mobile-budget-increment {
@@ -2302,72 +1993,12 @@ header p {
 }
 
 /* ========================================
-   フッター（必須表示3点。アプリシェル最下段に常時表示）
-   ======================================== */
 
-/* body（flex-column, height:100vh, overflow:hidden）の最下段。
-   flex:0 0 auto で自然な高さを確保し、余った高さは .container（flex:1）が
-   吸収する。3〜4行に折り返しても本体が潰れるだけでフッターは必ず見える。 */
-#app-footer {
-  flex: 0 0 auto;
-  background: white;
-  border-top: 1px solid var(--color-border);
-  padding: 0.3rem 1rem;
-  font-size: 0.68rem;
-  line-height: 1.45;
-  color: var(--color-text-sub);
-  text-align: center;
-}
 
-#app-footer .footer-summary {
-  max-width: 1000px;
-  margin: 0 auto;
-}
 
-/* 【2026-10-16、12本目②C、Minami決定：A＋C】スマホでは出典の長文の代わりに
-   「使い方」「データ出典・免責」の1行リンクだけにし、縦幅を取り戻す。
-   PCは従来どおり長文を表示し、この1行は出さない。 */
-.footer-summary-mobile {
-  display: none;
-  margin: 0;
-}
 
-.footer-summary-mobile button {
-  background: none;
-  border: none;
-  padding: 0;
-  margin: 0 0.6rem;
-  font: inherit;
-  color: var(--color-main-deep);
-  text-decoration: underline;
-  cursor: pointer;
-}
 
-@media (max-width: 759px) {
-  #app-footer .footer-summary {
-    display: none;
-  }
 
-  .footer-summary-mobile {
-    display: block;
-  }
-}
-
-#app-footer a {
-  color: var(--color-main-deep);
-}
-
-#about-data-btn,
-#howto-btn {
-  background: none;
-  border: none;
-  padding: 0;
-  font: inherit;
-  color: var(--color-main-deep);
-  text-decoration: underline;
-  cursor: pointer;
-  white-space: nowrap;
-}
 
 /* ========================================
    「このアプリのデータについて」モーダル
@@ -2513,18 +2144,11 @@ header p {
      height:0pxになっていた）。heightはこれまでどおり100vh（明示的な値）の
      ままにし、overflowだけhidden→autoに変える：100vhという箱の大きさ自体は
      変えず、中身がそれより高くなったときだけスクロールで逃がす。 */
-  body {
-    overflow-y: auto;
-  }
 
   /* 上のbodyのスクロールが実際に効くよう、はみ出しを押しとどめていた
      中間の祖先（.app-layout・.layout-right）のoverflow:hiddenも
      visibleにする（#results-listなど、個別に持つ内部スクロール領域は
      このoverflow指定とは独立のため、一覧のスクロール自体は変わらない）。 */
-  .app-layout,
-  .layout-right {
-    overflow: visible;
-  }
 
   .container {
     padding: 0.5rem 0.75rem;
@@ -2536,28 +2160,11 @@ header p {
      スマホ幅では説明文自体を表示しない（タイトルとマイリストボタンだけ残す）。 */
   /* 【51本目】副題は省略せずに出す。名前の下に小さく2段にする（1行では、名前・副題・マイリストが
      375px幅に収まらないため）。 */
-  header {
-    align-items: center;
-  }
 
-  .app-title {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0;
-  }
 
   /* 2段にしてもヘッダーの高さが今まで（マイリストボタン32px＋上下の余白）をこえないようにする
      （400×464で一覧タブの高さが画面の半分を切らないように）。 */
-  header h1 {
-    font-size: 1rem;
-    line-height: 1.15;
-  }
 
-  header p.app-subtitle {
-    font-size: 0.65rem;
-    line-height: 1.15;
-    overflow: visible;
-  }
 
   .form-row {
     flex-direction: column;
@@ -2588,10 +2195,6 @@ header p {
      検索ボタンだけにする）。まだ一度も検索していない間（has-resultsが
      付く前）は、ここで隠さず通常どおりフォーム内に予算欄を表示する
      （最初の検索に予算が必要なため）。 */
-  #app-layout.has-results .form-group-budget,
-  #app-layout.has-results #budget-band-preview {
-    display: none;
-  }
 }
 
 /* ========================================
@@ -2834,4 +2437,517 @@ header p {
   line-height: 20px;
   padding: 0 8px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* ========================================
+   【2026-10-25、56本目、Minami決定】地図を画面いっぱいに出す骨組み
+   ヘッダー（ロゴ＋名前）の下はすべて地図（#map-area）。検索カード（.search-card＝#layout-left）と
+   結果の入れ物（.results-panel＝.layout-right）を地図の上に重ねる。ページ全体は縦にスクロールしない。
+   見本：みちどころ_見本_PC.png（①トップ）・みちどころ_見本_スマホ.png（④トップ）。
+   結果の入れ物は56本目では仮置き（今の一覧と＋−をそのまま白い入れ物に入れる）。見た目は57・58本目で作る。
+   地図の上に重ねる入れ物にはdata-map-overlayを付け、layout-controller.jsのgetMapOverlayRects()が四角を
+   1か所で取る。スマホでは、地図の下側に重なっている入れ物の高さが#app-layoutの--map-inset-bottomに入り、
+   右下の部品の列・出典・名前の帯はその上に出る。
+   ======================================== */
+
+/* ---- ヘッダー ---- */
+#app-header {
+  flex: 0 0 auto;
+  position: relative;
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 48px;
+  padding: 0 16px;
+  background: white;
+  color: var(--color-text);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  white-space: nowrap;
+}
+
+.app-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-logo {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  fill: var(--color-accent);
+}
+
+#app-header h1 {
+  flex: 0 0 auto;
+  font-size: 1.15rem;
+  letter-spacing: 0.08em;
+  color: var(--color-text);
+}
+
+#app-header .app-subtitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.75rem;
+  color: var(--color-text-sub);
+}
+
+.header-menu-btn {
+  display: none;
+}
+
+.header-nav {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.header-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 4px 6px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.header-nav-btn:hover {
+  color: var(--color-accent-deep);
+}
+
+.header-nav-sep {
+  color: var(--color-border);
+}
+
+/* 2D / 3D：今出ている側を濃くする（main.jsのupdateDimensionToggleLabel()） */
+#map-dimension-toggle .dim-label {
+  color: var(--color-text-sub);
+}
+
+#map-dimension-toggle:not(.is-3d) .dim-2d,
+#map-dimension-toggle.is-3d .dim-3d {
+  color: var(--color-accent-deep);
+  font-weight: 700;
+}
+
+#mylist-count {
+  min-width: 1.2em;
+  padding: 0 0.45rem;
+  border-radius: 999px;
+  background: var(--color-main-light);
+  color: var(--color-main-deep);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+@media (max-width: 759px) {
+  /* スマホでは副題をヘッダーに出さず、検索カードの1行目に小さく出す（.search-card-brand） */
+  #app-header .app-subtitle {
+    display: none;
+  }
+
+  .header-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+    border: none;
+    background: none;
+    font-size: 1.3rem;
+    color: var(--color-text);
+    cursor: pointer;
+  }
+
+  .header-nav {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 8px;
+    z-index: 1600;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    min-width: 180px;
+    padding: 6px;
+    border-radius: 8px;
+    background: white;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  }
+
+  #app-header.header-menu-open .header-nav {
+    display: flex;
+  }
+
+  .header-nav-sep {
+    display: none;
+  }
+
+  .header-nav-btn {
+    justify-content: flex-start;
+    min-height: 44px;
+    padding: 10px 12px;
+    font-size: 0.95rem;
+  }
+}
+
+/* ---- 地図の舞台 ---- */
+.container {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  display: block;
+  position: relative;
+}
+
+#app-layout {
+  --map-inset-bottom: 0px;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+#map-area {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+}
+
+#spots-map,
+#spots-map-3d {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* ---- 右下の部品の列（上から：ズーム＋− → 方位磁針 → 戻るボタン → 回転ハンドル）と出典 ---- */
+.map-controls-cluster {
+  top: auto;
+  right: 10px;
+  bottom: calc(var(--map-inset-bottom, 0px) + 36px);
+}
+
+.map-zoom-controls {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 8px;
+  background: white;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.map-zoom-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: white;
+  color: var(--color-text);
+  font-size: 1.1rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.map-zoom-btn + .map-zoom-btn {
+  border-top: 1px solid var(--color-border);
+}
+
+.map-zoom-btn:hover {
+  background: var(--color-main-light);
+}
+
+#map-area .leaflet-bottom.leaflet-right,
+#map-area .maplibregl-ctrl-bottom-right {
+  bottom: var(--map-inset-bottom, 0px);
+}
+
+/* ---- 名前の帯（ピンを押したとき） ---- */
+@media (min-width: 760px) {
+  .spot-info-panel {
+    left: 90px;
+    bottom: 8px;
+  }
+
+  /* 結果の入れ物（左、幅400px）の右に出す */
+  #app-layout.has-results.form-collapsed .spot-info-panel {
+    left: 424px;
+  }
+}
+
+@media (max-width: 759px) {
+  .spot-info-panel {
+    bottom: calc(var(--map-inset-bottom, 0px) + 8px);
+  }
+}
+
+/* ---- 検索カード（トップ画面） ---- */
+.search-card {
+  position: absolute;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 20px 20px 10px;
+  border-radius: 12px;
+  background: white;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+@media (min-width: 760px) {
+  .search-card {
+    top: 16px;
+    left: 16px;
+    width: 340px;
+    max-height: calc(100% - 32px);
+  }
+}
+
+@media (max-width: 759px) {
+  .search-card {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    max-height: calc(100% - 16px);
+    padding: 12px 16px 6px;
+  }
+}
+
+/* 検索したあとは隠れ、結果の入れ物の「▼条件を変える」で戻ってくる */
+#app-layout.has-results.form-collapsed .search-card {
+  display: none;
+}
+
+.search-card-brand {
+  display: none;
+  margin: 0 0 2px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-text-sub);
+}
+
+.search-card-brand span {
+  font-weight: 400;
+}
+
+.search-card-title {
+  margin: 0 0 4px;
+  font-size: 1.35rem;
+  font-weight: 800;
+  line-height: 1.35;
+  color: var(--color-text);
+}
+
+.search-card-lead {
+  margin: 0 0 12px;
+  font-size: 0.78rem;
+  color: var(--color-text-sub);
+}
+
+@media (max-width: 759px) {
+  .search-card-brand {
+    display: block;
+  }
+
+  .search-card-title {
+    font-size: 1.1rem;
+  }
+
+  .search-card-title-break {
+    display: none;
+  }
+
+  .search-card-lead {
+    margin-bottom: 8px;
+  }
+}
+
+.search-card #search-form {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.search-card .form-group {
+  margin-bottom: 10px;
+}
+
+.search-card .form-group label {
+  margin-bottom: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-sub);
+}
+
+.search-card .budget-amount {
+  margin: 0;
+  line-height: 1.2;
+}
+
+.search-card #budget-display {
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: var(--color-text);
+}
+
+.search-card #budget-slider {
+  margin: 4px 0 0;
+  accent-color: var(--color-accent);
+}
+
+.budget-range-labels {
+  display: flex;
+  justify-content: space-between;
+  margin: 0;
+  font-size: 0.68rem;
+  color: var(--color-text-sub);
+}
+
+/* 金額の入れ物と＋−は見本のトップ画面に無いため隠す（値の受け渡しはここを通す） */
+.search-card .budget-stepper {
+  display: none;
+}
+
+.search-card #search-btn {
+  padding: 0.7rem;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-deep) 100%);
+  font-size: 1rem;
+}
+
+.search-card #search-btn:hover {
+  box-shadow: 0 4px 12px rgba(255, 107, 43, 0.4);
+}
+
+/* まだこの条件で検索していないとき（main.jsのupdateSearchButtonState()）。文言は同じで、色を濃く・縁取りで伝える */
+.search-card #search-btn.search-btn-pending {
+  background: var(--color-accent-deep);
+  box-shadow: 0 0 0 3px rgba(255, 107, 43, 0.35);
+}
+
+/* 「条件を変える」で開いたときだけ出す閉じるボタン（PC・スマホとも） */
+#app-layout.has-results:not(.form-collapsed) .form-close-btn {
+  display: block;
+}
+
+.search-examples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 0;
+  font-size: 0.75rem;
+  color: var(--color-text-sub);
+}
+
+.example-chip {
+  padding: 2px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: white;
+  color: var(--color-text);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.example-chip:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent-deep);
+}
+
+/* 必須の表示3点への入り口（検索カードの下・結果の入れ物の一番下にいつも1行） */
+.data-line {
+  flex: 0 0 auto;
+  margin: 8px 0 0;
+  text-align: center;
+  font-size: 0.72rem;
+}
+
+.data-line-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--color-text-sub);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ---- 結果の入れ物（56本目は仮置き） ---- */
+.results-panel {
+  display: none;
+  position: absolute;
+  z-index: 1100;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 10px 12px 6px;
+  background: white;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+#app-layout.has-results.form-collapsed .results-panel {
+  display: flex;
+}
+
+@media (min-width: 760px) {
+  .results-panel {
+    top: 12px;
+    left: 12px;
+    bottom: 12px;
+    width: 400px;
+    border-radius: 12px;
+  }
+}
+
+@media (max-width: 759px) {
+  .results-panel {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 52%;
+    border-radius: 12px 12px 0 0;
+  }
+}
+
+.results-panel .search-summary {
+  display: flex;
+  margin: 0 0 6px;
+  padding: 0 2px;
+  box-shadow: none;
+}
+
+.results-panel .mobile-budget-overlay {
+  margin: 0 0 8px;
+}
+
+.results-panel #results-container,
+.results-panel #detail-container {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.results-panel #detail-container {
+  overflow-y: auto;
+}
+
+/* 入れ物の幅（PC 400px）では一覧のカードは1列にする */
+.results-panel #results-list {
+  grid-template-columns: 1fr;
 }

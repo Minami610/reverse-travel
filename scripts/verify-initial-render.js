@@ -283,7 +283,8 @@ async function checkVisible(html, matches, label) {
   });
 
   const doc = window.document;
-  await waitFor(() => !/読み込み中/.test(doc.getElementById('app-footer')?.textContent || ''), 5000);
+  // 【56本目】フッターはやめた。出典の描画は、出典画面の件数の行（#about-feed-summary）が描画されるのを待つ。
+  await waitFor(() => !/読み込み中/.test(doc.getElementById('about-feed-summary')?.textContent || '読み込み中'), 5000);
 
   const searchForm = doc.getElementById('search-form');
 
@@ -312,35 +313,26 @@ async function checkVisible(html, matches, label) {
   const formOk = searchFormDisplay !== 'none' && hiddenAncestors.length === 0;
   console.log(formOk ? '✅ #search-form は表示状態です' : '❌ #search-form は非表示になっています');
 
-  // 応募条件で必須の表示3点（フッター）が、このレイアウト幅で実際に見える状態か。
-  // 「構文が通っても画面は壊れる」ため、DOM存在だけでなく祖先のdisplay:noneも辿る。
-  const footer = doc.getElementById('app-footer');
+  // 応募条件で必須の表示3点（出典・正確性の非保証・問い合わせ先）への入り口が、このレイアウト幅で実際に見える状態か。
+  // 【56本目、Minami決定：A'】フッターをやめ、トップの検索カードの下に「データ出典・免責」の1行をいつも置く
+  // （押すと出典画面。3点の中身は下の出典画面の検証で見る）。「構文が通っても画面は壊れる」ため、
+  // DOM存在だけでなく祖先のdisplay:noneも辿る。
+  const aboutLine = doc.getElementById('about-data-btn');
   let footerOk = false;
-  if (!footer) {
-    console.log('❌ #app-footer（必須表示3点）がDOM上に見つかりません');
+  if (!aboutLine) {
+    console.log('❌ 検索カードの「データ出典・免責」（#about-data-btn）がDOM上に見つかりません');
   } else {
-    const footerDisplay = window.getComputedStyle(footer).display;
-    const footerHiddenAncestors = findHiddenAncestors(window, footer);
-    const aboutBtn = doc.getElementById('about-data-btn');
-    // データ出典部分（#footer-data-sources）はマニフェストからJSが描画するため、
-    // 初期HTMLの「読み込み中…」プレースホルダーのまま残っていないかも確認する
-    // （残っていれば描画が走らなかった、または失敗した証拠）。
-    const footerSourcesRendered = !/読み込み中/.test(footer.textContent);
-    footerOk =
-      footerDisplay !== 'none' &&
-      footerHiddenAncestors.length === 0 &&
-      !!aboutBtn &&
-      /出典/.test(footer.textContent) &&
-      /保証されません/.test(footer.textContent) &&
-      footerSourcesRendered;
-    if (footerHiddenAncestors.length > 0) {
-      console.log('❌ #app-footer の非表示の祖先要素:');
-      footerHiddenAncestors.forEach((i) => console.log('  - ' + i));
+    const lineDisplay = window.getComputedStyle(aboutLine).display;
+    const lineHiddenAncestors = findHiddenAncestors(window, aboutLine);
+    footerOk = lineDisplay !== 'none' && lineHiddenAncestors.length === 0 && aboutLine.textContent.trim() === 'データ出典・免責';
+    if (lineHiddenAncestors.length > 0) {
+      console.log('❌ 「データ出典・免責」の非表示の祖先要素:');
+      lineHiddenAncestors.forEach((i) => console.log('  - ' + i));
     }
     console.log(
       footerOk
-        ? `✅ #app-footer（出典・免責・問い合わせ導線）は表示状態です: 「${footer.textContent.replace(/\s+/g, ' ').trim()}」`
-        : `❌ #app-footer が要件を満たしません（display=${footerDisplay}, about-btn=${!!aboutBtn}, 出典描画=${footerSourcesRendered}）`
+        ? `✅ トップの検索カードに「データ出典・免責」の1行が見えています（出典・免責・問い合わせへの入り口）`
+        : `❌ 「データ出典・免責」の1行が要件を満たしません（display=${lineDisplay}, 文言="${aboutLine.textContent.trim()}"）`
     );
   }
 
@@ -1575,8 +1567,9 @@ async function checkSearchButtonState(html) {
   });
   const doc = window.document;
   const searchBtn = doc.getElementById('search-btn');
-  const isPending = () => searchBtn.classList.contains('search-btn-pending') && searchBtn.textContent === 'この条件で検索';
-  const isDefault = () => !searchBtn.classList.contains('search-btn-pending') && searchBtn.textContent === '検索';
+  // 【56本目】文言は見本どおりいつも「この条件で探す」。まだこの条件で検索していないことは色（.search-btn-pending）で伝える。
+  const isPending = () => searchBtn.classList.contains('search-btn-pending') && searchBtn.textContent === 'この条件で探す';
+  const isDefault = () => !searchBtn.classList.contains('search-btn-pending') && searchBtn.textContent === 'この条件で探す';
 
   const item = await waitForSuggestion(doc, window, '高松築港', '高松築港');
   if (!item) {
@@ -2278,7 +2271,8 @@ async function checkFeedVersionShortening(html) {
     else window.addEventListener('load', done);
   });
   const doc = window.document;
-  await waitFor(() => !/読み込み中/.test(doc.getElementById('app-footer')?.textContent || ''), 5000);
+  // 【56本目】フッターはやめた。出典の描画は、出典画面の件数の行（#about-feed-summary）が描画されるのを待つ。
+  await waitFor(() => !/読み込み中/.test(doc.getElementById('about-feed-summary')?.textContent || '読み込み中'), 5000);
   doc.getElementById('about-data-btn')?.dispatchEvent(new window.Event('click', { bubbles: true }));
   await waitFor(() => (doc.getElementById('about-feed-list')?.querySelectorAll('li').length || 0) > 0, 5000);
 

@@ -36,6 +36,8 @@ const RESET_VIEW_DURATION_MS = 1500;
 // terrain-map-view.jsのWAVE_DURATION_MS（1000ms、検索後に点が波のように出る
 // 演出の所要時間）より確実に後になるよう、裏取得の反映を遅らせるための余裕時間。
 const WAVE_REVEAL_SAFE_DELAY_MS = 1200;
+// 【56本目】検索ボタンの文言（見本のトップ画面）
+const SEARCH_BUTTON_LABEL = 'この条件で探す';
 
 /** 予算→帯の表示ラベル（例: budget=1000 → "¥801〜¥1000"） */
 function formatBandLabel(budget) {
@@ -56,6 +58,24 @@ function formatThousands(n) {
 }
 
 const MAP_MODE_STORAGE_KEY = 'reverse-travel-map-mode';
+// 【2026-10-25、56本目、Minami決定：C】検索前の地図は、前回検索した出発駅のあたりを2Dで出す（端末に覚える）。
+// 初めての人は富山駅前のあたり（見本①と同じ見え方）。
+const LAST_DEPARTURE_STORAGE_KEY = 'michidokoro-last-departure';
+const INITIAL_MAP_VIEW = { lat: 36.7016, lon: 137.2131, zoom: 10 };
+
+function loadLastDeparture() {
+  try {
+    const v = JSON.parse(localStorage.getItem(LAST_DEPARTURE_STORAGE_KEY) || 'null');
+    if (v && Number.isFinite(v.lat) && Number.isFinite(v.lon)) return v;
+  } catch { /* 読めないときは初めての人と同じ */ }
+  return null;
+}
+
+function saveLastDeparture(lat, lon) {
+  try {
+    localStorage.setItem(LAST_DEPARTURE_STORAGE_KEY, JSON.stringify({ lat, lon }));
+  } catch { /* 保存できなくても動作には影響しない */ }
+}
 
 /** 3Dを一度選んだ端末では次回も3Dにする（4本目①、Minami指示）。読み書きはtry/catch。 */
 function loadMapModePreference() {
@@ -173,6 +193,11 @@ class ReverseTravel {
       spotInfoContent: document.getElementById('spot-info-content'),
       spotInfoClose: document.getElementById('spot-info-close'),
       mapResetViewBtn: document.getElementById('map-reset-view-btn'),
+      mapZoomIn: document.getElementById('map-zoom-in'),
+      mapZoomOut: document.getElementById('map-zoom-out'),
+      appHeader: document.getElementById('app-header'),
+      headerMenuBtn: document.getElementById('header-menu-btn'),
+      headerNav: document.getElementById('header-nav'),
       departureInput: document.getElementById('departure-input'),
       departureSuggestions: document.getElementById('departure-suggestions'),
       budgetInput: document.getElementById('budget-input'),
@@ -276,6 +301,9 @@ class ReverseTravel {
       if (!closeBtn || closeBtn.offsetParent === null) return;
       const searchForm = document.getElementById('search-form');
       if (searchForm && searchForm.contains(e.target)) return;
+      // 【56本目】検索カード（#layout-left）の中・ヘッダー・モーダルの中は対象外（「条件を変える」で開いた
+      // 検索カードの「データ出典・免責」や、ヘッダーの使い方・2D/3D・マイリストを押しても閉じないように）。
+      if (e.target.closest && e.target.closest('#layout-left, #app-header, .modal-overlay')) return;
       e.stopPropagation();
       e.preventDefault();
       this.closeFormDiscardingEdits();
@@ -294,17 +322,13 @@ class ReverseTravel {
     // 最初から可能）。読み込み完了・失敗時にinitStationIndex()が元に戻す。
     this.elements.departureInput.placeholder = '駅の一覧を読み込んでいます…';
 
+    // 【2026-10-25、56本目】地図を画面いっぱいに出す（layout-controller.js参照）。以前のPC二段組・スマホの
+    // 一覧／地図タブと、地図の置き場所の付け替えはやめた。
     this.layoutController = new LayoutController({
       mapEl: document.getElementById('map-area'),
-      desktopSlot: document.getElementById('map-slot-desktop'),
-      mobileSlot: document.getElementById('map-slot-mobile'),
-      tabButtons: document.querySelectorAll('.tab-btn'),
-      tabPanels: document.querySelectorAll('.tab-panel'),
+      layoutEl: this.elements.appLayout,
       mapView: this.mapView,
       terrainMapView: this.terrainMapView,
-      // スマホで地図タブ→一覧タブに切り替えたとき、選択中のカードが
-      // 見える位置に来るようにする（地図タブ表示中はパネルがdisplay:noneで
-      // 位置計算ができないため、タブが有効化された時点で改めて実行する）
       onListTabActivated: () => this.scrollSelectedCardIntoView(),
     });
 
@@ -326,7 +350,13 @@ class ReverseTravel {
     // 2Dのまま据え置く（Minami指示）。出発駅が決まる前（検索前）は中心座標が
     // 無いため3Dを開始できない。起動時に前回3Dだった場合の自動復元は、
     // 最初の検索結果が出た直後（renderSearchResults）で行う。
-    this.elements.mapDimensionToggle?.addEventListener('click', () => this.toggleMapDimension());
+    this.elements.mapDimensionToggle?.addEventListener('click', () => {
+      this.closeHeaderMenu();
+      this.toggleMapDimension();
+    });
+    this.updateDimensionToggleLabel();
+    this.setupMapStageControls();
+    this.showInitialMapView();
     // 【2026-10-15、11本目①】地図の下の固定情報枠の閉じるボタン（Minami決定：A）。
     this.elements.spotInfoClose?.addEventListener('click', () => this.hideSpotInfoPanel());
     // 【2026-10-21、41本目、Minami決定】最初の見え方に戻るボタン（地図の右上、方位磁針の
@@ -891,14 +921,15 @@ class ReverseTravel {
     if (this.lastSearchedBudget === null) {
       // まだ一度も検索していない＝比較対象がないため、常に既定の表示にする
       btn.classList.remove('search-btn-pending');
-      btn.textContent = '検索';
+      btn.textContent = SEARCH_BUTTON_LABEL;
       return;
     }
     const currentText = this.elements.departureInput.value;
     const currentBudget = parseInt(this.elements.budgetInput.value, 10);
     const changed = currentText !== this.lastSearchedDepartureText || currentBudget !== this.lastSearchedBudget;
+    // 【56本目】文言は見本どおりいつも「この条件で探す」。まだこの条件で検索していないことは色（.search-btn-pending）で伝える。
     btn.classList.toggle('search-btn-pending', changed);
-    btn.textContent = changed ? 'この条件で検索' : '検索';
+    btn.textContent = SEARCH_BUTTON_LABEL;
   }
 
   /**
@@ -995,9 +1026,22 @@ class ReverseTravel {
    */
   positionDepartureSuggestions() {
     const rect = this.elements.departureInput.getBoundingClientRect();
-    this.elements.departureSuggestions.style.left = `${rect.left}px`;
-    this.elements.departureSuggestions.style.top = `${rect.bottom}px`;
-    this.elements.departureSuggestions.style.width = `${rect.width}px`;
+    const box = this.elements.departureSuggestions;
+    box.style.left = `${rect.left}px`;
+    box.style.width = `${rect.width}px`;
+    // 【56本目】スマホでは検索カードが画面の下にあり、入力欄の下に候補を出すと画面の外にはみ出す。
+    // 下に十分な余地が無く、上のほうが広いときは、入力欄の上に出す。
+    const below = window.innerHeight - rect.bottom - 8;
+    const above = rect.top - 8;
+    if (below < 200 && above > below) {
+      box.style.top = 'auto';
+      box.style.bottom = `${window.innerHeight - rect.top}px`;
+      box.style.maxHeight = `${Math.min(300, above)}px`;
+    } else {
+      box.style.bottom = 'auto';
+      box.style.top = `${rect.bottom}px`;
+      box.style.maxHeight = `${Math.min(300, Math.max(120, below))}px`;
+    }
   }
 
   showDepartureGuidance(message) {
@@ -1428,6 +1472,9 @@ class ReverseTravel {
     // 【2026-10-13、10本目②】「この条件で検索」を押した結果の表示なので、
     // 出発駅から近い順に点が波のように広がって出る演出を行う（Minami指示）。
     const departureStation = this.data.stations?.[departureStationId];
+    if (departureStation && isFiniteNumber(departureStation.stop_lat) && isFiniteNumber(departureStation.stop_lon)) {
+      saveLastDeparture(departureStation.stop_lat, departureStation.stop_lon); // 【56本目】検索前の地図の見え方
+    }
     this._liveMapBudget = budget; // 【41本目】＋の波の「上げたか」の基準（updateMapBudgetLive()参照）
     // 【2026-10-23、49本目、Minami決定】地図のピンは紺とオレンジの2色。検索し直したとき（同じ出発駅）は、
     // 直前の検索から新しく増えた場所をオレンジのまま残すため、直前の検索の金額（小さい方）を紺の上限に
@@ -1582,13 +1629,94 @@ class ReverseTravel {
     this.elements.terrainLoadingIndicator?.toggleAttribute('hidden', !visible);
   }
 
+  /**
+   * 【2026-10-25、56本目】ヘッダーの「2D / 3D」で、今出ている側を濃くする（以前は地図の上のボタンの文字を
+   * 「3D表示」「2D表示」と書き換えていた）。検索前は、前回3Dを選んだ端末でも2Dで出す（決定3）ため、
+   * this.mapModeではなく実際の表示（#map-area.mode-3d）を見る。
+   */
+  updateDimensionToggleLabel() {
+    const toggle = this.elements.mapDimensionToggle;
+    if (!toggle) return;
+    const is3d = !!document.getElementById('map-area')?.classList.contains('mode-3d');
+    toggle.classList.toggle('is-3d', is3d);
+    toggle.setAttribute('aria-pressed', String(is3d));
+  }
+
+  /**
+   * 【2026-10-25、56本目】地図の上の部品と、ヘッダーのメニュー・検索カードの例・「データ出典・免責」の配線。
+   */
+  setupMapStageControls() {
+    // 地図のズーム＋−（右下の部品の列の一番上。2D・3D共通で、今出ている側の地図を動かす）
+    const zoomBy = (delta) => {
+      if (this.mapMode === '3d' && this.terrainMapView?.map && document.getElementById('map-area')?.classList.contains('mode-3d')) {
+        if (delta > 0) this.terrainMapView.map.zoomIn(); else this.terrainMapView.map.zoomOut();
+      } else if (this.mapView.map) {
+        if (delta > 0) this.mapView.map.zoomIn(); else this.mapView.map.zoomOut();
+      }
+    };
+    this.elements.mapZoomIn?.addEventListener('click', () => zoomBy(1));
+    this.elements.mapZoomOut?.addEventListener('click', () => zoomBy(-1));
+
+    // スマホのヘッダーの「☰」：使い方・2D / 3D・マイリストを出す。メニューの外を押したら閉じる。
+    this.elements.headerMenuBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = !this.elements.appHeader.classList.contains('header-menu-open');
+      this.elements.appHeader.classList.toggle('header-menu-open', open);
+      this.elements.headerMenuBtn.setAttribute('aria-expanded', String(open));
+    });
+    document.addEventListener('click', (e) => {
+      if (!this.elements.appHeader?.classList.contains('header-menu-open')) return;
+      if (this.elements.headerNav?.contains(e.target) && !e.target.closest('button')) return;
+      if (e.target.closest && e.target.closest('#header-nav button')) {
+        this.closeHeaderMenu();
+        return;
+      }
+      if (!this.elements.appHeader.contains(e.target)) this.closeHeaderMenu();
+    });
+
+    // 検索カードの例（香川・高松／富山／石川・金沢）：押すと出発駅をその駅にする（候補を選んだときと同じ）
+    document.querySelectorAll('.example-chip').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        const input = this.elements.departureInput;
+        input.value = chip.dataset.stationName;
+        input.dataset.prefCode = chip.dataset.prefCode;
+        input.dataset.localIndex = chip.dataset.localIndex;
+        this.elements.departureSuggestions.innerHTML = '';
+        this.hideDepartureGuidance();
+        this.updateSearchButtonState();
+      });
+    });
+
+    // 「データ出典・免責」の1行（結果の入れ物の中）と、地図の出典（ⓘ）の中の「出典の詳細・免責・お問い合わせ」
+    document.addEventListener('michidokoro:open-about', () => this.elements.aboutModal?._open?.());
+    document.addEventListener('click', (e) => {
+      const trigger = e.target.closest && e.target.closest('[data-open-about], .open-about-data');
+      if (!trigger) return;
+      e.preventDefault();
+      this.elements.aboutModal?._open?.();
+    });
+  }
+
+  closeHeaderMenu() {
+    if (!this.elements.appHeader?.classList.contains('header-menu-open')) return;
+    this.elements.appHeader.classList.remove('header-menu-open');
+    this.elements.headerMenuBtn?.setAttribute('aria-expanded', 'false');
+  }
+
+  /**
+   * 【2026-10-25、56本目、Minami決定：C】検索前から地図を出す。前回検索した出発駅のあたり（端末に覚えたもの）、
+   * 初めての人は富山駅前のあたり。2Dで出す（前回3Dを選んだ端末でも、3Dは最初の検索のあとに出す）。
+   */
+  showInitialMapView() {
+    const last = loadLastDeparture();
+    const view = last ? { lat: last.lat, lon: last.lon, zoom: INITIAL_MAP_VIEW.zoom } : INITIAL_MAP_VIEW;
+    this.mapView.showInitialView(view.lat, view.lon, view.zoom);
+  }
+
   applyMapMode() {
     const mapArea = document.getElementById('map-area');
     if (mapArea) mapArea.classList.toggle('mode-3d', this.mapMode === '3d');
-    if (this.elements.mapDimensionToggle) {
-      this.elements.mapDimensionToggle.textContent = this.mapMode === '3d' ? '2D表示' : '3D表示';
-      this.elements.mapDimensionToggle.setAttribute('aria-pressed', String(this.mapMode === '3d'));
-    }
+    this.updateDimensionToggleLabel();
     // 直前までdisplay:noneだった側が実寸を持つよう、表示反映後にリサイズする
     requestAnimationFrame(() => {
       if (this.mapMode === '3d') {
@@ -2384,7 +2512,10 @@ class ReverseTravel {
     const attribRect = attrib?.getBoundingClientRect();
     const rightEdge = attribRect ? attribRect.left - mapRect.left : mapRect.width;
     const safetyMargin = 16;
-    const maxWidth = rightEdge - 90 - safetyMargin;
+    // 【56本目】帯の左の位置はCSSで決まる（検索前・検索カードを開いているときは90px、結果の入れ物を出している
+    // ときはその右の424px）。決め打ちの90pxではなく、実際の位置から測る。
+    const leftPx = parseFloat(getComputedStyle(panel).left) || 90;
+    const maxWidth = rightEdge - leftPx - safetyMargin;
     panel.style.maxWidth = `${Math.max(100, maxWidth)}px`;
   }
 
@@ -2507,6 +2638,8 @@ class ReverseTravel {
   setFormCollapsed(collapsed) {
     if (!this.elements.layoutLeft) return;
     this.elements.layoutLeft.classList.toggle('form-collapsed', collapsed);
+    // 【56本目】検索カードと結果の入れ物は兄弟のため、出し分けは#app-layoutのクラスで行う。
+    this.elements.appLayout?.classList.toggle('form-collapsed', collapsed);
     // 【2026-10-17、32本目A】#search-summary-toggleは「開く」専用（常に
     // 「▼条件を変える」）になったため、文言の付け替えはしない。「閉じる」は
     // #form-close-btn（常に「▲閉じる」、CSS側でcollapsed時のみ非表示）が担う。

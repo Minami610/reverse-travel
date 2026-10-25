@@ -36,6 +36,15 @@
 const APP_MAP_STYLE_URL = './vendor/gsi-vector/app-style.json';
 const GSI_DEM_PROTOCOL_TILE_URL = 'gsidem://https://cyberjapandata.gsi.go.jp/xyz/dem_png/{z}/{x}/{y}.png';
 const GSI_DEM_ATTRIBUTION = '国土地理院の標高タイルを加工して3D地形として表示';
+// 【2026-10-25、56本目、Minami決定：A'】応募条件で必須の表示3点（データの出典・正確性の非保証・問い合わせ先）。
+// フッターをやめたため、地図の右下の出典（ⓘ）を開いたときにこの短い文を出し、「出典の詳細・免責・お問い合わせ」
+// から出典画面（#about-modal）を開けるようにする。トップの検索カードの下と結果の入れ物の一番下にも、
+// 「データ出典・免責」の1行をいつも置いている。2D（map-view.js）と同じ文。
+const REQUIRED_NOTICE_HTML =
+  '交通データ：GTFSデータリポジトリ・公共交通オープンデータセンターほか（各公開元） ｜ ' +
+  '表示内容の正確性・完全性は保証されません ｜ ' +
+  'お問い合わせは開発者へ（交通事業者へは問い合わせないでください） ｜ ' +
+  '<a href="#" class="open-about-data">出典の詳細・免責・お問い合わせ</a>';
 
 // 【43本目D】地形に貼り付ける層の表示範囲を下へずらす段数（_createMap()のshiftZoomRange参照）。
 const TERRAIN_DRAPE_ZOOM_SHIFT = 1;
@@ -237,7 +246,7 @@ const CIRCLE_ZOOM_IN_TARGET_RATIO = 0.85;
 // 名前の帯（#spot-info-panel）は見ない（map-view.jsのMAP_CIRCLE_OBSTACLE_SELECTORSと同じ理由）。
 const CIRCLE_OBSTACLE_SELECTORS = [
   '#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle', '#map-dimension-toggle',
-  '#mobile-budget-overlay',
+  '#mobile-budget-overlay', '#map-zoom-controls',
 ];
 const CIRCLE_OBSTACLE_GAP_PX = 4;
 const CIRCLE_OBSTACLE_ZOOM_STEP = 0.03;
@@ -804,7 +813,15 @@ export class TerrainMapView {
       });
     });
 
-    this.map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
+    this.map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: REQUIRED_NOTICE_HTML }), 'bottom-right');
+    // 【56本目】出典の中の「出典の詳細・免責・お問い合わせ」で出典画面を開く（main.jsへイベントで知らせる）。
+    this.map.getContainer().addEventListener('click', (e) => {
+      const about = e.target.closest && e.target.closest('.open-about-data');
+      if (!about) return;
+      e.preventDefault();
+      e.stopPropagation();
+      document.dispatchEvent(new CustomEvent('michidokoro:open-about'));
+    }, true);
     // 【2026-10-10】MapLibreのcompact属性は、出典の文字列が変わるたび
     // （'styledata'/'sourcedata'/'terrain'イベント。地図を生成した直後は
     // 標高タイルがterrainとして使われ始める等で何度も変わる）に、
@@ -2189,7 +2206,7 @@ export class TerrainMapView {
     // 【51本目】色の説明（#map-legend）は避けない。400×464の3Dでは、避けると地図の中に置ける場所が無くなり、
     // 地図の外（一覧／地図のタブの上）に出てしまうため。吹き出しは初めの1回・3秒だけなので、その間は上に重なってよい。
     this.map.getContainer().querySelectorAll('.maplibregl-marker').forEach((el) => addRect(el.getBoundingClientRect()));
-    document.querySelectorAll('#map-controls-cluster, #map-dimension-toggle, #mobile-budget-overlay, #spot-info-panel, #map-area .maplibregl-ctrl-attrib, #map-area .maplibregl-ctrl')
+    document.querySelectorAll('#map-controls-cluster, #map-dimension-toggle, #mobile-budget-overlay, #spot-info-panel, [data-map-overlay], #map-area .maplibregl-ctrl-attrib, #map-area .maplibregl-ctrl')
       .forEach((el) => { if (el.offsetParent !== null) addRect(el.getBoundingClientRect()); });
     const hits = (r) => obstacles.some((o) => r.left < o.right + MARGIN && r.right > o.left - MARGIN
       && r.top < o.bottom + MARGIN && r.bottom > o.top - MARGIN);

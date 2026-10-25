@@ -30,6 +30,15 @@ const GSI_ATTRIBUTION =
 // 【45本目】国土地理院が求める書き方「国土地理院ベクトルタイル提供実験」（提供実験の説明へのリンク）。
 const GSI_VECTOR_ATTRIBUTION =
   '<a href="https://github.com/gsi-cyberjapan/gsimaps-vector-experiment" target="_blank" rel="noopener">国土地理院ベクトルタイル提供実験</a>';
+// 【2026-10-25、56本目、Minami決定：A'】応募条件で必須の表示3点（データの出典・正確性の非保証・問い合わせ先）。
+// フッターをやめたため、地図の右下の出典（ⓘ）を開いたときにこの短い文を出し、「出典の詳細・免責・お問い合わせ」
+// から出典画面（#about-modal）を開けるようにする。トップの検索カードの下と結果の入れ物の一番下にも、
+// 「データ出典・免責」の1行をいつも置いている。3D（terrain-map-view.js）にも同じ文がある。
+const REQUIRED_NOTICE_HTML =
+  '交通データ：GTFSデータリポジトリ・公共交通オープンデータセンターほか（各公開元） ｜ ' +
+  '表示内容の正確性・完全性は保証されません ｜ ' +
+  'お問い合わせは開発者へ（交通事業者へは問い合わせないでください） ｜ ' +
+  '<a href="#" class="open-about-data">出典の詳細・免責・お問い合わせ</a>';
 // 予算の帯の幅（既存の検索・一覧と同じ定義）。main.jsにも同名の定数があるが、
 // バンドル後は同じスクリプトスコープに連結されるため、名前が衝突しないよう
 // このファイルだけMAP_BAND_WIDTHという別名にしている。
@@ -122,7 +131,7 @@ const MAP_CIRCLE_ZOOM_IN_TARGET_RATIO = 0.85;
 // （39本目の決まり。実測：400×464の3Dで0.85→0.67に縮んだ）。
 const MAP_CIRCLE_OBSTACLE_SELECTORS = [
   '#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle', '#map-dimension-toggle',
-  '#mobile-budget-overlay', '#map-area .leaflet-control-zoom',
+  '#mobile-budget-overlay', '#map-zoom-controls',
 ];
 const MAP_CIRCLE_OBSTACLE_GAP_PX = 4;
 
@@ -276,6 +285,16 @@ export class MapView {
     this.onSelectionChange = null; // (spotId) => void … ピン選択と一覧パネルの連動用
   }
 
+  /**
+   * 【2026-10-25、56本目、Minami決定：C】検索前の地図。まだ一度も検索していなければ、指定の場所・ズームで
+   * 地図を出す（前回検索した出発駅のあたり、初めての人は富山駅前のあたり。main.jsのshowInitialMapView()）。
+   */
+  showInitialView(lat, lon, zoom) {
+    this.ensureMap();
+    if (this.lastBudget != null) return;
+    this.map.setView([lat, lon], zoom, { animate: false });
+  }
+
   ensureMap() {
     if (this.map) return;
 
@@ -291,6 +310,8 @@ export class MapView {
       // 検証が3Dでは問題なく通ったこととも整合する。小数ズームを許可し、
       // 計算どおりの比率になるようにする。
       zoomSnap: 0,
+      // 【56本目】地図のズーム＋−は、右下の部品の列の一番上に自前で置く（2D・3D共通、#map-zoom-controls）。
+      zoomControl: false,
     });
     this._rasterBaseLayer = L.tileLayer(GSI_TILE_URL, {
       attribution: GSI_ATTRIBUTION,
@@ -696,11 +717,21 @@ export class MapView {
   _setupCompactAttribution() {
     const el = this.map.attributionControl && this.map.attributionControl.getContainer();
     if (!el) return;
+    // 【56本目】必須の表示3点（REQUIRED_NOTICE_HTML）を出典の先頭に出す。
+    this.map.attributionControl.setPrefix(REQUIRED_NOTICE_HTML);
     el.classList.add('map-attrib-compact');
     el.setAttribute('role', 'button');
     el.setAttribute('tabindex', '0');
     el.setAttribute('aria-label', '地図の出典を表示');
     const toggle = (e) => {
+      // 【56本目】「出典の詳細・免責・お問い合わせ」は出典画面を開く（この入れ物はクリックを地図へ伝えないため、
+      // documentのクリックでは拾えない。main.jsへイベントで知らせる）。
+      const about = e.target.closest && e.target.closest('.open-about-data');
+      if (about) {
+        e.preventDefault();
+        document.dispatchEvent(new CustomEvent('michidokoro:open-about'));
+        return;
+      }
       if (e.target.closest && e.target.closest('a')) return; // リンクはそのまま開く
       el.classList.toggle('is-open');
       el.setAttribute('aria-expanded', String(el.classList.contains('is-open')));

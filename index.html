@@ -19,279 +19,245 @@
   <link rel="stylesheet" href="assets/css/style.css">
 </head>
 <body>
-  <header>
+  <!-- 【2026-10-25、56本目、Minami決定】地図を画面いっぱいに出す。ヘッダー（ロゴ＋名前）の下はすべて地図で、
+       検索カード・結果の入れ物・地図の部品を地図の上に重ねる。ページ全体は縦にスクロールしない。
+       PCのヘッダー右は「使い方 ｜ 2D / 3D ｜ ☆マイリスト」。スマホは「☰」を押すと同じ3つが出る。 -->
+  <header id="app-header">
     <div class="app-title">
+      <svg class="app-logo" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M12,1.5 C7.6,1.5 4.2,4.9 4.2,9.2 C4.2,15 12,22.5 12,22.5 C12,22.5 19.8,15 19.8,9.2 C19.8,4.9 16.4,1.5 12,1.5 Z"></path>
+      </svg>
       <h1>みちどころ</h1>
       <p class="app-subtitle">―近くの未知の場所を探そう―</p>
     </div>
-    <button type="button" id="mylist-btn" aria-label="マイリストを開く"><span class="icon icon-star" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></span> マイリスト <span id="mylist-count">0</span></button>
+    <button type="button" id="header-menu-btn" class="header-menu-btn" aria-label="メニューを開く" aria-expanded="false" aria-controls="header-nav">☰</button>
+    <nav id="header-nav" class="header-nav" aria-label="メニュー">
+      <button type="button" id="howto-btn" class="header-nav-btn">使い方</button>
+      <span class="header-nav-sep" aria-hidden="true">｜</span>
+      <!-- 2D/3D切替（4本目①）。56本目で地図の上からヘッダーへ移した。今の表示の側を濃くする。 -->
+      <button type="button" id="map-dimension-toggle" class="header-nav-btn" aria-pressed="false" aria-label="2Dと3Dを切り替える"><span class="dim-label dim-2d">2D</span> / <span class="dim-label dim-3d">3D</span></button>
+      <span class="header-nav-sep" aria-hidden="true">｜</span>
+      <button type="button" id="mylist-btn" class="header-nav-btn" aria-label="マイリストを開く"><span class="icon icon-star" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></span> マイリスト <span id="mylist-count">0</span></button>
+    </nav>
   </header>
 
   <div class="container">
-    <!-- PC：左カラム（sticky）＝検索フォーム＋地図／右カラム＝並び替え＋一覧
-         スマホ：検索フォームのみ上部固定、その下は「一覧」「地図」タブ切替 -->
+    <!-- 地図の舞台。#map-area（2D・3Dの地図と部品）を全面に置き、その上に検索カード（#layout-left）と
+         結果の入れ物（.layout-right）を重ねる。重ねる入れ物には data-map-overlay を付ける
+         （layout-controller.jsのgetMapOverlayRects()が、地図の上に重なっている四角をここから1か所で取る）。 -->
     <div id="app-layout" class="app-layout" data-view="results">
-      <div id="layout-left" class="layout-left">
-        <!-- 【2026-10-16、12本目②A、Minami決定：A＋C】検索後、スマホでは
-             フォームをこの1行に畳む（予算スライダーで縦長になったフォームが
-             画面の大半を占め、地図・一覧が細い帯になる不具合の対策）。
-             PCでは常にフォームを開いたままにする（CSS側で出し分け）。
-             まだ一度も検索していないときは畳まない。 -->
-        <div id="search-summary" class="search-summary" hidden>
-          <span id="search-summary-text"></span>
-          <button type="button" id="search-summary-toggle" aria-expanded="false">▼条件を変える</button>
-        </div>
-        <!-- 検索フォーム -->
-        <form id="search-form">
-          <!-- 【2026-10-17、32本目A、不具合修正】フォームを開いている間、
-               閉じる手段が無かった（#search-summary-toggleの文言は「▲閉じる」
-               に変わっていたが、ボタン自体が#search-summary（フォームが
-               開いている間は非表示）の中にあり、押せなかった）。フォームの
-               中（開いている間だけ見える場所）に専用の閉じるボタンを置く。
-               押すと検索はせず、開く前の条件（最後に検索した出発駅・予算）に
-               戻してから畳む（main.jsのsetFormCollapsed()・
-               #form-close-btnのクリックハンドラ参照）。まだ一度も検索して
-               いない間は出さない（CSS側、.has-resultsで判定）。 -->
-          <button type="button" id="form-close-btn" class="form-close-btn" hidden>▲閉じる</button>
-          <div class="form-row">
-            <div class="form-group form-group-departure">
-              <label for="departure-input">出発駅を選択</label>
-              <input
-                type="text"
-                id="departure-input"
-                placeholder="駅名を入力..."
-                autocomplete="off"
-                required
-              >
-              <div id="departure-suggestions"></div>
-              <p id="departure-guidance" class="departure-guidance" hidden></p>
+      <div id="map-area">
+        <div id="spots-map"></div>
+        <div id="spots-map-3d"></div>
+        <!-- 3D切替中だけ表示。2Dの地図は消さずに裏で残したまま、準備ができたら
+             #map-area.mode-3dが付いて3Dに切り替わる（4本目②、Minami指示）。 -->
+        <p id="terrain-loading-indicator" hidden>3D地図を準備しています…</p>
+        <!-- 【2026-10-17、32本目A、Minami決定】【27】の「太い輪＋真ん中のつまみ」
+             を、Coworkのモック画像（回転ハンドル_改良2案.png「改良1」）に合わせて
+             銀色の金属つまみへ作り直した。「北に戻す」はハンドルから外し、
+             別の小さな方位磁針（#map-compass-btn）に分離（Minami決定：伝えられる
+             操作は「回す」「上下に動かす」の2つまでにするため）。
+             方位磁針（上）とハンドル（下）を#map-controls-clusterで縦に並べ、
+             左右中心をそろえる。
+             ハンドル本体（#map-rotate-dial）：ふちは細かいギザギザ（濃い灰色）、
+             本体は銀色の斜めグラデーション。ふちの上の目印（.map-rotate-tick）が
+             bearingに合わせて回る（本体ごと回転）。
+             回す矢印（同じ向き×2）は回転しない固定のヒント。
+             真ん中のくぼみ（#map-rotate-knob）：たての溝（.map-pitch-track）の中を
+             つまみ（#map-pitch-thumb）がpitch（0〜75度）に応じて上下する。
+             （assets/js/terrain-map-view.jsの_setupRotateHandle()・
+             _setupCompassButton()参照）。 -->
+        <div id="map-controls-cluster" class="map-controls-cluster">
+          <!-- 【2026-10-25、56本目】地図のズーム＋−（ホイールの無い端末のため）。2D・3D共通で、右下の部品の列の一番上に置く
+               （main.jsが今の表示の側の地図を拡大・縮小する）。 -->
+          <div id="map-zoom-controls" class="map-zoom-controls">
+            <button type="button" id="map-zoom-in" class="map-zoom-btn" aria-label="地図を拡大する">＋</button>
+            <button type="button" id="map-zoom-out" class="map-zoom-btn" aria-label="地図を縮小する">−</button>
+          </div>
+          <button type="button" id="map-compass-btn" class="map-compass-btn" aria-label="北を上にする">
+            <svg id="map-compass-needle" class="map-compass-needle" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M12,2 L15.5,13 L12,10.5 L8.5,13 Z" class="map-compass-needle-n"></path>
+              <path d="M12,22 L15.5,13 L12,15.5 L8.5,13 Z" class="map-compass-needle-s"></path>
+            </svg>
+          </button>
+          <!-- 【2026-10-21、41本目、Minami決定】最初の見え方に戻るボタン。方位磁針のすぐ下
+               （3D）／右上（2D、方位磁針・ハンドルは3Dだけ）。一度検索したら、いつでも出ている
+               （以前の「全体を見る」文字ボタンの役目を引き継いだ）。GPSの現在地ボタン（⌖）と
+               間違われないよう、地図の出発駅と同じオレンジのしずく形を小さく入れる。 -->
+          <button type="button" id="map-reset-view-btn" class="map-reset-view-btn" aria-label="出発駅を中心に、最初の見え方に戻す" title="出発駅を中心に、最初の見え方に戻す" hidden>
+            <svg class="map-reset-view-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M12,2.5 C8.1,2.5 5,5.5 5,9.3 C5,14.4 12,21.5 12,21.5 C12,21.5 19,14.4 19,9.3 C19,5.5 15.9,2.5 12,2.5 Z" class="map-reset-view-pin"></path>
+              <circle cx="12" cy="9.3" r="2.6" class="map-reset-view-pin-dot"></circle>
+            </svg>
+          </button>
+          <div
+            id="map-rotate-handle"
+            class="map-rotate-handle"
+            tabindex="0"
+            role="slider"
+            aria-valuemin="0"
+            aria-valuemax="359"
+            aria-valuenow="0"
+            aria-label="地図の向きと傾きを変える（輪を回すと向き、真ん中を上下に動かすと傾き）"
+          >
+            <div id="map-rotate-dial" class="map-rotate-dial" aria-hidden="true">
+              <span class="map-rotate-tick" aria-hidden="true"></span>
             </div>
+            <span class="map-rotate-arrow map-rotate-arrow-1" aria-hidden="true"></span>
+            <span class="map-rotate-arrow map-rotate-arrow-2" aria-hidden="true"></span>
+            <div id="map-rotate-knob" class="map-rotate-knob" tabindex="-1">
+              <span class="map-pitch-chevron map-pitch-chevron-up" aria-hidden="true"></span>
+              <div class="map-pitch-track" aria-hidden="true">
+                <div id="map-pitch-thumb" class="map-pitch-thumb"></div>
+              </div>
+              <span class="map-pitch-chevron map-pitch-chevron-down" aria-hidden="true"></span>
+            </div>
+          </div>
+        </div>
+        <!-- 【2026-10-16、27本目】初めて3Dに切り替えたときだけ出す案内の吹き出し。
+             押すかハンドルに触ると消える。一度出したら次回以降は出さない
+             （localStorageに記録、_maybeShowRotateHint()参照）。
+             【2026-10-17、32本目A】文言を「外側を回す→向き／真ん中を上下→傾き」
+             に変更（押すと戻る操作がハンドルから無くなったため）。 -->
+        <div id="map-rotate-hint" class="map-rotate-hint" hidden role="status">
+          外側を回す→向き／真ん中を上下→傾き
+        </div>
+        <!-- 【2026-10-15、11本目①】地図の吹き出し（ポップアップ）の代わりに、
+             地図の下中央に固定で出す情報枠（Minami決定：A）。2D・3D共通、
+             どちらのピンを押しても同じ枠を使い回す。 -->
+        <div id="spot-info-panel" class="spot-info-panel" hidden>
+          <button type="button" id="spot-info-close" class="spot-info-close" aria-label="閉じる">×</button>
+          <div id="spot-info-content" class="spot-info-content"></div>
+        </div>
+        <!-- 【2026-10-24、51本目、Minami決定】ピンの色の説明。紺のピンは「みちどころ」、オレンジのピンは「NEW」。
+             横の札（オレンジ地に白い文字）に、今オレンジで出ている場所の数を「NEW +8」の形で出す
+             （0のときは出さない。main.jsのupdateNewSpotMarks()）。一度検索したら出す。 -->
+        <div id="map-legend" class="map-legend" hidden>
+          <span class="map-legend-item"><span class="map-legend-dot map-legend-dot-blue" aria-hidden="true"></span>みちどころ</span>
+          <span class="map-legend-item"><span class="map-legend-dot map-legend-dot-orange" aria-hidden="true"></span>NEW</span>
+          <span id="map-new-count" class="new-tag" hidden></span>
+        </div>
+        <!-- 【41本目】寄っているときだけ出していた「全体を見る」ボタン（11本目②）は、
+             いつでも出ている最初の見え方に戻るボタン（#map-reset-view-btn）に置き換えた。 -->
+      </div>
 
-            <div class="form-group form-group-budget">
-              <label for="budget-slider">
-                予算（往復）：<span id="budget-display">¥500</span>
-              </label>
+      <!-- 検索カード（トップ画面）。PCは地図の左上に浮かせ、スマホは地図の下に置く。
+           検索したあとは隠れ、結果の入れ物の「▼条件を変える」で戻ってくる（#app-layout.form-collapsedが
+           付いている間は隠れる。main.jsのsetFormCollapsed()）。 -->
+      <div id="layout-left" class="layout-left search-card" data-map-overlay>
+        <!-- スマホでは副題をヘッダーに出さず、検索カードの1行目に小さく出す -->
+        <p class="search-card-brand">みちどころ <span>―近くの未知の場所を探そう―</span></p>
+        <h2 class="search-card-title">いくらで、<br class="search-card-title-break">どこまで行ける？</h2>
+        <p class="search-card-lead">予算を決めると、行ける場所が地図に出ます</p>
+        <form id="search-form">
+          <!-- 【2026-10-17、32本目A】「条件を変える」で開いたときだけ出す閉じるボタン。押すと検索はせず、
+               開く前の条件に戻してから結果の画面に戻る（main.jsのcloseFormDiscardingEdits()）。 -->
+          <button type="button" id="form-close-btn" class="form-close-btn" hidden>▲閉じる</button>
+          <div class="form-group form-group-departure">
+            <label for="departure-input">出発駅</label>
+            <input
+              type="text"
+              id="departure-input"
+              placeholder="駅名を入力..."
+              autocomplete="off"
+              required
+            >
+            <div id="departure-suggestions"></div>
+            <p id="departure-guidance" class="departure-guidance" hidden></p>
+          </div>
+
+          <div class="form-group form-group-budget">
+            <!-- 予算は往復の交通費（設計原則。56本目の見本の「片道の予算」はCoworkの誤りで、言葉は「予算（往復）」のまま） -->
+            <label for="budget-slider" class="budget-label">予算（往復）</label>
+            <p class="budget-amount"><span id="budget-display">¥500</span></p>
+            <input
+              type="range"
+              id="budget-slider"
+              min="200"
+              max="2000"
+              step="100"
+              value="500"
+              aria-label="予算（往復）をスライダーで変更"
+            >
+            <p class="budget-range-labels" aria-hidden="true"><span>¥200</span><span>¥2000</span></p>
+            <!-- 金額の入れ物と＋−（見本のトップ画面には無いため隠す。値の受け渡しはこれまでどおりここを通す） -->
+            <div class="budget-stepper">
+              <button type="button" id="budget-decrement" aria-label="予算を100円減らす">−</button>
               <input
-                type="range"
-                id="budget-slider"
+                type="number"
+                id="budget-input"
                 min="200"
                 max="2000"
                 step="100"
                 value="500"
-                aria-label="予算（往復）をスライダーで変更"
+                readonly
               >
-              <div class="budget-stepper">
-                <button type="button" id="budget-decrement" aria-label="予算を100円減らす">−</button>
-                <input
-                  type="number"
-                  id="budget-input"
-                  min="200"
-                  max="2000"
-                  step="100"
-                  value="500"
-                  readonly
-                >
-                <button type="button" id="budget-increment" aria-label="予算を100円増やす">＋</button>
-              </div>
-              <p id="budget-band-preview" class="budget-band-preview" hidden></p>
+              <button type="button" id="budget-increment" aria-label="予算を100円増やす">＋</button>
             </div>
+            <p id="budget-band-preview" class="budget-band-preview" hidden></p>
           </div>
 
-          <button type="submit" id="search-btn">検索</button>
+          <button type="submit" id="search-btn">この条件で探す</button>
+          <!-- 例：押すと出発駅をその駅にする（56本目、Minami決定：A） -->
+          <p class="search-examples">
+            <span class="search-examples-label">例：</span>
+            <button type="button" class="example-chip" data-station-name="高松築港" data-pref-code="37" data-local-index="140">香川・高松</button>
+            <button type="button" class="example-chip" data-station-name="富山駅前" data-pref-code="16" data-local-index="13">富山</button>
+            <button type="button" class="example-chip" data-station-name="金沢駅西口" data-pref-code="16" data-local-index="896">石川・金沢</button>
+          </p>
         </form>
-
-        <!-- PCではここに地図(#spots-map)が入る（sticky左カラムの一部） -->
-        <div id="map-slot-desktop" class="map-slot"></div>
+        <!-- 応募条件で必須の表示（出典・正確性の非保証・問い合わせ先）への入り口。いつも見える場所に1行置く
+             （56本目、Minami決定：A'）。地図の右下の出典（ⓘ）を開いても同じ画面に行ける。 -->
+        <p class="data-line"><button type="button" id="about-data-btn" class="data-line-btn">データ出典・免責</button></p>
       </div>
 
-      <div class="layout-right">
-        <!-- スマホのみ表示：一覧／地図タブ -->
-        <div class="mobile-tabs">
-          <button type="button" class="tab-btn active" data-tab="list">一覧</button>
-          <button type="button" class="tab-btn" data-tab="map">地図</button>
+      <!-- 結果の入れ物（56本目は仮置き：今の一覧と＋−をそのまま白い入れ物に入れる。見た目は57・58本目で作る）。
+           PCは地図の左、スマホは地図の下。結果の画面では金額を変えるのは＋−だけ（スライダーは出さない）。 -->
+      <div class="layout-right results-panel" data-map-overlay>
+        <div id="search-summary" class="search-summary" hidden>
+          <span id="search-summary-text"></span>
+          <button type="button" id="search-summary-toggle" aria-expanded="false">▼条件を変える</button>
         </div>
 
-        <div class="tab-panel active" data-tab-panel="list">
-          <div id="results-container">
-            <h2 id="results-band-heading" class="results-band-heading" hidden></h2>
-            <div id="sort-controls">
-              <label for="sort-select">並び替え：</label>
-              <select id="sort-select">
-                <option value="recommended">おすすめ順</option>
-                <option value="price">価格が安い順</option>
-                <option value="duration">所要時間が短い順</option>
-                <option value="distance">距離が近い順</option>
-              </select>
-            </div>
-            <div id="results-list"></div>
-          </div>
-        </div>
-
-        <div class="tab-panel" data-tab-panel="map">
-          <!-- スマホの「地図」タブ選択時にここへ#spots-mapが移動する -->
-          <div id="map-slot-mobile" class="map-slot"></div>
-        </div>
-
-        <!-- 【2026-10-16、26本目、不具合修正】以前は#map-area内（地図に重ねる形）
-             に置いていたが、#map-areaは「地図」タブ選択時しかDOM上で見える
-             位置に無く（layout-controller.jsがタブごとに#map-areaを
-             #map-slot-desktop/#map-slot-mobileへ付け替える設計）、「一覧」
-             タブでは予算を一切操作できなかった（Cowork指摘：スマホ400×464・
-             PC幅で確認、一覧タブ中は帯が非表示のまま触れない）。一覧・地図
-             どちらのタブでも使える共有の帯として、タブパネルの外（この位置）
-             に出す。PCでは引き続き非表示（CSS側）。 -->
+        <!-- 結果の画面の＋−（PC・スマホ共通。26本目の予算操作帯）。スライダーは置かない。 -->
         <div id="mobile-budget-overlay" class="mobile-budget-overlay" hidden>
           <button type="button" id="mobile-budget-decrement" aria-label="予算を100円減らす">−</button>
-          <input
-            type="range"
-            id="mobile-budget-slider"
-            min="200"
-            max="2000"
-            step="100"
-            value="500"
-            aria-label="予算（往復）をスライダーで変更"
-          >
           <button type="button" id="mobile-budget-increment" aria-label="予算を100円増やす">＋</button>
-          <!-- 【2026-10-14、25本目、Minami決定：B】地図の上の「最大◯km先まで」
-               ラベルを廃止した代わりに、この帯に距離を出す。まだこの金額で
-               検索していない（ボタンが「¥◯で探す」のとき）だけ表示し、
-               動かすたびに変わる（main.jsのupdateMobileBudgetOverlay()参照）。
-               検索済みのときはボタン自体の文言に「・最大◯km」を含めるため
-               このspanは隠す。 -->
+          <!-- 【2026-10-14、25本目】まだこの金額で検索していない（ボタンが「¥◯で探す」のとき）だけ距離を出す。 -->
           <span id="mobile-budget-distance" hidden></span>
           <button type="button" id="mobile-budget-search-btn"></button>
         </div>
 
-        <!-- スポット詳細表示エリア（一覧／地図タブと排他表示。data-view="detail"のときのみ表示） -->
+        <div id="results-container">
+          <h2 id="results-band-heading" class="results-band-heading" hidden></h2>
+          <div id="sort-controls">
+            <label for="sort-select">並び替え：</label>
+            <select id="sort-select">
+              <option value="recommended">おすすめ順</option>
+              <option value="price">価格が安い順</option>
+              <option value="duration">所要時間が短い順</option>
+              <option value="distance">距離が近い順</option>
+            </select>
+          </div>
+          <div id="results-list"></div>
+        </div>
+
+        <!-- スポット詳細表示エリア（data-view="detail"のときだけ、一覧の代わりに出す） -->
         <div id="detail-container">
-          <!-- 「見てきた場所」の足あと（6本目E、Minami決定）。
-               旧「← 一覧に戻る」ボタンを置き換える。中身はJSが都度組み立てる。 -->
+          <!-- 「見てきた場所」の足あと（6本目E、Minami決定）。 -->
           <nav id="detail-breadcrumb" aria-label="見てきた場所"></nav>
           <div id="detail-content"></div>
         </div>
-      </div>
-    </div>
 
-    <!-- 地図本体（PC/スマホどちらのスロットに入るかはJSが画面幅に応じて切り替える）。
-         2D(#spots-map)と3D(#spots-map-3d)は同じ#map-area内に重ねて置き、
-         どちらか一方だけをCSS（#map-area.mode-3d）で出し分ける。
-         2D/3D切替ボタンは#map-area基準の絶対配置（デザイン①：左下）。 -->
-    <div id="map-area">
-      <div id="spots-map"></div>
-      <div id="spots-map-3d"></div>
-      <button type="button" id="map-dimension-toggle" aria-pressed="false">3D表示</button>
-      <!-- 3D切替中だけ表示。2Dの地図は消さずに裏で残したまま、準備ができたら
-           #map-area.mode-3dが付いて3Dに切り替わる（4本目②、Minami指示）。 -->
-      <p id="terrain-loading-indicator" hidden>3D地図を準備しています…</p>
-      <!-- 【2026-10-17、32本目A、Minami決定】【27】の「太い輪＋真ん中のつまみ」
-           を、Coworkのモック画像（回転ハンドル_改良2案.png「改良1」）に合わせて
-           銀色の金属つまみへ作り直した。「北に戻す」はハンドルから外し、
-           別の小さな方位磁針（#map-compass-btn）に分離（Minami決定：伝えられる
-           操作は「回す」「上下に動かす」の2つまでにするため）。
-           方位磁針（上）とハンドル（下）を#map-controls-clusterで縦に並べ、
-           左右中心をそろえる。
-           ハンドル本体（#map-rotate-dial）：ふちは細かいギザギザ（濃い灰色）、
-           本体は銀色の斜めグラデーション。ふちの上の目印（.map-rotate-tick）が
-           bearingに合わせて回る（本体ごと回転）。
-           回す矢印（同じ向き×2）は回転しない固定のヒント。
-           真ん中のくぼみ（#map-rotate-knob）：たての溝（.map-pitch-track）の中を
-           つまみ（#map-pitch-thumb）がpitch（0〜75度）に応じて上下する。
-           （assets/js/terrain-map-view.jsの_setupRotateHandle()・
-           _setupCompassButton()参照）。 -->
-      <div id="map-controls-cluster" class="map-controls-cluster">
-        <button type="button" id="map-compass-btn" class="map-compass-btn" aria-label="北を上にする">
-          <svg id="map-compass-needle" class="map-compass-needle" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M12,2 L15.5,13 L12,10.5 L8.5,13 Z" class="map-compass-needle-n"></path>
-            <path d="M12,22 L15.5,13 L12,15.5 L8.5,13 Z" class="map-compass-needle-s"></path>
-          </svg>
-        </button>
-        <!-- 【2026-10-21、41本目、Minami決定】最初の見え方に戻るボタン。方位磁針のすぐ下
-             （3D）／右上（2D、方位磁針・ハンドルは3Dだけ）。一度検索したら、いつでも出ている
-             （以前の「全体を見る」文字ボタンの役目を引き継いだ）。GPSの現在地ボタン（⌖）と
-             間違われないよう、地図の出発駅と同じオレンジのしずく形を小さく入れる。 -->
-        <button type="button" id="map-reset-view-btn" class="map-reset-view-btn" aria-label="出発駅を中心に、最初の見え方に戻す" title="出発駅を中心に、最初の見え方に戻す" hidden>
-          <svg class="map-reset-view-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M12,2.5 C8.1,2.5 5,5.5 5,9.3 C5,14.4 12,21.5 12,21.5 C12,21.5 19,14.4 19,9.3 C19,5.5 15.9,2.5 12,2.5 Z" class="map-reset-view-pin"></path>
-            <circle cx="12" cy="9.3" r="2.6" class="map-reset-view-pin-dot"></circle>
-          </svg>
-        </button>
-        <div
-          id="map-rotate-handle"
-          class="map-rotate-handle"
-          tabindex="0"
-          role="slider"
-          aria-valuemin="0"
-          aria-valuemax="359"
-          aria-valuenow="0"
-          aria-label="地図の向きと傾きを変える（輪を回すと向き、真ん中を上下に動かすと傾き）"
-        >
-          <div id="map-rotate-dial" class="map-rotate-dial" aria-hidden="true">
-            <span class="map-rotate-tick" aria-hidden="true"></span>
-          </div>
-          <span class="map-rotate-arrow map-rotate-arrow-1" aria-hidden="true"></span>
-          <span class="map-rotate-arrow map-rotate-arrow-2" aria-hidden="true"></span>
-          <div id="map-rotate-knob" class="map-rotate-knob" tabindex="-1">
-            <span class="map-pitch-chevron map-pitch-chevron-up" aria-hidden="true"></span>
-            <div class="map-pitch-track" aria-hidden="true">
-              <div id="map-pitch-thumb" class="map-pitch-thumb"></div>
-            </div>
-            <span class="map-pitch-chevron map-pitch-chevron-down" aria-hidden="true"></span>
-          </div>
-        </div>
+        <p class="data-line"><button type="button" class="data-line-btn" data-open-about>データ出典・免責</button></p>
       </div>
-      <!-- 【2026-10-16、27本目】初めて3Dに切り替えたときだけ出す案内の吹き出し。
-           押すかハンドルに触ると消える。一度出したら次回以降は出さない
-           （localStorageに記録、_maybeShowRotateHint()参照）。
-           【2026-10-17、32本目A】文言を「外側を回す→向き／真ん中を上下→傾き」
-           に変更（押すと戻る操作がハンドルから無くなったため）。 -->
-      <div id="map-rotate-hint" class="map-rotate-hint" hidden role="status">
-        外側を回す→向き／真ん中を上下→傾き
-      </div>
-      <!-- 【2026-10-15、11本目①】地図の吹き出し（ポップアップ）の代わりに、
-           地図の下中央に固定で出す情報枠（Minami決定：A）。2D・3D共通、
-           どちらのピンを押しても同じ枠を使い回す。 -->
-      <div id="spot-info-panel" class="spot-info-panel" hidden>
-        <button type="button" id="spot-info-close" class="spot-info-close" aria-label="閉じる">×</button>
-        <div id="spot-info-content" class="spot-info-content"></div>
-      </div>
-      <!-- 【2026-10-24、51本目、Minami決定】ピンの色の説明。紺のピンは「みちどころ」、オレンジのピンは「NEW」。
-           横の札（オレンジ地に白い文字）に、今オレンジで出ている場所の数を「NEW +8」の形で出す
-           （0のときは出さない。main.jsのupdateNewSpotMarks()）。一度検索したら出す。 -->
-      <div id="map-legend" class="map-legend" hidden>
-        <span class="map-legend-item"><span class="map-legend-dot map-legend-dot-blue" aria-hidden="true"></span>みちどころ</span>
-        <span class="map-legend-item"><span class="map-legend-dot map-legend-dot-orange" aria-hidden="true"></span>NEW</span>
-        <span id="map-new-count" class="new-tag" hidden></span>
-      </div>
-      <!-- 【41本目】寄っているときだけ出していた「全体を見る」ボタン（11本目②）は、
-           いつでも出ている最初の見え方に戻るボタン（#map-reset-view-btn）に置き換えた。 -->
+
     </div>
   </div>
 
-  <!-- 応募条件で必須の表示3点（出典／正確性の非保証／問い合わせ先）。
-       アプリシェル（body: flex-column, height:100vh）の最下段に flex:0 0 auto で
-       常時表示し、PC・スマホどちらのレイアウトでも見えるようにする。
-       詳細（フィード別ライセンス・免責の全文・問い合わせ）はモーダルに送る。 -->
-  <footer id="app-footer">
-    <p class="footer-summary">
-      データ出典：<span id="footer-data-sources">読み込み中…</span>、
-      地図：<a href="https://github.com/gsi-cyberjapan/gsimaps-vector-experiment" target="_blank" rel="noopener">国土地理院ベクトルタイル提供実験</a>を加工して作成、
-      観光情報：Wikipedia／Wikidata。
-      表示内容の正確性・完全性は保証されません。
-      <button type="button" id="howto-btn">使い方</button>
-      <button type="button" id="about-data-btn">出典の詳細・免責・お問い合わせ</button>
-    </p>
-    <!-- 【2026-10-16、12本目②C、Minami決定：A＋C】スマホでは出典の長文の
-         代わりに「使い方」「データ出典・免責」の1行リンクだけにする
-         （画面の縦幅を取り戻すため）。押すと中身は上と同じモーダルを開く。 -->
-    <p class="footer-summary-mobile">
-      <button type="button" id="howto-btn-mobile">使い方</button>
-      <button type="button" id="about-data-btn-mobile">データ出典・免責</button>
-    </p>
-  </footer>
-
   <!-- アプリ内マニュアル。応募フォームの「マニュアルURL」欄は作品に埋め込み済みの
        場合は不要とされているため、外部ドキュメントを別途用意する代わりにここへ集約する。
-       初回訪問時の自動表示はせず、フッターからいつでも開ける形にとどめる。 -->
+       初回訪問時の自動表示はせず、ヘッダーの「使い方」からいつでも開ける形にとどめる。 -->
   <div id="howto-modal" class="modal-overlay" hidden>
     <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="howto-modal-title">
       <button type="button" id="howto-modal-close" aria-label="閉じる">×</button>
