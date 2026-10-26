@@ -193,6 +193,9 @@ const REACH_WAVE_SOURCE_ID = 'reach-wave';
 const REACH_WAVE_LINE_LAYER_ID = 'reach-wave-line';
 const CIRCLE_WAVE_DURATION_MS = 500;
 const CIRCLE_WAVE_START_OPACITY = 0.7;
+// 【62本目】波の時間が終わったとき、最後に描いた濃さがこれをこえていたら、CIRCLE_WAVE_TAIL_OPACITYで1コマ描いてから消す
+const CIRCLE_WAVE_TAIL_MAX_OPACITY = 0.1;
+const CIRCLE_WAVE_TAIL_OPACITY = 0.03;
 const CIRCLE_WAVE_WIDTH = 3;
 const WAVE_DURATION_MS = 1000; // Minami指示：検索後、点を波のように出す所要時間（全体で1秒前後）
 // 【2026-10-15、11本目①】選んだピンの強調（吹き出し廃止の代わり）。circleレイヤーは
@@ -1573,6 +1576,7 @@ export class TerrainMapView {
       this.map.setPaintProperty(REACH_WAVE_LINE_LAYER_ID, 'line-opacity', wave.opacity);
     };
     paint();
+    wave.paintedOpacity = wave.opacity;
     const startTime = performance.now();
     const step = (now) => {
       if (this._circleWave !== wave || !this.map) return;
@@ -1584,7 +1588,23 @@ export class TerrainMapView {
       const eased = 1 - (1 - progress) * (1 - progress);
       wave.radiusKm = fromKm + (toKm - fromKm) * eased;
       wave.opacity = CIRCLE_WAVE_START_OPACITY * (1 - progress);
+      if (progress >= 1 && !wave.tailPainted && wave.paintedOpacity > CIRCLE_WAVE_TAIL_MAX_OPACITY) {
+        // 【2026-10-27、62本目、不具合修正】3Dは波を描くたびに地形ごと描き直すため、1コマが45〜60msかかり、
+        // 終わり際に長い処理（実測84〜169ms）が1回挟まると、次のコマではもう時間切れになり、最後に描いた
+        // 濃さ（0.12〜0.14）のまま波が消えていた（10/24のB：「うすくなりきらずに消える」がときどき残る件）。
+        // 時間切れのとき、最後に描いた濃さがまだ0.1をこえていたら、うすい濃さで新しい縁に1コマだけ描いてから
+        // 消す。普通の速さのコマ（35ms以下）では最後に描く濃さが0.05以下になるため、この1コマは描かない
+        // （動きの時間0.5秒は変わらない）。止まったときだけ、波が1コマ分長く残る。
+        wave.tailPainted = true;
+        wave.radiusKm = toKm;
+        wave.opacity = CIRCLE_WAVE_TAIL_OPACITY;
+        paint();
+        wave.paintedOpacity = wave.opacity;
+        wave.frame = requestAnimationFrame(step);
+        return;
+      }
       paint();
+      wave.paintedOpacity = wave.opacity;
       if (progress < 1) {
         wave.frame = requestAnimationFrame(step);
       } else {
@@ -1716,6 +1736,12 @@ export class TerrainMapView {
         const left = w.startedAt + CIRCLE_WAVE_DURATION_MS - performance.now();
         if (left > 0) {
           this._circleFitTimer = setTimeout(fire, left);
+          return;
+        }
+        // 【62本目】時間切れで、最後のうすい1コマ（_startCircleWave()）をまだ描いていなければ、描くのを待つ
+        // （描画が止まっている間＝タブが裏にあるときなど、待ち続けないよう10回まで）
+        if (!w.tailPainted && w.paintedOpacity > CIRCLE_WAVE_TAIL_MAX_OPACITY && (w.tailWaits = (w.tailWaits || 0) + 1) <= 10) {
+          this._circleFitTimer = setTimeout(fire, 16);
           return;
         }
         this._cancelCircleWave();
