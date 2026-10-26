@@ -442,10 +442,13 @@ export class MapView {
    * @param {{reveal?: boolean}} [opts] - 【2026-10-13、10本目②】reveal:trueで、出発駅から
    *   近い順に波が広がるように点を出す（Minami指示：「この条件で検索」を押したときだけ）。
    */
-  render(departureStation, spots, budget = 2000, { reveal = false } = {}) {
+  render(departureStation, spots, budget = 2000, { reveal = false, background = false, keepView = false } = {}) {
     this.ensureMap();
     this._cancelWaveReveal();
-    this._cancelFitCircleToView(); // 新しい検索で、前の予算操作から保留中の地図合わせは無効化する
+    // 新しい検索で、前の予算操作から保留中の地図合わせは無効化する。
+    // 【61本目の次、62本目】裏取得の描き直し（background）は新しい検索ではないため、＋−の地図合わせ
+    // （0.95をこえたら引く・0.35を下回ったら寄る）の保留は消さない。
+    if (!background) this._cancelFitCircleToView();
     this._cancelPinPop(); // 【48本目】
     this.markersLayer.clearLayers();
     this._clusterLayer.clearLayers();
@@ -504,12 +507,21 @@ export class MapView {
     // 実際にカメラを置く位置はfitCircleToView()で上書きする。
     // 【37本目・41本目】最初の見え方に戻るボタン（returnToSearchView()）も同じ
     // fitCircleToView()のため、検索直後と同じ見え方に戻る。
-    this.fitToBudget(budget, { animate: false });
-    this.updateReachCircle(budget, { style: 'settled' });
-    const fittedZoom = this.fitCircleToView({ radiusKm: this.computeReachRadiusKm(budget), animate: false });
-    // 【40本目、不具合修正】3D表示中など2Dが見えていない間の検索では、ここで合わせられない。
-    // 見えたとき（handleShown()）に検索直後の見え方へ合わせ直すため覚えておく。
-    this._needsSearchFit = fittedZoom == null;
+    // 【2026-10-27、62本目、Minami指示】裏取得の描き直しで、検索したあと利用者が自分で動かした地図
+    // （拡大・縮小・移動・ピンで寄る）を、円に合わせ直して戻さない（keepView。main.jsが
+    // hasUserMovedSinceFit()で決める）。考え方は開け閉めのときのA（59本目）と同じ：利用者の操作を勝手に
+    // 消さない。金額帯の範囲（最初の見え方に戻るボタンで使う）だけは新しい点で覚え直す。
+    if (keepView) {
+      this._recordBudgetBounds(budget);
+      this.updateReachCircle(budget, { style: 'settled' });
+    } else {
+      this.fitToBudget(budget, { animate: false });
+      this.updateReachCircle(budget, { style: 'settled' });
+      const fittedZoom = this.fitCircleToView({ radiusKm: this.computeReachRadiusKm(budget), animate: false });
+      // 【40本目、不具合修正】3D表示中など2Dが見えていない間の検索では、ここで合わせられない。
+      // 見えたとき（handleShown()）に検索直後の見え方へ合わせ直すため覚えておく。
+      this._needsSearchFit = fittedZoom == null;
+    }
     if (reveal) this._startWaveReveal();
 
     // PC/スマホの切り替えやタブが非表示（display:none）のタイミングで
@@ -525,7 +537,7 @@ export class MapView {
     requestAnimationFrame(() => {
       if (!this.isContainerVisible()) return;
       this.forceMarkerReposition();
-      this.refitBounds();
+      if (!keepView) this.refitBounds(); // 【62本目】利用者が動かした地図は戻さない（上のkeepView）
       // 【43本目、不具合修正】最初の検索では、地図がまだ表示前（検索結果の画面に切り替わる前）に
       // render()が呼ばれ、applyBudget()の塗り分け・まとめが保留されたままになっていた（裏取得の
       // 再描画まで約1.2秒、ピンが色分けされず、まとめた丸も出なかった。実機相当の確認で発覚）。
@@ -954,13 +966,7 @@ export class MapView {
   fitToBudget(budget, { animate = true, durationSec = 0.6 } = {}) {
     if (!this.map) return;
     this._cancelFitCircleToView();
-    this.lastBudget = budget;
-    const bounds = [];
-    if (this.departureLatLng) bounds.push(this.departureLatLng);
-    this.fareBySpotId.forEach((fare, spotId) => {
-      if (fare <= budget) bounds.push(this.spotsLatLngById.get(spotId));
-    });
-    this.lastBounds = bounds;
+    const bounds = this._recordBudgetBounds(budget);
     if (bounds.length === 0) return;
     // コンテナが非表示（地図タブを一度も開いていないスマホ・2D/3D切替で
     // 今まさにdisplay:noneになった直後等）の間は呼ばない（applyBudget()と
@@ -994,6 +1000,18 @@ export class MapView {
       // 上のreachPrefersReducedMotion()分岐と同じ理由でanimate:falseを明示する。
       this.map.fitBounds(bounds, { ...options, animate: false });
     }
+  }
+
+  /** 金額budgetまでの場所と出発駅を、地図を動かさずに覚える（lastBudget・lastBounds）。62本目でfitToBudget()から分けた。 */
+  _recordBudgetBounds(budget) {
+    this.lastBudget = budget;
+    const bounds = [];
+    if (this.departureLatLng) bounds.push(this.departureLatLng);
+    this.fareBySpotId.forEach((fare, spotId) => {
+      if (fare <= budget) bounds.push(this.spotsLatLngById.get(spotId));
+    });
+    this.lastBounds = bounds;
+    return bounds;
   }
 
   /**
@@ -1364,6 +1382,15 @@ export class MapView {
   _rememberFitCamera() {
     if (!this.map) return;
     this._lastFitCamera = { center: this.map.getCenter(), zoom: this.map.getZoom() };
+  }
+
+  /**
+   * 【62本目】最後に円に合わせたあと、利用者が地図を動かしたか（拡大・縮小・移動・ピンで寄る）。まだ一度も
+   * 円に合わせていない（見えない間に検索した等）ときは動かしていない扱い。円に合わせる動きの途中も
+   * 「動かした」になるが、そのときは合わせ直さなくても、その動きが行き先まで続く。
+   */
+  hasUserMovedSinceFit() {
+    return !!this.map && !!this._lastFitCamera && !this._needsSearchFit && !this.isAtLastCircleFit();
   }
 
   /** 【58本目】地図が、最後に円に合わせたときのまま（利用者が動かしていない・ピンへ寄っていない）か。 */

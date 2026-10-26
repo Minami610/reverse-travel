@@ -1323,8 +1323,14 @@ class ReverseTravel {
           // 点は検索したときの予算（this.currentBudget）のまま据え置く（Minami指示：
           // 点は「この条件で検索」を押すまで変えない。以前はスライダーの今の値を
           // 使っていたが、それは「点がすぐ変わる」挙動そのものだった）。
-          this.mapView.render(departureStation, allSpots, this.currentBudget);
-          if (this.terrainMapView) this.terrainMapView.render(departureStation, allSpots, this.currentBudget);
+          // 【2026-10-27、62本目、Minami指示】検索したあと利用者が自分で地図を動かしていたら（拡大・縮小・移動・
+          // 回転・傾け・ピンで寄る）、この描き直しでは円に合わせ直さない（ピン・円・数・一覧は今までどおり変える）。
+          // 動かす前なら今までどおり合わせ直す。＋−の地図合わせの保留も消さない（background）。
+          this.mapView.render(departureStation, allSpots, this.currentBudget, {
+            background: true,
+            keepView: this.mapView.hasUserMovedSinceFit(),
+          });
+          if (this.terrainMapView) this.terrainMapView.render(departureStation, allSpots, this.currentBudget, { background: true });
           // 【43本目、不具合修正】render()は地図のピンを作り直して選択を外すため、検索直後にピンを
           // 選んでいた（情報枠を開いていた）場合、この裏取得の反映で選択だけが外れ、情報枠は開いた
           // まま選んだピンの強調が消えていた。選んでいたピンを、情報枠などはそのままに地図側だけ選び直す。

@@ -1027,8 +1027,11 @@ export class TerrainMapView {
    *   近い順に波が広がるように点を出す（Minami指示：「この条件で検索」を押したときだけ）。
    *   それ以外（予算操作の裏取得・3D初回有効化など）は従来どおり即座に全部出す。
    */
-  render(departureStation, spots, budget, { reveal = false } = {}) {
-    this._cancelFitCircleToView(); // 新しい検索で、前の予算操作から保留中の地図合わせは無効化する
+  render(departureStation, spots, budget, { reveal = false, background = false } = {}) {
+    // 新しい検索で、前の予算操作から保留中の地図合わせは無効化する。
+    // 【62本目】裏取得の描き直し（background）は新しい検索ではないため、＋−の地図合わせの保留は消さない。
+    // （3Dのrender()はもともと円に合わせ直さないため、利用者が動かした地図はそのまま残る。）
+    if (!background) this._cancelFitCircleToView();
     this._cancelCircleWave();
     // 【45本目、不具合修正】以前はここで「見えたら検索した直後の見え方に合わせる」保留
     // （_pendingReturnToSearchView）を消していた。しかしrender()は新しい検索のときだけでなく、
