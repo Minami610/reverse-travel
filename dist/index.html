@@ -2778,6 +2778,25 @@ body {
   border-radius: 50%;
 }
 
+/* 【62本目】使い方の「最初の見え方に戻るボタン」の絵。地図のボタン（.map-reset-view-btn）と同じ白い丸としずく。 */
+.howto-reset-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  width: 22px;
+  height: 22px;
+  margin: 0 0.2rem;
+  border-radius: 50%;
+  border: 1px solid var(--color-border);
+  background-color: white;
+}
+
+.howto-reset-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
 .about-feed-summary {
   font-size: 0.85rem;
   font-weight: 600;
@@ -2794,6 +2813,8 @@ body {
   color: var(--color-main-deep);
 }
 
+/* 【62本目】使い方（#howto-modal-close）だけここに入っておらず、既定の小さなボタン（左上・12×19px）のままだった */
+#howto-modal-close,
 #about-modal-close,
 #mylist-modal-close,
 #shared-list-modal-close {
@@ -4909,27 +4930,52 @@ body {
       <h2 id="howto-modal-title">使い方</h2>
 
       <p>
-        出発駅と予算を入れると、その予算内で<strong>公共交通機関（電車・バス）だけ</strong>で
-        日帰りで行ける、あまり知られていない景勝地を提案するアプリです。
+        出発駅と予算を決めると、その予算で<strong>電車・バスだけ</strong>を使って日帰りで行ける、
+        あまり知られていない近くの景色のよい場所を探せます。
       </p>
 
-      <h3>使い方の手順</h3>
+      <h3>探しかた</h3>
       <ol>
-        <li>「出発駅を選択」欄に駅名を入力し、候補から選びます。</li>
-        <li>予算を <strong>－／＋</strong> ボタンで設定します（¥200〜¥2000、100円刻み）。</li>
-        <li>「検索」を押すと、<strong>その予算に近い金額（予算−¥200を超え、予算以下）</strong>で行ける景勝地の一覧と地図が表示されます。もっと安い・高い予算の結果を見たいときは、予算を変えて再検索してください。</li>
+        <li>「出発駅」に駅名を入れて、候補から選びます。</li>
+        <li>予算（<strong>往復の交通費</strong>、¥200〜¥2,000）を決めます。</li>
+        <li>「<strong>この条件で探す</strong>」を押すと、その金額に近い場所（例：¥800なら往復¥601〜¥800）が地図と一覧に出ます。</li>
       </ol>
 
-      <h3>地図と一覧の連動</h3>
+      <h3>地図の見かた</h3>
       <p>
-        地図上の <span class="howto-pin howto-pin-departure" aria-hidden="true"></span>
-        （オレンジのひし形）が出発駅、
-        <span class="howto-pin howto-pin-spot" aria-hidden="true"></span>
-        （紺の丸）が「みちどころ」、
-        <span class="howto-pin howto-pin-new" aria-hidden="true"></span>
-        （オレンジの丸）が「NEW」です。「NEW」は、予算を上げて新しく行けるようになった場所です。
-        ピンをクリックすると一覧の対応するカードがハイライトされ、
-        一覧のカードをクリックするとスポットの詳細画面が開きます。
+        円の中が、その予算で行ける範囲です。
+        <span class="howto-pin howto-pin-departure" aria-hidden="true"></span>（オレンジのひし形）が出発駅、
+        <span class="howto-pin howto-pin-spot" aria-hidden="true"></span>（紺の丸）が「みちどころ」、
+        <span class="howto-pin howto-pin-new" aria-hidden="true"></span>（オレンジの丸）が「NEW」です。
+        「NEW」は、検索した金額（検索し直したときは前の検索の金額）より高く、今の金額で新しく行けるようになった場所です。
+        近くにたくさんある場所は数字の丸にまとまり、押すと近づいて分かれます。
+        ピンを押すと場所の名前が出て、「詳細を見る」で行きかた・運賃などが見られます。
+      </p>
+
+      <h3>金額を変える</h3>
+      <p>
+        結果の画面の <strong>－／＋</strong> で金額を変えると、地図と一覧が一緒に変わります。
+        出発駅を変えたいとき・金額を大きく変えたいときは「<strong>条件を変える</strong>」を押してください。
+      </p>
+
+      <h3>一覧</h3>
+      <p>
+        パソコンでは、一覧は地図の左に出ます。「◀」で閉じ、「☰ 一覧を開く」でまた開けます。
+        スマートフォンでは、一覧は地図の下に出ます。上のつまみを押すか、上へ引き出すと大きくなります。
+      </p>
+
+      <h3>2D と 3D</h3>
+      <p>
+        画面の上の「2D / 3D」（スマートフォンでは「☰」の中）で、平らな地図と立体の地図を切り替えられます。
+        3D では、右の丸いハンドルのふちをなぞると向きが、真ん中のくぼみを上下に動かすと傾きが変わります。
+        方位磁針を押すと北が上に戻ります。
+        <span class="howto-reset-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M12,2.5 C8.1,2.5 5,5.5 5,9.3 C5,14.4 12,21.5 12,21.5 C12,21.5 19,14.4 19,9.3 C19,5.5 15.9,2.5 12,2.5 Z" class="map-reset-view-pin"></path><circle cx="12" cy="9.3" r="2.6" class="map-reset-view-pin-dot"></circle></svg></span>（白い丸にオレンジのしずく）を押すと、検索したときの見え方に戻ります。
+      </p>
+
+      <h3>データの出典・免責</h3>
+      <p>
+        地図の右下の「i」を押すと、地図の出典が出ます。「データ出典・免責」を押すと、使っているデータの一覧・
+        正確さを保証できないこと・問い合わせ先が見られます。運行の内容は、お出かけ前に各交通事業者の案内で確かめてください。
       </p>
 
       <h3>予算に含まれるもの・含まれないもの</h3>
@@ -6744,10 +6790,13 @@ class MapView {
    * @param {{reveal?: boolean}} [opts] - 【2026-10-13、10本目②】reveal:trueで、出発駅から
    *   近い順に波が広がるように点を出す（Minami指示：「この条件で検索」を押したときだけ）。
    */
-  render(departureStation, spots, budget = 2000, { reveal = false } = {}) {
+  render(departureStation, spots, budget = 2000, { reveal = false, background = false, keepView = false } = {}) {
     this.ensureMap();
     this._cancelWaveReveal();
-    this._cancelFitCircleToView(); // 新しい検索で、前の予算操作から保留中の地図合わせは無効化する
+    // 新しい検索で、前の予算操作から保留中の地図合わせは無効化する。
+    // 【61本目の次、62本目】裏取得の描き直し（background）は新しい検索ではないため、＋−の地図合わせ
+    // （0.95をこえたら引く・0.35を下回ったら寄る）の保留は消さない。
+    if (!background) this._cancelFitCircleToView();
     this._cancelPinPop(); // 【48本目】
     this.markersLayer.clearLayers();
     this._clusterLayer.clearLayers();
@@ -6806,12 +6855,21 @@ class MapView {
     // 実際にカメラを置く位置はfitCircleToView()で上書きする。
     // 【37本目・41本目】最初の見え方に戻るボタン（returnToSearchView()）も同じ
     // fitCircleToView()のため、検索直後と同じ見え方に戻る。
-    this.fitToBudget(budget, { animate: false });
-    this.updateReachCircle(budget, { style: 'settled' });
-    const fittedZoom = this.fitCircleToView({ radiusKm: this.computeReachRadiusKm(budget), animate: false });
-    // 【40本目、不具合修正】3D表示中など2Dが見えていない間の検索では、ここで合わせられない。
-    // 見えたとき（handleShown()）に検索直後の見え方へ合わせ直すため覚えておく。
-    this._needsSearchFit = fittedZoom == null;
+    // 【2026-10-27、62本目、Minami指示】裏取得の描き直しで、検索したあと利用者が自分で動かした地図
+    // （拡大・縮小・移動・ピンで寄る）を、円に合わせ直して戻さない（keepView。main.jsが
+    // hasUserMovedSinceFit()で決める）。考え方は開け閉めのときのA（59本目）と同じ：利用者の操作を勝手に
+    // 消さない。金額帯の範囲（最初の見え方に戻るボタンで使う）だけは新しい点で覚え直す。
+    if (keepView) {
+      this._recordBudgetBounds(budget);
+      this.updateReachCircle(budget, { style: 'settled' });
+    } else {
+      this.fitToBudget(budget, { animate: false });
+      this.updateReachCircle(budget, { style: 'settled' });
+      const fittedZoom = this.fitCircleToView({ radiusKm: this.computeReachRadiusKm(budget), animate: false });
+      // 【40本目、不具合修正】3D表示中など2Dが見えていない間の検索では、ここで合わせられない。
+      // 見えたとき（handleShown()）に検索直後の見え方へ合わせ直すため覚えておく。
+      this._needsSearchFit = fittedZoom == null;
+    }
     if (reveal) this._startWaveReveal();
 
     // PC/スマホの切り替えやタブが非表示（display:none）のタイミングで
@@ -6827,7 +6885,7 @@ class MapView {
     requestAnimationFrame(() => {
       if (!this.isContainerVisible()) return;
       this.forceMarkerReposition();
-      this.refitBounds();
+      if (!keepView) this.refitBounds(); // 【62本目】利用者が動かした地図は戻さない（上のkeepView）
       // 【43本目、不具合修正】最初の検索では、地図がまだ表示前（検索結果の画面に切り替わる前）に
       // render()が呼ばれ、applyBudget()の塗り分け・まとめが保留されたままになっていた（裏取得の
       // 再描画まで約1.2秒、ピンが色分けされず、まとめた丸も出なかった。実機相当の確認で発覚）。
@@ -7256,13 +7314,7 @@ class MapView {
   fitToBudget(budget, { animate = true, durationSec = 0.6 } = {}) {
     if (!this.map) return;
     this._cancelFitCircleToView();
-    this.lastBudget = budget;
-    const bounds = [];
-    if (this.departureLatLng) bounds.push(this.departureLatLng);
-    this.fareBySpotId.forEach((fare, spotId) => {
-      if (fare <= budget) bounds.push(this.spotsLatLngById.get(spotId));
-    });
-    this.lastBounds = bounds;
+    const bounds = this._recordBudgetBounds(budget);
     if (bounds.length === 0) return;
     // コンテナが非表示（地図タブを一度も開いていないスマホ・2D/3D切替で
     // 今まさにdisplay:noneになった直後等）の間は呼ばない（applyBudget()と
@@ -7296,6 +7348,18 @@ class MapView {
       // 上のreachPrefersReducedMotion()分岐と同じ理由でanimate:falseを明示する。
       this.map.fitBounds(bounds, { ...options, animate: false });
     }
+  }
+
+  /** 金額budgetまでの場所と出発駅を、地図を動かさずに覚える（lastBudget・lastBounds）。62本目でfitToBudget()から分けた。 */
+  _recordBudgetBounds(budget) {
+    this.lastBudget = budget;
+    const bounds = [];
+    if (this.departureLatLng) bounds.push(this.departureLatLng);
+    this.fareBySpotId.forEach((fare, spotId) => {
+      if (fare <= budget) bounds.push(this.spotsLatLngById.get(spotId));
+    });
+    this.lastBounds = bounds;
+    return bounds;
   }
 
   /**
@@ -7666,6 +7730,15 @@ class MapView {
   _rememberFitCamera() {
     if (!this.map) return;
     this._lastFitCamera = { center: this.map.getCenter(), zoom: this.map.getZoom() };
+  }
+
+  /**
+   * 【62本目】最後に円に合わせたあと、利用者が地図を動かしたか（拡大・縮小・移動・ピンで寄る）。まだ一度も
+   * 円に合わせていない（見えない間に検索した等）ときは動かしていない扱い。円に合わせる動きの途中も
+   * 「動かした」になるが、そのときは合わせ直さなくても、その動きが行き先まで続く。
+   */
+  hasUserMovedSinceFit() {
+    return !!this.map && !!this._lastFitCamera && !this._needsSearchFit && !this.isAtLastCircleFit();
   }
 
   /** 【58本目】地図が、最後に円に合わせたときのまま（利用者が動かしていない・ピンへ寄っていない）か。 */
@@ -10195,8 +10268,14 @@ class ReverseTravel {
           // 点は検索したときの予算（this.currentBudget）のまま据え置く（Minami指示：
           // 点は「この条件で検索」を押すまで変えない。以前はスライダーの今の値を
           // 使っていたが、それは「点がすぐ変わる」挙動そのものだった）。
-          this.mapView.render(departureStation, allSpots, this.currentBudget);
-          if (this.terrainMapView) this.terrainMapView.render(departureStation, allSpots, this.currentBudget);
+          // 【2026-10-27、62本目、Minami指示】検索したあと利用者が自分で地図を動かしていたら（拡大・縮小・移動・
+          // 回転・傾け・ピンで寄る）、この描き直しでは円に合わせ直さない（ピン・円・数・一覧は今までどおり変える）。
+          // 動かす前なら今までどおり合わせ直す。＋−の地図合わせの保留も消さない（background）。
+          this.mapView.render(departureStation, allSpots, this.currentBudget, {
+            background: true,
+            keepView: this.mapView.hasUserMovedSinceFit(),
+          });
+          if (this.terrainMapView) this.terrainMapView.render(departureStation, allSpots, this.currentBudget, { background: true });
           // 【43本目、不具合修正】render()は地図のピンを作り直して選択を外すため、検索直後にピンを
           // 選んでいた（情報枠を開いていた）場合、この裏取得の反映で選択だけが外れ、情報枠は開いた
           // まま選んだピンの強調が消えていた。選んでいたピンを、情報枠などはそのままに地図側だけ選び直す。

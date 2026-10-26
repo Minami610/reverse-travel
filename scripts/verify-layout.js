@@ -10513,6 +10513,168 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
   }
 }
 
+/**
+ * 【2026-10-27、62本目】
+ * 1. 検索の直後（¥2,000分の裏取得が終わる前）に利用者が地図を拡大したら、裏取得の描き直しのあとも拡大したまま
+ *    （2D・3D、PC・390×844）。動かさなければ、裏取得のあとも円に合わせた見え方（0.5〜0.86）。
+ * 2. 使い方の画面が、PC・390×844・375×667・400×464で見切れず（横にはみ出さない・閉じるボタンが見えて押せる）、
+ *    古い説明（「検索」ボタン・タブ・スライダー・再検索）が残っていない。スクリーンショット：PCと390×844。
+ */
+async function checkRound62(browser, baseUrl, savedPaths) {
+  console.log('\n=== 62本目：利用者が動かした地図を裏取得で戻さない・使い方の画面 ===');
+  const openPage = async (viewport) => {
+    const context = await browser.newContext({ viewport });
+    await context.addInitScript(() => { try { localStorage.setItem('reverse-travel-rotate-hint-seen', 'true'); } catch { /* 無視 */ } });
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+    page.on('console', (msg) => {
+      if (msg.type() === 'error' && !isKnownAcceptableConsoleMessage(msg.text())) errors.push(msg.text());
+    });
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    return { context, page, errors };
+  };
+  const readZoom = (page, dim) => page.evaluate((dim) => (dim === '3d' ? window.__terrainMapForDebug.getZoom() : window.__mapViewForDebug.map.getZoom()), dim);
+
+  // ---- 1. 裏取得の描き直しで、利用者が動かした地図を戻さない ----
+  for (const [vLabel, viewport] of Object.entries({ pc: VIEWPORTS.pc, std: { width: 390, height: 844 } })) {
+    for (const dim of ['2d', '3d']) {
+      for (const touch of [true, false]) {
+        const label = `[62/${vLabel}/${dim}/${touch ? '拡大する' : '動かさない'}]`;
+        const { context, page, errors } = await openPage(viewport);
+        try {
+          if (dim === '3d') {
+            await searchAtAndWaitPrefetch(page, '富山駅前', 800);
+            await clickDimensionToggle(page);
+            const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+            record(`${label} 3D化（検証の前提）`, ok);
+            if (!ok) continue;
+            await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+            await waitForTerrainCameraIdle(page);
+          }
+          const before = await page.evaluate(() => window.__maxBudgetPrefetchAppliedCount || 0);
+          await searchAt(page, '富山駅前', 800);
+          await page.mouse.move(5, 5);
+          if (dim === '3d') await waitForTerrainCameraIdle(page);
+          const zSearch = await readZoom(page, dim);
+          if (touch) {
+            // 見えている範囲の真ん中あたり（地図の上の入れ物が無い場所）でホイールを回して拡大する
+            const pt = await page.evaluate(() => {
+              const a = document.getElementById('map-area').getBoundingClientRect();
+              const head = document.querySelector('.results-head')?.getBoundingClientRect();
+              const sheet = document.querySelector('.results-sheet')?.getBoundingClientRect();
+              const panel = document.querySelector('.results-panel')?.getBoundingClientRect();
+              const mobile = innerWidth < 760;
+              const left = !mobile && panel && panel.width > 0 ? panel.right : a.left;
+              const top = mobile && head && head.height > 0 ? head.bottom : a.top;
+              const bottom = mobile && sheet && sheet.height > 0 ? sheet.top : a.bottom;
+              const x = Math.round((left + a.right) / 2);
+              const y = Math.round((top + bottom) / 2);
+              const t = document.elementFromPoint(x, y);
+              return { x, y, onMap: !!t && !!t.closest('#map-area') && !t.closest('[data-map-overlay]') };
+            });
+            const pending = await page.evaluate((n) => (window.__maxBudgetPrefetchAppliedCount || 0) === n, before);
+            record(`${label} 拡大する場所が地図の上で、まだ裏取得が終わっていない（検証の前提）`, pt.onMap && pending, JSON.stringify({ pt, pending }));
+            await page.mouse.move(pt.x, pt.y);
+            await page.mouse.wheel(0, -400);
+            await page.waitForTimeout(700);
+            if (dim === '3d') await waitForTerrainCameraIdle(page);
+          }
+          const zUser = await readZoom(page, dim);
+          const applied = await page.waitForFunction((n) => (window.__maxBudgetPrefetchAppliedCount || 0) > n, before, { timeout: 20000 }).then(() => true).catch(() => false);
+          await page.waitForTimeout(1000);
+          if (dim === '3d') await waitForTerrainCameraIdle(page);
+          const zAfter = await readZoom(page, dim);
+          if (touch) {
+            record(
+              `${label} 検索の直後に拡大すると、裏取得の描き直しのあとも拡大したまま（円に合わせ直さない）`,
+              applied && zUser > zSearch + 0.3 && Math.abs(zAfter - zUser) < 0.02,
+              JSON.stringify({ applied, zSearch, zUser, zAfter })
+            );
+          } else {
+            const st = await measureCircleState(page, dim);
+            record(
+              `${label} 動かさなければ、裏取得のあとも円に合わせた見え方（直径が見えている範囲の短辺の0.5〜0.86）`,
+              applied && st.ratio >= 0.5 && st.ratio <= 0.86,
+              JSON.stringify({ applied, zSearch, zAfter, ratio: st.ratio })
+            );
+          }
+          // ピン・数・一覧は裏取得で今までどおり変わる（地図に¥2,000分が入る）
+          const counts = await page.evaluate((dim) => {
+            const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
+            return { spots: (view._lastSpots || []).length, maxFare: Math.max(0, ...(view._lastSpots || []).map((s) => s.source_round_trip_fare)) };
+          }, dim);
+          record(`${label} 裏取得のあと、地図には¥2,000分の場所が入っている（ピンの入れ替えは今までどおり）`, counts.maxFare > 800, JSON.stringify(counts));
+          record(`${label} コンソールにエラーが出ていない（標高タイルの404を除く）`, errors.length === 0, errors.join(' / '));
+        } catch (e) {
+          record(`${label} 検証中にクラッシュしない`, false, e.message);
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  }
+
+  // ---- 2. 使い方の画面 ----
+  const howtoVps = { pc: VIEWPORTS.pc, std: { width: 390, height: 844 }, se: { width: 375, height: 667 }, own: { width: 400, height: 464 } };
+  for (const [vLabel, viewport] of Object.entries(howtoVps)) {
+    const label = `[62/${vLabel}/使い方]`;
+    const { context, page, errors } = await openPage(viewport);
+    try {
+      await clickHeaderItem(page, 'howto-btn');
+      await page.waitForTimeout(300);
+      const read = () => page.evaluate(() => {
+        const r = (el) => { const b = el.getBoundingClientRect(); return { x: b.left, y: b.top, left: b.left, top: b.top, right: b.right, bottom: b.bottom, width: b.width, height: b.height }; };
+        const modal = document.getElementById('howto-modal');
+        const panel = modal.querySelector('.modal-panel');
+        const close = document.getElementById('howto-modal-close');
+        const cb = close.getBoundingClientRect();
+        const t = document.elementFromPoint(cb.left + cb.width / 2, cb.top + cb.height / 2);
+        return {
+          open: !modal.hidden, panel: r(panel), close: r(close), closeOnTop: !!t && close.contains(t),
+          scrollable: panel.scrollHeight > panel.clientHeight + 1,
+          wide: document.documentElement.scrollWidth > innerWidth + 1 || panel.scrollWidth > panel.clientWidth + 1,
+          text: panel.textContent.replace(/\s+/g, ' '),
+        };
+      });
+      const s = await read();
+      record(`${label} 使い方の画面が開き、画面の中に収まり（はみ出すぶんは中でスクロール）、横にはみ出さない`, s.open && isFullyVisible(s.panel, viewport) && !s.wide, JSON.stringify({ panel: s.panel, scrollable: s.scrollable, wide: s.wide }));
+      record(`${label} 閉じるボタンが右上に見えていて（押せる大きさ44px以上）、ほかの部品に隠れていない`,
+        isFullyVisible(s.close, viewport) && s.closeOnTop && s.close.width >= 44 && s.close.height >= 44 && s.close.right >= s.panel.right - 24,
+        JSON.stringify({ close: s.close, onTop: s.closeOnTop }));
+      const must = ['この条件で探す', '往復', '円の中', 'みちどころ', 'NEW', '条件を変える', '一覧', '2D / 3D', '傾き', '見え方に戻ります', '「i」', 'データ出典・免責'];
+      const old = ['「検索」を押', 'タブ', 'スライダー', '再検索', '「出発駅を選択」', 'で探す」を押してください'];
+      const missing = must.filter((w) => !s.text.includes(w));
+      const stale = old.filter((w) => s.text.includes(w));
+      record(`${label} 今の画面の説明が入っていて、古い説明（「検索」ボタン・タブ・スライダー・再検索）が無い`, missing.length === 0 && stale.length === 0, JSON.stringify({ missing, stale }));
+      if (vLabel === 'pc' || vLabel === 'std') {
+        const file = path.join(screenshotDir, `round62-howto-${vLabel}.png`);
+        await page.screenshot({ path: file });
+        savedPaths.push(file);
+        if (s.scrollable) {
+          await page.evaluate(() => { const p = document.querySelector('#howto-modal .modal-panel'); p.scrollTop = p.scrollHeight; });
+          await page.waitForTimeout(200);
+          const file2 = path.join(screenshotDir, `round62-howto-${vLabel}-bottom.png`);
+          await page.screenshot({ path: file2 });
+          savedPaths.push(file2);
+          await page.evaluate(() => { document.querySelector('#howto-modal .modal-panel').scrollTop = 0; });
+        }
+      }
+      await clickElementChecked(page, 'howto-modal-close', `${label} 閉じるボタン`);
+      await page.waitForTimeout(200);
+      const closed = await page.evaluate(() => document.getElementById('howto-modal').hidden);
+      record(`${label} 閉じるボタンで閉じる`, closed);
+      record(`${label} コンソールにエラーが出ていない`, errors.length === 0, errors.join(' / '));
+    } catch (e) {
+      record(`${label} 検証中にクラッシュしない`, false, e.message);
+    } finally {
+      await context.close();
+    }
+  }
+}
+
 async function main() {
   assertBundleFresh('verify-layout');
   assertSiteDataFresh('verify-layout');
@@ -10621,6 +10783,7 @@ async function main() {
     await runWithFreshBrowser(checkRound57, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound58, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound59, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkRound62, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBreadcrumbTrail, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBudgetSlider, baseUrl, savedPaths);
     await runWithFreshBrowser(checkWaveRevealAndCircleScreenshots, baseUrl, savedPaths);
