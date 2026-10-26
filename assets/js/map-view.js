@@ -1616,6 +1616,13 @@ export class MapView {
     this.setMarkerState(spotId, 'hover', false);
   }
 
+  /** 【61本目】一覧のカードに乗せたときの強調（map-pin-hover）を、すべて外す（一覧を作り直すとき）。 */
+  clearHighlights() {
+    this.markersBySpotId.forEach((marker, spotId) => {
+      if (marker.getElement()?.querySelector('.map-pin.map-pin-hover')) this.setMarkerState(spotId, 'hover', false);
+    });
+  }
+
   setMarkerState(spotId, kind, on) {
     const marker = this.markersBySpotId.get(spotId);
     const el = marker && marker.getElement();

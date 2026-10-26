@@ -164,6 +164,8 @@ class ReverseTravel {
     // 【59本目】¥2,000分の裏取得（scheduleMaxBudgetPrefetch()）が、どの出発駅の分まで終わっているか。
     // 終わるまでは検索した金額の帯の場所しか持っていないため、＋−で一覧を合わせるのを待つ。
     this._allSpotsStationId = null;
+    // 【61本目】今地図に渡している場所（「◯か所」「NEW +N」を地図と同じ数え方にするため。updateNewSpotMarks()）
+    this._mapSpots = null;
     this.currentHasCheaperSpots = false; // 帯は0件だが、予算以下にはスポットがあるか（0件案内文の出し分けに使う）
     this.currentSortOrder = 'recommended';
     // 直近に検索した条件（出発駅欄の文字列＋予算）。nullは「まだ一度も検索していない」。
@@ -839,7 +841,8 @@ class ReverseTravel {
    * @param {number} liveBudget 今の金額（＋−・スライダーで変えた値）
    */
   updateNewSpotMarks(liveBudget) {
-    const spots = this.currentAllSpots || [];
+    // 【61本目】地図に今渡している場所で数える（裏取得の結果は、地図に渡すまで数に入れない。scheduleMaxBudgetPrefetch()）
+    const spots = this._mapSpots || this.currentAllSpots || [];
     const searched = this.currentBudget;
     const prev = this._mapPrevSearchedBudget ?? searched;
     const isNew = (spot) => pinCategory(spot.source_round_trip_fare, liveBudget, searched, prev) === 'orange';
@@ -1295,8 +1298,14 @@ class ReverseTravel {
       try {
         const { allSpots } = await this.computeSearchResult(stationId, MAX_BUDGET);
         if (this.currentDepartureStationId !== stationId) return;
+        // 検索カードの金額帯の案内（スライダーの件数）は、ここで¥2,000分を使い始めてよい（地図・一覧は変えない表示）。
         this.currentAllSpots = allSpots;
-        this._allSpotsStationId = stationId; // 【59本目】これで＋−の一覧合わせができる
+        // 【2026-10-26、61本目、不具合修正】¥2,000分で一覧を合わせ始める（_allSpotsStationId）のは、地図へ渡すのと
+        // 同じとき（下のsetTimeoutの中）にする。「◯か所」「NEW +N」も地図に渡した場所で数える（_mapSpots）。以前は
+        // ここ（地図へ渡す1.2秒前）から一覧・数を合わせていたため、検索した直後（約1秒以内）に＋を押すと、一覧の
+        // 見出し・カード・「◯か所」「NEW +N」だけが先に新しい金額になり、地図のピン（新しく届くオレンジ）は
+        // 1.0〜1.2秒遅れて出ていた（59本目の「地図・か所数・見出し・一覧が一緒に変わる」に反する。61本目の計測で
+        // 発覚）。そろえた分、早く押したときは地図と一緒に遅れて変わる。
         // 【2026-10-13、10本目②修正】ここで即render()し直すと、検索直後に
         // 始まったばかりの「波のように出る」演出を、マーカーの作り直しで
         // 無言のまま中断・リセットしてしまう（render()はwaveの進行中かどうかに
@@ -1307,6 +1316,8 @@ class ReverseTravel {
         // 隠れている数を見たらすでに0件＝演出が始まる前に終わっていたことで発覚）。
         setTimeout(() => {
           if (this.currentDepartureStationId !== stationId) return;
+          this._mapSpots = allSpots;
+          this._allSpotsStationId = stationId; // 【59本目】これで＋−の一覧合わせができる
           const departureStation = this.data.stations?.[stationId];
           // 【2026-10-13、10本目①修正】裏の計算中にスライダーが動かされていても、
           // 点は検索したときの予算（this.currentBudget）のまま据え置く（Minami指示：
@@ -1407,6 +1418,7 @@ class ReverseTravel {
     this.currentDepartureStationName = this.data.stations?.[departureStationId]?.display_name || departureStationId;
     this.currentSpots = spots;
     this.currentAllSpots = allSpots || spots;
+    this._mapSpots = this.currentAllSpots; // 【61本目】地図に渡す場所（下のrender()）。「◯か所」「NEW +N」はこれで数える
     this.currentReachableCount = reachableCount;
     this.currentBudget = budget;
     this.currentHasCheaperSpots = !!hasCheaperSpots;
@@ -1472,11 +1484,18 @@ class ReverseTravel {
     this._lastMapSearch = { stationId: departureStationId, budget };
     this.mapView.setPrevSearchedBudget(this._mapPrevSearchedBudget);
     this.terrainMapView?.setPrevSearchedBudget(this._mapPrevSearchedBudget);
-    this.mapView.render(departureStation, this.currentAllSpots, budget, { reveal: true });
     // 【41本目】最初の見え方に戻るボタンは、一度検索したら出す。
     if (this.elements.mapResetViewBtn) this.elements.mapResetViewBtn.hidden = false;
     // 【51本目】色の説明・「NEW +◯」も、一度検索したら出す。
     if (this.elements.mapLegend) this.elements.mapLegend.hidden = false;
+    // 【2026-10-26、61本目、不具合修正】円に合わせる前に（下のrender()）、検索カードを閉じた・結果の入れ物を出した・
+    // 戻るボタンを出したあとの大きさを測り直す（右下の部品の列の隠し方・位置も決まる）。以前は測り直しが
+    // 後回し（MutationObserver・ResizeObserverの次の回）だったため、検索した直後の円合わせは、閉じる前の
+    // 検索カードの都合で隠していた部品（61本目のfitSearchCard()）や、まだ出ていない戻るボタンのまま
+    // 部品を避けていた。そのため「最初の見え方に戻る」で合わせ直すと部品の避け方が変わり、400×464の3Dで
+    // ズームが0.06（避ける1段0.03の2段分）ずれた。戻るボタンなどを出してから測るため、上の2つを先にした。
+    this.layoutController?.updateInsets();
+    this.mapView.render(departureStation, this.currentAllSpots, budget, { reveal: true });
     this.updateNewSpotMarks(budget);
     // 3D地図は3D切替が一度も行われるまでインスタンス自体が無い（遅延読込、4本目②）。
     // 作成済みならrender()を呼ぶ（未初期化でも座標だけ保持する設計のため、
@@ -2334,6 +2353,10 @@ class ReverseTravel {
    * このメソッド自体も非同期にしている。
    */
   async renderResultsList() {
+    // 【2026-10-26、61本目、不具合修正】カードを作り直すと、マウスが乗っていたカードは「離れた」（mouseout）を
+    // 出さないまま消えるため、そのピンの強調（大きく・一番上）が地図に残り続けた（59本目から＋−のたびに一覧を
+    // 作り直すようになって表に出た。オレンジのピンが出発駅の印より上に出たままになる）。作り直す前に外す。
+    this.mapView.clearHighlights?.();
     if (this.currentSpots.length === 0) {
       this.elements.resultsList.innerHTML = await this.buildNoResultsMessage();
       return;

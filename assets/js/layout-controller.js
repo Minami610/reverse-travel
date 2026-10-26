@@ -266,12 +266,38 @@ export class LayoutController {
   fitSearchCard() {
     const card = document.getElementById('layout-left');
     if (!card) return;
-    const steps = ['search-card-no-lead', 'search-card-no-examples', 'search-card-tight'];
+    const steps = ['search-card-no-lead', 'search-card-no-examples', 'search-card-tight', 'search-card-no-brand'];
     steps.forEach((c) => card.classList.remove(c));
     if (getComputedStyle(card).display !== 'none') {
+      const fits = () => card.scrollHeight <= card.clientHeight + 1;
+      // 【2026-10-26、61本目、Minami決定：B】「条件を変える」で開いたカード（「▲閉じる」・「条件が変わりました」が
+      // 増える）も、スクロールせずに「この条件で探す」まで見えるようにする。トップ画面と同じ順に外したうえで、
+      // 開いたカードだけは、副題の1行（.search-card-brand）も外す。それでも入らなければ、右下の部品の列に
+      // 残している高さ（--map-controls-room）を、59本目の結果画面と同じ順（ズーム＋−→部品の列ごと）に
+      // 部品を隠して空ける。400×464では、検索したあとは戻るボタン（3Dは方位磁針・ハンドルも）が増えて
+      // 部品の列が高くなり、トップ画面の外し方だけでは、開いたカードの中身（2Dで約330px）が
+      // カード（2Dで244px、3Dで196px）に入らなかったため。開いている間は地図を触ると閉じるので、
+      // 部品が隠れても困らない。トップ画面（検索する前）は57本目のまま（副題・部品は外さない）。
+      const reopened = !this.isDesktop() && this.layoutEl.classList.contains('has-results');
+      const cluster = document.getElementById('map-controls-cluster');
+      if (reopened && cluster) {
+        // 前に測ったときに隠した部品を出し、部品の列がすべて入る高さを残した状態から測り直す
+        // （updateInsets()の最初に測った--map-controls-roomは、隠したままの高さのことがあるため）。
+        cluster.classList.remove('cluster-no-zoom', 'cluster-hidden');
+        this.layoutEl.style.setProperty('--map-controls-room', `${Math.round(cluster.getBoundingClientRect().height + CONTROLS_EXTRA_ROOM)}px`);
+      }
       for (const c of steps) {
-        if (card.scrollHeight <= card.clientHeight + 1) break;
+        if (fits()) break;
+        if (c === 'search-card-no-brand' && !reopened) break;
         card.classList.add(c);
+      }
+      if (reopened && cluster && !fits()) {
+        for (const c of ['cluster-no-zoom', 'cluster-hidden']) {
+          cluster.classList.add(c);
+          const room = c === 'cluster-hidden' ? CONTROLS_EXTRA_ROOM : Math.round(cluster.getBoundingClientRect().height + CONTROLS_EXTRA_ROOM);
+          this.layoutEl.style.setProperty('--map-controls-room', `${room}px`);
+          if (fits()) break;
+        }
       }
     }
     // 自分でクラスを付け外しした分の変化は、測り直しのきっかけにしない（付け外しのたびに呼ばれ続けないため。

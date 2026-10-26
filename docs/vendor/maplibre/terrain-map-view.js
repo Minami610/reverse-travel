@@ -2392,6 +2392,7 @@ export class TerrainMapView {
     const area = document.getElementById('map-area');
     if (!area || !this.map) return;
     hint.classList.remove('map-rotate-hint-free', 'map-rotate-hint-outside');
+    delete hint.dataset.placement;
     hint.style.position = '';
     hint.style.top = '';
     hint.style.left = '';
@@ -2403,6 +2404,8 @@ export class TerrainMapView {
     const MARGIN = 8; // 予算操作帯などとのすき間（27本目の吹き出しと同じ8px）
     const obstacles = [];
     const addRect = (r) => { if (r && r.width > 0 && r.height > 0) obstacles.push(r); };
+    // 【61本目】地図に描く点（1つずつのピン）だけは別にも覚えておく（下の、どこにも置けないときの置き場所選び用）。
+    const pinRects = [];
     // ピン（円のレイヤー）。画面上の位置から、白いふちを含めた大きさの四角にする。
     const mapRect = this.map.getContainer().getBoundingClientRect();
     try {
@@ -2410,7 +2413,9 @@ export class TerrainMapView {
         const p = this.map.project(f.geometry.coordinates);
         const x = mapRect.left + p.x;
         const y = mapRect.top + p.y;
-        addRect({ left: x - 10, top: y - 10, right: x + 10, bottom: y + 10, width: 20, height: 20 });
+        const r = { left: x - 10, top: y - 10, right: x + 10, bottom: y + 10, width: 20, height: 20 };
+        addRect(r);
+        pinRects.push(r);
       });
     } catch {
       // レイヤーがまだ無いときは、ピンは無いものとして扱う
@@ -2421,8 +2426,9 @@ export class TerrainMapView {
     this.map.getContainer().querySelectorAll('.maplibregl-marker').forEach((el) => addRect(el.getBoundingClientRect()));
     document.querySelectorAll('#map-controls-cluster, #map-dimension-toggle, #mobile-budget-overlay, #spot-info-panel, [data-map-overlay], #map-area .maplibregl-ctrl-attrib, #map-area .maplibregl-ctrl')
       .forEach((el) => { if (el.offsetParent !== null) addRect(el.getBoundingClientRect()); });
-    const hits = (r) => obstacles.some((o) => r.left < o.right + MARGIN && r.right > o.left - MARGIN
-      && r.top < o.bottom + MARGIN && r.bottom > o.top - MARGIN);
+    const touches = (r, o) => r.left < o.right + MARGIN && r.right > o.left - MARGIN
+      && r.top < o.bottom + MARGIN && r.bottom > o.top - MARGIN;
+    const hits = (r) => obstacles.some((o) => touches(r, o));
     const inside = (r) => r.left >= a.left + 4 && r.right <= a.right - 4 && r.top >= a.top + 4 && r.bottom <= a.bottom - 4;
 
     const cluster = document.getElementById('map-controls-cluster')?.getBoundingClientRect();
@@ -2447,16 +2453,38 @@ export class TerrainMapView {
       for (let left = a.left + 4; left + w <= a.right - 4; left += 8) grid.push({ left, top, d: Math.hypot(left + w / 2 - hx, top + h / 2 - hy) });
     }
     grid.sort((p, q) => p.d - q.d);
-    for (const c of [...candidates, ...grid]) {
-      const r = { left: c.left, top: c.top, right: c.left + w, bottom: c.top + h };
-      if (!inside(r) || hits(r)) continue;
+    const placeAt = (c) => {
       if (!c.arrow) hint.classList.add('map-rotate-hint-free');
       hint.style.left = `${Math.round(c.left - a.left)}px`;
       hint.style.top = `${Math.round(c.top - a.top)}px`;
       hint.style.right = 'auto';
+    };
+    for (const c of [...candidates, ...grid]) {
+      const r = { left: c.left, top: c.top, right: c.left + w, bottom: c.top + h };
+      if (!inside(r) || hits(r)) continue;
+      placeAt(c);
       return;
     }
-    // どこに置いても何かに重なる：地図の外に出す（画面に対して固定。3秒で消える）。
+    // 【2026-10-26、61本目、不具合修正】どこに置いても何かに重なるときは、地図に描く点（1つずつのピン）にだけは
+    // 重なってよいことにし、重なる点がいちばん少ない場所（同じならハンドルに近い方）に出す。まとめた丸・出発駅の印・
+    // 選んだピンの印・部品・重ねた入れ物には今までどおり重ねない。以前はここで「地図の外」に出していたが、56本目で
+    // 地図が画面いっぱいになり、地図の下は画面の外になったため、400×464の3D（59本目で下の一覧と上の＋−カードが
+    // 見えている範囲を狭めた）では吹き出しが画面の下にはみ出して見えなかった。
+    const pinSet = new Set(pinRects);
+    const hardObstacles = obstacles.filter((o) => !pinSet.has(o));
+    let best = null;
+    for (const c of grid) {
+      const r = { left: c.left, top: c.top, right: c.left + w, bottom: c.top + h };
+      if (!inside(r) || hardObstacles.some((o) => touches(r, o))) continue;
+      const n = pinRects.filter((o) => touches(r, o)).length;
+      if (!best || n < best.n) best = { c, n };
+    }
+    if (best) {
+      placeAt(best.c);
+      hint.dataset.placement = 'fewest-pins'; // 検証用（verify-layout.jsが、ピンに重なってよい置き方かを見分ける）
+      return;
+    }
+    // それでも置けない：地図の外に出す（画面に対して固定。3秒で消える）。
     hint.classList.add('map-rotate-hint-free', 'map-rotate-hint-outside');
     hint.style.position = 'fixed';
     hint.style.right = 'auto';

@@ -2857,7 +2857,8 @@ body {
 /* 【57本目】検索カードが低い画面（400×464など）で入りきらないとき（layout-controller.jsのfitSearchCard()）：
    説明文 → 例のボタンの順に外し、それでも入らなければ行の間を詰める */
 .search-card.search-card-no-lead .search-card-lead,
-.search-card.search-card-no-examples .search-examples {
+.search-card.search-card-no-examples .search-examples,
+.search-card.search-card-no-brand .search-card-brand {
   display: none;
 }
 
