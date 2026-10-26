@@ -5252,8 +5252,12 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
     return true;
   };
 
+  // 【62本目】「波は広がりながらうすくなる」（3D）を単独で何回も流すため、VERIFY_WAVE3D_ONLY=1のときは
+  // 2)の3Dの波だけを流す（VERIFY_WAVE3D_ONLY=1 node scripts/verify-layout.js --only checkRefitOnlyWhenNeededAndWave）。
+  const waveOnly = process.env.VERIFY_WAVE3D_ONLY === '1';
+
   // --- 1) A：必要なときだけ動かす（PC、2D・3D、富山駅前・往復¥500から） ---
-  for (const dim of ['2d', '3d']) {
+  for (const dim of (waveOnly ? [] : ['2d', '3d'])) {
     const label = `[37/A/pc/${dim}]`;
     const context = await browser.newContext({ viewport: VIEWPORTS.pc });
     const { page, errors } = await openApp(context);
@@ -5371,7 +5375,7 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
   // 【43本目】本体のブラウザ（main()のrunWithFreshBrowser、実GPU・関数ごとに起動し直し）を使う。
   // 専用のGPUブラウザを別に起動すると、本体と同時に2つ開き、2つめがGPUを使えずWebGLが無い扱いになった。
   const gpuBrowser = browser;
-  for (const dim of ['2d', '3d']) {
+  for (const dim of (waveOnly ? ['3d'] : ['2d', '3d'])) {
     const label = `[37/wave/pc/${dim}]`;
     const context = await (dim === '3d' ? gpuBrowser : browser).newContext({ viewport: VIEWPORTS.pc });
     const { page, errors } = await openApp(context);
@@ -5410,6 +5414,8 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
             && last.radiusKm > first.radiusKm,
           JSON.stringify({ fromKm: first.fromKm, toKm: first.toKm, radiusBefore: plus.radiusBefore, target: plus.radiusTarget, firstR: first.radiusKm, lastR: last.radiusKm })
         );
+        // 【62本目】通ったときも濃さを残す（3Dの波がときどき落ちる件を調べ直すため）
+        console.log(`  ${label} 波の濃さ：はじめ${first.opacity}（${first.t}ms）→最後${last.opacity}（${last.t}ms）、見えたコマ${seen.length}`);
         record(
           `${label} 波は広がりながらうすくなる（はじめ0.6〜0.75の濃さ→最後はほぼ0）`,
           first.opacity >= 0.6 && first.opacity <= 0.75 && last.opacity <= 0.1 && last.opacity < first.opacity,
@@ -5670,7 +5676,7 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
   // （本体のブラウザのため、ここでは閉じない）
 
   // --- 2.5) 動きを減らす設定（prefers-reduced-motion）では波を出さない ---
-  for (const dim of ['2d', '3d']) {
+  for (const dim of (waveOnly ? [] : ['2d', '3d'])) {
     const label = `[37/wave/reduced-motion/${dim}]`;
     const context = await browser.newContext({ viewport: VIEWPORTS.pc, reducedMotion: 'reduce' });
     const { page, errors } = await openApp(context);
@@ -5701,7 +5707,7 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
   }
 
   // --- 3) 「全体を見る」で、検索直後と同じ中心・ズームに戻る（2D・3D × PC・400×464） ---
-  for (const [vLabel, viewport] of Object.entries({ pc: VIEWPORTS.pc, own: { width: 400, height: 464 } })) {
+  for (const [vLabel, viewport] of Object.entries(waveOnly ? {} : { pc: VIEWPORTS.pc, own: { width: 400, height: 464 } })) {
     for (const dim of ['2d', '3d']) {
       const label = `[37/view-all/${vLabel}/${dim}]`;
       const isMobile = vLabel !== 'pc';
