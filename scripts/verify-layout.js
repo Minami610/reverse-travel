@@ -2960,14 +2960,17 @@ async function checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths) {
       const rect = container.getBoundingClientRect();
       return {
         overflowY: getComputedStyle(list).overflowY,
+        overflowX: getComputedStyle(list).overflowX,
         height: rect.height,
         viewportHeight: window.innerHeight,
       };
     });
+    const scrollable = (v) => v === 'auto' || v === 'scroll';
     record(
-      // 【56本目】一覧タブはやめた。一覧は地図の下に重ねた結果の入れ物の中で、スクロールできる（入れ物の高さは58本目で作る）。
-      `[${label}] 一覧（結果の入れ物の中）が見えていて、スクロール可能なoverflow設定`,
-      listInfo.height > 0 && (listInfo.overflowY === 'auto' || listInfo.overflowY === 'scroll'),
+      // 【56本目】一覧タブはやめた。一覧は地図の下に重ねた結果の入れ物の中で、スクロールできる。
+      // 【59本目】スマホの下の一覧が小のときは、カードを横に並べて横にスクロールする（見本⑤）。
+      `[${label}] 一覧（結果の入れ物の中）が見えていて、スクロール可能なoverflow設定（小は横、大・PCは縦）`,
+      listInfo.height > 0 && (scrollable(listInfo.overflowY) || scrollable(listInfo.overflowX)),
       JSON.stringify(listInfo)
     );
     const listTabPath = path.join(screenshotDir, `mobile-form-collapse-list-tab-${label}.png`);
@@ -3042,7 +3045,11 @@ async function checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths) {
     record(`[${label}] 再検索すると要約バーへ再び畳まれる`, afterResearch);
 
     // 【56本目】フッターはやめた。結果の入れ物の一番下の「データ出典・免責」と、ヘッダー（「☰」の中）の「使い方」
-    await page.click('.results-panel [data-open-about]');
+    // 【59本目】スマホの下の一覧が小のときは、地図の右下の出典のすぐ左の「データ出典・免責」（一覧の中のものは隠れている）
+    await page.evaluate(() => {
+      const el = [...document.querySelectorAll('.results-panel [data-open-about], #map-data-line [data-open-about]')].find((b) => b.offsetParent !== null);
+      el.click();
+    });
     await page.waitForTimeout(150);
     const aboutOpen = await page.evaluate(() => !document.getElementById('about-modal').hidden);
     record(`[${label}] 結果の入れ物の「データ出典・免責」がモーダルを開く`, aboutOpen);
