@@ -1110,14 +1110,15 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
     await context.close();
   }
 
-  // --- 2) 動かしている間は一覧が変わらない／3) 「この条件で検索」で一覧が変わる ---
+  // --- 2) 結果画面では金額を変えると一覧も変わる（59本目）／3) 検索カードを開いている間は変わらず、「この条件で探す」で変わる ---
   {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
     const page = await context.newPage();
     await page.goto(baseUrl, { waitUntil: 'load' });
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
-    await searchAt(page, '富山駅前', 1000);
+    // 【61本目】一覧が金額に合わせて変わるのも裏取得が終わってからのため、その終わりを待つ。
+    await searchAtAndWaitPrefetch(page, '富山駅前', 1000);
     // 【不具合修正】¥2000全域の裏取得（scheduleMaxBudgetPrefetch）は波の演出を
     // 邪魔しないよう意図的に1200ms遅らせてある（main.jsのWAVE_REVEAL_SAFE_DELAY_MS
     // 参照）。これを待たずに「ドラッグ前」の円半径を読むと、まだ帯スポットだけの
@@ -1145,10 +1146,13 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
     });
     await page.waitForTimeout(200);
     const cardsDuringDrag = await page.locator('.spot-card h3').allTextContents();
+    // 【61本目】59本目（Minami決定）で、結果画面では金額を変えると一覧も一緒に変わる決まりになった。
+    // 以前の「動かしている間は一覧が変わらない」は、検索カードを開いているときだけ成り立つ（下で見る）。
+    const headingDuringDrag = await page.locator('#results-band-heading').textContent();
     record(
-      'スライダーを動かしている間（input）は一覧が変わらない',
-      JSON.stringify(cardsBefore) === JSON.stringify(cardsDuringDrag),
-      `変更前${cardsBefore.length}件 → ドラッグ中${cardsDuringDrag.length}件`
+      '結果画面で金額を変えると、一覧の見出し・カードも今の金額帯（¥1,801〜¥2,000）に変わる（59本目）',
+      JSON.stringify(cardsBefore) !== JSON.stringify(cardsDuringDrag) && (headingDuringDrag || '').includes('¥1,801〜¥2,000'),
+      `変更前${cardsBefore.length}件 → 変更後${cardsDuringDrag.length}件・見出し「${headingDuringDrag}」`
     );
     const markersDuringDrag = await page.evaluate(() => {
       const mv = window.__mapViewForDebug;
@@ -1188,17 +1192,36 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
     const mapLabelCountPc = await page.evaluate(() => document.querySelectorAll('.reach-circle-label').length);
     record('PC・2Dの地図の上に「最大◯km先まで」のラベルが無い', mapLabelCountPc === 0, `count=${mapLabelCountPc}`);
 
-    const pendingClass = await page.evaluate(() => document.getElementById('search-btn').classList.contains('search-btn-pending'));
-    record('スライダー操作後、「この条件で検索」ボタンが強調表示になる', pendingClass);
-
+    // 【61本目】一覧が今の金額を出しているため、「条件を変える」で開いても「この条件で探す」は強調しない（59本目）。
     await ensureFormExpanded(page);
+    await page.waitForTimeout(100);
+    const pendingAfterOpen = await page.evaluate(() => document.getElementById('search-btn').classList.contains('search-btn-pending'));
+    record('結果画面で金額を変えたあと「条件を変える」で開いても、「この条件で探す」は強調表示にならない（一覧がその金額のため）', !pendingAfterOpen);
+
+    // 検索カードを開いている間にスライダーを動かしても一覧は変わらず、「この条件で探す」が強調になる
+    await page.evaluate(() => {
+      const el = document.getElementById('budget-slider');
+      el.value = 1000;
+      el.dispatchEvent(new Event('input'));
+    });
+    await page.waitForTimeout(200);
+    const cardsDuringOpenDrag = await page.locator('.spot-card h3').allTextContents();
+    record(
+      '検索カードを開いている間にスライダーを動かしても、一覧は変わらない',
+      JSON.stringify(cardsDuringOpenDrag) === JSON.stringify(cardsDuringDrag),
+      `変更前${cardsDuringDrag.length}件 → ドラッグ中${cardsDuringOpenDrag.length}件`
+    );
+    const pendingClass = await page.evaluate(() => document.getElementById('search-btn').classList.contains('search-btn-pending'));
+    record('検索カードでスライダーを動かすと、「この条件で探す」ボタンが強調表示になる', pendingClass);
+
     await page.click('#search-btn');
     await page.waitForSelector('.spot-card, .no-results', { timeout: 15000, state: 'attached' });
     await page.waitForTimeout(200);
     const cardsAfterSearch = await page.locator('.spot-card h3').allTextContents();
     record(
-      '「この条件で検索」を押すと一覧が変わる（¥1000→¥2000の帯に変化）',
-      JSON.stringify(cardsAfterSearch) !== JSON.stringify(cardsBefore)
+      '「この条件で探す」を押すと一覧が変わる（¥2000→¥1000の帯に戻る）',
+      JSON.stringify(cardsAfterSearch) !== JSON.stringify(cardsDuringDrag) && JSON.stringify(cardsAfterSearch) === JSON.stringify(cardsBefore),
+      `検索前${cardsDuringDrag.length}件 → 検索後${cardsAfterSearch.length}件（最初${cardsBefore.length}件）`
     );
 
     await context.close();
@@ -5695,7 +5718,11 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
           if (!(await to3d(page, label))) continue;
         }
         // 地図（2D/3D）が見えている状態で検索し直し、その直後の見え方を記録する。
+        // 【61本目】検索し直したあとの¥2,000分の裏取得の反映（地図の描き直し）が終わるまで待つ。待たずに拡大すると、
+        // 反映の途中で拡大が打ち消され、「拡大・移動したあと」のズームが検索した直後のままになることがあった（通しで時々）。
+        const prefetchBeforeResearch = await page.evaluate(() => window.__maxBudgetPrefetchAppliedCount || 0);
         await searchKeepingMapVisible(page, '富山駅前', 500, isMobile);
+        await page.waitForFunction((n) => (window.__maxBudgetPrefetchAppliedCount || 0) > n, prefetchBeforeResearch, { timeout: 20000 }).catch(() => {});
         await page.waitForTimeout(500);
         if (dim === '3d') await waitForTerrainCameraIdle(page);
         await page.waitForTimeout(500);
@@ -6331,18 +6358,35 @@ async function checkSelectedPinVisibleAfterFocus3d(browser, baseUrl, savedPaths)
             if (!s) return null;
             const rect = map.getContainer().getBoundingClientRect();
             const p = map.project([s.longitude, s.latitude]);
+            const x = rect.left + p.x;
+            const y = rect.top + p.y;
+            // 【61本目、検証の不具合修正】以前は「名前の帯の上の端より上」を見えている範囲としていた（帯がいつも
+            // 地図の下にあった頃の測り方）。59本目からスマホでは帯を見えている範囲の上の端（上の＋−カードのすぐ下）に
+            // 出すため、400×464では見えている範囲が91pxしか残らず、真ん中に寄せたピンが「見えていない」扱いになっていた。
+            // 見えている＝地図の中で、地図の上に重ねた入れ物（data-map-overlay）にも名前の帯にも隠れていないこと、とする。
+            const covers = [];
+            document.querySelectorAll('[data-map-overlay]').forEach((el) => {
+              const cs = getComputedStyle(el);
+              if (el.hidden || cs.display === 'none' || cs.display === 'contents' || cs.visibility === 'hidden') return;
+              covers.push(el.getBoundingClientRect());
+            });
             const panel = document.getElementById('spot-info-panel');
-            const panelTop = panel && !panel.hidden ? panel.getBoundingClientRect().top : rect.bottom;
-            return { name: s.name, x: rect.left + p.x, y: rect.top + p.y, top: rect.top, bottom: Math.min(rect.bottom, panelTop), left: rect.left, right: rect.right, pitch: map.getPitch() };
+            if (panel && !panel.hidden && panel.offsetParent !== null) covers.push(panel.getBoundingClientRect());
+            const coveredBy = covers.filter((b) => b.width > 0 && b.height > 0 && x > b.left - 4 && x < b.right + 4 && y > b.top - 4 && y < b.bottom + 4).length;
+            const head = document.querySelector('.results-head')?.getBoundingClientRect();
+            const sheet = document.querySelector('.results-sheet')?.getBoundingClientRect();
+            const visTop = head && head.height > 0 && head.bottom < rect.bottom ? Math.max(rect.top, head.bottom) : rect.top;
+            const visBottom = sheet && sheet.height > 0 && sheet.top > rect.top ? Math.min(rect.bottom, sheet.top) : rect.bottom;
+            return { name: s.name, x, y, top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, coveredBy, visTop, visBottom, pitch: map.getPitch() };
           });
           if (!sel) { record(`${label} ${t.kind}（${t.name}）を押すとピンが選ばれる`, false); continue; }
-          const inside = sel.x > sel.left + 4 && sel.x < sel.right - 4 && sel.y > sel.top + 4 && sel.y < sel.bottom - 4;
+          const inside = sel.x > sel.left + 4 && sel.x < sel.right - 4 && sel.y > sel.top + 4 && sel.y < sel.bottom - 4 && sel.coveredBy === 0;
           const px = inside ? await readPixelsAt(page, sel.x, sel.y, 2) : [];
           const matched = px.filter((c) => isNearRgb(c, TEST_SELECTED_PIN_RGB)).length;
           record(
             `${label} ${t.kind}（${sel.name}、標高${t.elev}m）を押して寄ったあと、選んだピンが画面の中に見えている（その点の色が選んだピンの色）`,
             inside && matched >= Math.ceil(px.length / 2),
-            JSON.stringify({ x: Math.round(sel.x - sel.left), y: Math.round(sel.y - sel.top), visibleHeight: Math.round(sel.bottom - sel.top), pitch: sel.pitch, matched, of: px.length, center: px[Math.floor(px.length / 2)] })
+            JSON.stringify({ x: Math.round(sel.x - sel.left), y: Math.round(sel.y - sel.top), visTop: Math.round(sel.visTop - sel.top), visBottom: Math.round(sel.visBottom - sel.top), coveredBy: sel.coveredBy, pitch: sel.pitch, matched, of: px.length, center: px[Math.floor(px.length / 2)] })
           );
           if (vLabel === 'pc' && t.kind === '山の上') {
             const shotPath = path.join(screenshotDir, 'round43-a1-mountain-pin-3d-pc.png');
@@ -6766,6 +6810,10 @@ async function checkLiveBudgetPins(browser, baseUrl, savedPaths) {
           await page.waitForTimeout(500);
           const s0 = await readPinCategories(page, dim);
           record(`${label} 検索した直後は、金額帯の場所はすべて青（オレンジが無い）`, s0.counts.orange === 0 && s0.mismatchCount === 0, JSON.stringify({ counts: s0.counts, mismatches: s0.mismatches }));
+          // 【61本目、検証の不具合修正】以前は「一覧が変わる」の比べる相手を＋を3回押した後（¥900）に読んでいて、
+          // ¥900どうしを比べていた（59本目から一覧も＋で変わるため、同じ¥900の一覧になり必ず落ちた）。
+          // 検索した直後（¥600）の一覧と比べる。
+          const cardsBefore = await page.evaluate(() => [...document.querySelectorAll('.spot-card')].map((c) => c.dataset.spotId).join(','));
 
           // ＋を3回（¥600→¥900）
           await assertNotObscured(page, incId, `${label} ＋`);
@@ -6788,7 +6836,6 @@ async function checkLiveBudgetPins(browser, baseUrl, savedPaths) {
             s1.expectedKind === 'orange' && s1.clusterKindMismatch === 0 && s1.foreignInCluster === 0 && s1.colorMismatch === 0 && s1.orangeDots === 0,
             JSON.stringify({ clusters: s1.clusterCount, kindMismatch: s1.clusterKindMismatch, foreign: s1.foreignInCluster, color: s1.colorMismatch, dots: s1.orangeDots })
           );
-          const cardsBefore = await page.evaluate(() => [...document.querySelectorAll('.spot-card')].map((c) => c.dataset.spotId).join(','));
           if (station === '大池') {
             const shotPath = path.join(screenshotDir, `round43-orange-${dim}-${vLabel}.png`);
             await page.screenshot({ path: shotPath, clip: await page.locator('#map-area').boundingBox() });
@@ -6806,14 +6853,25 @@ async function checkLiveBudgetPins(browser, baseUrl, savedPaths) {
           record(`${label} 金額を検索した金額に戻すと、ピンもすべて検索した直後の状態に戻る`, s2.signature === s0.signature, JSON.stringify({ live: s2.live, counts: s2.counts }));
 
           // もう一度＋を3回 →「¥◯で探す」（スマホ）／「この条件で検索」（PC）で、オレンジが青になる
+          // 【61本目】一覧が変わるのは＋を押したその場か（押した処理の中で、見出しが今の金額帯になっているか）も見る。
+          const syncedInClick = [];
           for (let i = 0; i < 3; i++) {
-            await page.evaluate((id) => document.getElementById(id).click(), incId);
+            syncedInClick.push(await page.evaluate((id) => {
+              document.getElementById(id).click();
+              return document.getElementById('results-band-heading').textContent;
+            }, incId));
             await page.waitForTimeout(120);
           }
           await waitForCircleSettled(page, dim);
           const cardsDuring = await page.evaluate(() => [...document.querySelectorAll('.spot-card')].map((c) => c.dataset.spotId).join(','));
+          const headingDuring = await page.evaluate(() => document.getElementById('results-band-heading').textContent);
           // 【59本目、Minami決定】結果画面では＋−で一覧も一緒に変わる（「¥◯で探す」はやめた）
-          record(`${label} 金額を変えると、一覧（カード）も一緒に変わる（59本目）`, cardsDuring !== cardsBefore);
+          record(
+            `${label} 金額を変えると、一覧（見出し・カード）も一緒に変わる（59本目）。押したその場で変わる`,
+            cardsDuring !== cardsBefore && headingDuring.startsWith('¥701〜¥900 の場所')
+              && syncedInClick[0].startsWith('¥501〜¥700 の場所') && syncedInClick[2].startsWith('¥701〜¥900 の場所'),
+            JSON.stringify({ headingDuring, syncedInClick })
+          );
           const searchBtnId = 'search-btn'; // 【59本目】スマホも「条件を変える」→「この条件で探す」（resultScreenEquivalentId()）
           const prefetchBefore = await page.evaluate(() => window.__maxBudgetPrefetchAppliedCount || 0);
           await clickElementChecked(page, searchBtnId, `${label} 「この条件で探す」`);
@@ -6826,8 +6884,9 @@ async function checkLiveBudgetPins(browser, baseUrl, savedPaths) {
             // 【49本目】検索し直すと、直前の検索（¥600）から新しく増えた場所（¥601〜¥900）はオレンジのまま、
             // もともとあった場所は紺。一覧は新しい金額で更新される。
             `${label} 検索し直すと、直前の検索から増えた場所はオレンジのまま・もともとの場所は紺で、一覧も新しい金額で更新される`,
-            s3.searched === 900 && s3.live === 900 && s3.prev === 600 && s3.counts.orange > 0 && s3.mismatchCount === 0 && cardsAfter !== cardsBefore,
-            JSON.stringify({ searched: s3.searched, live: s3.live, prev: s3.prev, counts: s3.counts, mismatches: s3.mismatches })
+            // 【61本目】一覧は＋の時点で¥900の帯になっているので、検索し直しても同じ並びのまま（同点は場所ID順、59本目）。
+            s3.searched === 900 && s3.live === 900 && s3.prev === 600 && s3.counts.orange > 0 && s3.mismatchCount === 0 && cardsAfter !== cardsBefore && cardsAfter === cardsDuring,
+            JSON.stringify({ searched: s3.searched, live: s3.live, prev: s3.prev, counts: s3.counts, mismatches: s3.mismatches, sameAsDuring: cardsAfter === cardsDuring })
           );
 
           // 円が同じ大きさの区間でも、ピンの色は変わる（大池・PCで1回だけ見る）
@@ -7218,10 +7277,21 @@ async function checkRound45(browser, baseUrl, savedPaths) {
           const r = el.getBoundingClientRect();
           if (r.width > 0) boxes.push({ what: el.id, left: r.left, right: r.right, top: r.top, bottom: r.bottom });
         });
+        // 【61本目】重ねた入れ物（上の＋−カード・下の一覧）にも重ならないこと
+        document.querySelectorAll('[data-map-overlay]').forEach((el) => {
+          const cs = getComputedStyle(el);
+          if (el.hidden || cs.display === 'none' || cs.display === 'contents' || cs.visibility === 'hidden') return;
+          const r = el.getBoundingClientRect();
+          if (r.width > 0) boxes.push({ what: `入れ物 ${el.className.split(' ')[0]}`, left: r.left, right: r.right, top: r.top, bottom: r.bottom });
+        });
         const hits = boxes.filter((b) => hint.left < b.right && hint.right > b.left && hint.top < b.bottom && hint.bottom > b.top).map((b) => b.what);
-        return { hint: [hint.left, hint.top, hint.width, hint.height].map(Math.round), hits, inViewport: hint.top >= 0 && hint.left >= 0 && hint.right <= innerWidth && hint.bottom <= innerHeight };
+        const placement = document.getElementById('map-rotate-hint').dataset.placement || 'free';
+        return { hint: [hint.left, hint.top, hint.width, hint.height].map(Math.round), placement, hits, inViewport: hint.top >= 0 && hint.left >= 0 && hint.right <= innerWidth && hint.bottom <= innerHeight };
       });
-      record(`${label} 吹き出しが、ピン・まとめた丸・出発駅の印・地図の部品に重ならず、画面の中に出る`, overlap.hits.length === 0 && overlap.inViewport, JSON.stringify(overlap));
+      // 【61本目】どこにも空いた場所が無いとき（400×464の3Dなど）は、1つずつのピンにだけは重なってよい（重なる数が
+      // いちばん少ない場所に出す。terrain-map-view.jsの_placeRotateHint()）。まとめた丸・印・部品・入れ物には重ならない。
+      const hardHits = overlap.hits.filter((w) => !(overlap.placement === 'fewest-pins' && w.startsWith('ピン ')));
+      record(`${label} 吹き出しが、ピン・まとめた丸・出発駅の印・地図の部品・重ねた入れ物に重ならず、画面の中に出る（空いた場所が無いときだけ、1つずつのピンには重なってよい）`, hardHits.length === 0 && overlap.inViewport, JSON.stringify(overlap));
       if (vLabel === 'own') {
         const shotPath = path.join(screenshotDir, `round45-hint-${station}-own.png`);
         await page.screenshot({ path: shotPath });
@@ -7838,9 +7908,11 @@ async function checkRound51(browser, baseUrl, savedPaths) {
           });
         };
         const list1 = await readList();
+        // 【61本目】59本目（Minami決定）から、結果画面では＋で一覧も今の金額帯に変わる。¥800で検索して＋で¥1,200に
+        // すると、一覧は¥1,001〜¥1,200の場所になり、どれも地図でオレンジ（検索した金額をこえる）なので「NEW」が付く。
         record(
-          `${label} 一覧の見出しが「¥601〜¥800 の場所　◯か所」（◯は一覧の数）で、切れていない。¥1,200のままでは一覧の場所に「NEW」は付かない（地図で紺）`,
-          list1.cards > 0 && list1.text === `¥601〜¥800 の場所　${list1.cards}か所` && !list1.cut && isFullyVisible(list1.rect, viewport) && list1.newShown === 0,
+          `${label} ＋で¥1,200にすると、一覧の見出しが「¥1,001〜¥1,200 の場所　◯か所」（◯は一覧の数）になり、切れていない。カードにすべて「NEW」が付く（地図でオレンジ）`,
+          list1.cards > 0 && list1.text === `¥1,001〜¥1,200 の場所　${list1.cards}か所` && !list1.cut && isFullyVisible(list1.rect, viewport) && list1.newShown === list1.cards,
           JSON.stringify(list1)
         );
         if (isMobile && dim === '2d') {
@@ -8662,10 +8734,8 @@ async function checkRound57(browser, baseUrl, savedPaths) {
       record(`${label} 開いた直後（検索した条件のまま）は「条件が変わりました」が出ていない`, !s0.shown && !s0.pending, JSON.stringify(s0));
       await setBudgetSlider(page, 1000);
       await page.waitForTimeout(200);
-      // 「条件を変える」で開いたカードは、400×464では「▲閉じる」・金額帯の案内のぶん高くなり、中をスクロールする（56本目から。
-      // 結果画面の作り直しは59本目）。ボタンが見えるところまでカードの中をスクロールしてから確かめる。
-      await page.evaluate(() => document.getElementById('search-btn').scrollIntoView({ block: 'center' }));
-      await page.waitForTimeout(100);
+      // 【61本目、Minami決定：B】「条件を変える」で開いたカードも、スクロールせずにボタンまで見える（下の4.で詳しく見る）。
+      // 以前はここでボタンまでカードの中をスクロールしてから確かめていた。
       const s1 = await read();
       record(`${label} 金額を変えると、ボタンのすぐ上（12px以内）に「条件が変わりました」が出て、隠れていない`,
         s1.shown && s1.text === '条件が変わりました' && s1.pending && s1.gap >= 0 && s1.gap <= 12 && s1.onTop, JSON.stringify(s1));
@@ -8721,6 +8791,76 @@ async function checkRound57(browser, baseUrl, savedPaths) {
         const st2 = await measureCircleState(page, dim);
         record(`${label} 最初の見え方に戻るボタンのあと：出発駅が見えている範囲の真ん中（3px以内）、円は検索した直後と同じ大きさ（差0.02以内）`,
           st2.depOffsetPx <= 3 && Math.abs(st2.ratio - st.ratio) <= 0.02, desc(st2));
+        record(`${label} コンソールにエラーが出ない`, errors.length === 0, errors.join(' | '));
+      } catch (e) {
+        record(`${label} 検証中にクラッシュしない`, false, e.message);
+      } finally {
+        await context.close();
+      }
+    }
+  }
+
+  // ---- 4. 【61本目、Minami決定：B】「条件を変える」で開いたカード（400×464・375×667、2D・3D） ----
+  // 開いたカードも、中をスクロールせずに出発駅・予算・スライダー・「この条件で探す」・「データ出典・免責」が見える。
+  // 金額を変えて「条件が変わりました」が出ても同じ。入りきらないときに隠した右下の部品は、カードに重ならない。
+  // 閉じると部品は元に戻る。スクリーンショット：400×464で金額を変えたところ（2D・3D）。
+  for (const [vLabel, viewport] of Object.entries({ own: { width: 400, height: 464 }, se: { width: 375, height: 667 } })) {
+    for (const dim of ['2d', '3d']) {
+      const label = `[61/${vLabel}/${dim}/開いたカード]`;
+      const { context, page, errors } = await newPage(viewport);
+      try {
+        await searchExactStation(page, '富山駅前', 800, true);
+        if (dim === '3d') {
+          await clickDimensionToggle(page);
+          const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+          record(`${label} 3D化（検証の前提）`, ok);
+          if (!ok) continue;
+          await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+          await waitForTerrainCameraIdle(page);
+        } else {
+          await waitForWaveRevealSettled(page);
+        }
+        const clusterBefore = await page.evaluate(() => document.getElementById('map-controls-cluster').className);
+        await clickElementChecked(page, 'search-summary-toggle', `${label} 「条件を変える」`);
+        await page.waitForTimeout(400);
+        const read = () => page.evaluate(() => {
+          const card = document.getElementById('layout-left');
+          const cb = card.getBoundingClientRect();
+          const shown = (sel) => {
+            const el = document.querySelector(sel);
+            if (!el || el.offsetParent === null) return { sel, ok: false, why: 'hidden' };
+            const b = el.getBoundingClientRect();
+            const inCard = b.top >= cb.top - 0.5 && b.bottom <= cb.bottom + 0.5 && b.bottom <= innerHeight + 0.5;
+            const t = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+            return { sel, ok: b.width > 0 && b.height > 0 && inCard && !!t && el.contains(t), top: Math.round(b.top), bottom: Math.round(b.bottom) };
+          };
+          // 見えている部品（隠していないもの）が、カードに重なっていないか
+          const cluster = document.getElementById('map-controls-cluster');
+          const parts = getComputedStyle(cluster).visibility === 'hidden' ? [] : [...cluster.querySelectorAll('button')]
+            .filter((el) => { const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0 && getComputedStyle(el).visibility !== 'hidden'; })
+            .map((el) => el.getBoundingClientRect());
+          const overlapCard = parts.filter((b) => b.bottom > cb.top && b.top < cb.bottom && b.right > cb.left && b.left < cb.right).length;
+          return {
+            scrollable: card.scrollHeight > card.clientHeight + 1,
+            card: { top: Math.round(cb.top), bottom: Math.round(cb.bottom) },
+            items: ['#form-close-btn', '#departure-input', '#budget-display', '#budget-slider', '#search-btn', '#about-data-btn'].map(shown),
+            cls: card.className, cluster: cluster.className, overlapCard,
+          };
+        });
+        const s0 = await read();
+        record(`${label} 開いたカードの中をスクロールしなくても、「▲閉じる」・出発駅・予算・スライダー・「この条件で探す」・「データ出典・免責」が見え、部品がカードに重ならない`,
+          !s0.scrollable && s0.items.every((i) => i.ok) && s0.overlapCard === 0, JSON.stringify(s0));
+        await setBudgetSlider(page, 1400);
+        await page.waitForTimeout(300);
+        const s1 = await read();
+        const note = await page.evaluate(() => { const n = document.getElementById('search-pending-note'); return !n.hidden && n.offsetParent !== null; });
+        record(`${label} 金額を変えて「条件が変わりました」が出ても、スクロールせずに「この条件で探す」まで見える`,
+          note && !s1.scrollable && s1.items.every((i) => i.ok) && s1.overlapCard === 0, JSON.stringify({ note, ...s1 }));
+        if (vLabel === 'own') await shot(page, `round61-reopened-${dim}-own.png`);
+        await clickElementChecked(page, 'form-close-btn', `${label} 「▲閉じる」`);
+        await page.waitForTimeout(400);
+        const clusterAfter = await page.evaluate(() => document.getElementById('map-controls-cluster').className);
+        record(`${label} 閉じると、右下の部品は開く前と同じに戻る`, clusterAfter === clusterBefore, JSON.stringify({ clusterBefore, clusterAfter }));
         record(`${label} コンソールにエラーが出ない`, errors.length === 0, errors.join(' | '));
       } catch (e) {
         record(`${label} 検証中にクラッシュしない`, false, e.message);
@@ -10233,32 +10373,48 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
         const handleBoxNow = await page.locator('#map-rotate-handle').boundingBox();
         await dragRotateHandle(page, handleBoxNow, 90);
         await page.waitForTimeout(100);
-        const selectedYAfterRotate = await page.evaluate(() => {
+        // 【61本目、検証の直し】以前は「選んだピンが名前の帯より上」を見ていた（帯がいつも地図の下にあった頃の決まり）。
+        // 59本目からスマホでは帯を見えている範囲の上の端に出すため成り立たない。ピボット（選んだピンを軸に回る・傾く）の
+        // 検証としての意味は「回しても傾けても選んだピンが見えたまま」なので、地図の中にあって、名前の帯にも
+        // 地図の上に重ねた入れ物にも隠れていないことを見る（PCは今までどおり帯より上でも成り立つ）。
+        const readSelectedPin = () => page.evaluate(() => {
           const map = window.__terrainMapForDebug;
           const f = map.getSource('selected-spot')?._data?.features?.[0];
-          return f ? map.project(f.geometry.coordinates).y : null;
+          if (!f) return null;
+          const rect = map.getContainer().getBoundingClientRect();
+          const p = map.project(f.geometry.coordinates);
+          const x = rect.left + p.x;
+          const y = rect.top + p.y;
+          const covers = [];
+          document.querySelectorAll('[data-map-overlay]').forEach((el) => {
+            const cs = getComputedStyle(el);
+            if (el.hidden || cs.display === 'none' || cs.display === 'contents' || cs.visibility === 'hidden') return;
+            covers.push(el.getBoundingClientRect());
+          });
+          const panel = document.getElementById('spot-info-panel');
+          if (panel && !panel.hidden && panel.offsetParent !== null) covers.push(panel.getBoundingClientRect());
+          const coveredBy = covers.filter((b) => b.width > 0 && b.height > 0 && x > b.left - 4 && x < b.right + 4 && y > b.top - 4 && y < b.bottom + 4).length;
+          const inMap = x > rect.left + 4 && x < rect.right - 4 && y > rect.top + 4 && y < rect.bottom - 4;
+          return { x: Math.round(p.x), y: Math.round(p.y), inMap, coveredBy, ok: inMap && coveredBy === 0 };
         });
+        const afterRotate = await readSelectedPin();
         await releaseRotateHandle(page);
         await page.waitForTimeout(100);
         record(
-          `[${label}] 回したあとも、選んだピンが帯（名前の帯）より上にある`,
-          selectedYAfterRotate !== null && mapBoxForClick.y + selectedYAfterRotate < panelBox.y,
-          JSON.stringify({ selectedYAfterRotate, mapBoxForClickY: mapBoxForClick.y, panelBoxY: panelBox.y })
+          `[${label}] 回したあとも、選んだピンが見えている（地図の中で、名前の帯・重ねた入れ物に隠れていない）`,
+          !!afterRotate?.ok,
+          JSON.stringify({ afterRotate, panelBox })
         );
 
         const knobBoxNow = await page.locator('#map-rotate-knob').boundingBox();
         await dragPitchKnob(page, knobBoxNow, 40);
         await page.waitForTimeout(100);
-        const selectedYAfterPitch = await page.evaluate(() => {
-          const map = window.__terrainMapForDebug;
-          const f = map.getSource('selected-spot')?._data?.features?.[0];
-          return f ? map.project(f.geometry.coordinates).y : null;
-        });
+        const afterPitch = await readSelectedPin();
         await releaseRotateHandle(page);
         record(
-          `[${label}] 傾けたあとも、選んだピンが帯（名前の帯）より上にある`,
-          selectedYAfterPitch !== null && mapBoxForClick.y + selectedYAfterPitch < panelBox.y,
-          JSON.stringify({ selectedYAfterPitch, mapBoxForClickY: mapBoxForClick.y, panelBoxY: panelBox.y })
+          `[${label}] 傾けたあとも、選んだピンが見えている（地図の中で、名前の帯・重ねた入れ物に隠れていない）`,
+          !!afterPitch?.ok,
+          JSON.stringify({ afterPitch, panelBox })
         );
         await page.click('#spot-info-close').catch(() => {});
       } else {
@@ -10374,7 +10530,14 @@ async function main() {
   // 3D画面（1画面にWebGLの地図が2つ）を次々に開くとGPU側の資源が積み上がるため、下の検証は
   // 関数ごとにブラウザを起動し直す（runWithFreshBrowser）。
   let browser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
+  // 【61本目】落ちた項目を単独で流し直すため、`--only checkLiveBudgetPins,checkRound51`のように関数名で
+  // 絞れるようにした（画面幅ごとの最初の検証は`viewports`、吹き出しの持ち越しは`checkRotateHintPersistence`）。
+  const onlyArg = process.argv.find((a) => a.startsWith('--only='))?.slice('--only='.length)
+    ?? (process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : null);
+  const only = onlyArg ? new Set(onlyArg.split(',').map((x) => x.trim()).filter(Boolean)) : null;
+  const shouldRun = (name) => !only || only.has(name);
   const runWithFreshBrowser = async (fn, ...args) => {
+    if (!shouldRun(fn.name)) return;
     await browser.close();
     browser = await chromium.launch({ args: GPU_LAUNCH_ARGS });
     await fn(browser, ...args);
@@ -10383,6 +10546,7 @@ async function main() {
 
   try {
     for (const [label, viewport] of Object.entries(VIEWPORTS)) {
+      if (!shouldRun('viewports')) break;
       console.log(`\n=== ${label}（${viewport.width}×${viewport.height}） ===`);
       const context = await browser.newContext({ viewport });
       const page = await context.newPage();
@@ -10471,7 +10635,7 @@ async function main() {
   // （本体を閉じたあとにこの検証だけ単独で動かすと安定する一方、本体がまだ
   // 開いたままだと再現良く失敗した）。メインのbrowser.close()が終わった
   // あと・サーバーを閉じる前に行う。
-  await checkRotateHintPersistence(baseUrl, savedPaths);
+  if (shouldRun('checkRotateHintPersistence')) await checkRotateHintPersistence(baseUrl, savedPaths);
   server.close();
 
   console.log('\n=== スクリーンショット保存先 ===');
@@ -10479,7 +10643,10 @@ async function main() {
 
   const failed = results.filter((r) => !r.ok);
   if (failed.length > 0) {
-    console.error(`\n❌ 検証失敗: ${failed.length}件のレイアウト問題が見つかりました`);
+    // 【61本目】通しで落ちた項目を最後にまとめて出す（長いログから探さずに単独で流し直せるように）
+    console.error('\n=== 落ちた項目 ===');
+    failed.forEach((r) => console.error(`  ❌ ${r.label}`));
+    console.error(`\n❌ 検証失敗: ${failed.length}件のレイアウト問題が見つかりました（通過 ${results.length - failed.length}件）`);
     process.exit(1);
   }
   console.log('\n✅ 検証成功: レイアウトの重なり・見切れ・横スクロールは見つかりませんでした');
