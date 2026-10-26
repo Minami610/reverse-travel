@@ -18,6 +18,15 @@
 
 const DESKTOP_QUERY = '(min-width: 760px)';
 const OVERLAY_SELECTOR = '[data-map-overlay]';
+// 【59本目】スマホで、地図の高さがこれより低い画面（400×464の地図は416px）では、下の一覧の小を見出しの1行だけにする
+// （横のカードを出すと見えている範囲が狭くなりすぎるため。375×667の地図は619px、390×844は796px）。
+const SHEET_COMPACT_MAX_MAP_HEIGHT = 560;
+// 【59本目】下の一覧の大の高さ（地図の高さに対する比）。上の＋−カードの下までは伸ばさない。
+const SHEET_LARGE_RATIO = 0.6;
+const SHEET_LARGE_MIN_VISIBLE_MAP = 150;
+const SHEET_LARGE_MIN_HEIGHT = 160;
+// 右下の部品の列と出典が入るのに、部品の列の高さに足す余地（出典の行と上下のすき間。--map-controls-roomと同じ）
+const CONTROLS_EXTRA_ROOM = 52;
 
 /**
  * 地図の上に重ねている入れ物（見えているものだけ）の、画面上の四角（getBoundingClientRect()の値）。
@@ -29,6 +38,9 @@ export function getMapOverlayRects() {
     if (el.hidden) return;
     // 【58本目】PCで一覧を閉じたときの細いバー（data-map-overlay="bar"）は、地図を覆う入れ物ではなく、円が避ける部品として扱う
     if (el.getAttribute('data-map-overlay') === 'bar') return;
+    // 【59本目】入れ物の中の入れ物（PCの一覧パネルの中の上の部分・下の部分）は、外の入れ物で数える
+    const outer = el.parentElement && el.parentElement.closest(OVERLAY_SELECTOR);
+    if (outer && getComputedStyle(outer).display !== 'contents') return;
     const cs = getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden') return;
     const r = el.getBoundingClientRect();
@@ -57,6 +69,8 @@ export class LayoutController {
     // ＋−・検索し直し・「条件を変える」をまたいで覚えておく。スマホには関係しない（59本目）。
     this._resultsListOpen = true;
     this._resultsPanel = document.querySelector('.results-panel');
+    // 【59本目】スマホの結果画面で、下の一覧が大か（小⇔大）。開け閉めと同じく、＋−・検索し直しをまたいで覚えておく。
+    this._sheetLarge = false;
     window.addEventListener('resize', () => this.updateInsets());
     // 入れ物の大きさ・出し入れが変わったら、地図の下側の余白を測り直す。
     if (typeof ResizeObserver === 'function') {
@@ -105,6 +119,29 @@ export class LayoutController {
     return true;
   }
 
+  /** 【59本目】スマホの結果画面で、下の一覧が大か。 */
+  isSheetLarge() {
+    return this._sheetLarge;
+  }
+
+  /**
+   * 【59本目】スマホの結果画面で、下の一覧を大・小にする（#app-layoutの.sheet-large）。PCでは見た目は変わらない。
+   * @param {boolean} large
+   * @returns {boolean} 変わったか（スマホのときだけ）
+   */
+  setSheetLarge(large) {
+    if (this._sheetLarge === large) return false;
+    this._sheetLarge = large;
+    this.layoutEl?.classList.toggle('sheet-large', large);
+    const handle = document.getElementById('results-sheet-handle');
+    if (handle) {
+      handle.setAttribute('aria-expanded', String(large));
+      handle.setAttribute('aria-label', large ? '一覧を小さくする' : '一覧を大きくする');
+    }
+    this.updateInsets();
+    return !this.isDesktop();
+  }
+
   _applyResultsListState() {
     const closed = !this._resultsListOpen && this.isDesktop();
     this.layoutEl?.classList.toggle('results-list-closed', closed);
@@ -123,6 +160,7 @@ export class LayoutController {
    */
   updateInsets() {
     if (!this.layoutEl || !this.mapEl) return;
+    this.updateSheetLayout();
     let insetBottom = 0;
     if (!this.isDesktop()) {
       const map = this.mapEl.getBoundingClientRect();
@@ -138,13 +176,62 @@ export class LayoutController {
     // 右下の部品の列（ズーム＋−・方位磁針・戻るボタン・ハンドル）と出典が入るのに要る高さ。スマホでは、地図の下に
     // 重ねる入れ物がこの分を空けて縮む（style.cssの--map-controls-room）。部品の列の高さは2D/3D・検索の前後で変わる。
     const cluster = document.getElementById('map-controls-cluster');
-    const room = cluster ? Math.round(cluster.getBoundingClientRect().height + 52) : 120;
+    const room = cluster ? Math.round(cluster.getBoundingClientRect().height + CONTROLS_EXTRA_ROOM) : 120;
     const roomValue = `${room}px`;
     if (this.layoutEl.style.getPropertyValue('--map-controls-room') !== roomValue) {
       this.layoutEl.style.setProperty('--map-controls-room', roomValue);
     }
+    this.fitControlsCluster(insetBottom);
     this.fitSearchCard();
     this.placeMapDataLine();
+    if (this._mutationObserver) this._mutationObserver.takeRecords();
+  }
+
+  /**
+   * 【59本目】スマホの結果画面の下の一覧：低い画面では小を見出しだけにし（.sheet-compact）、大の高さ
+   * （--sheet-large-h）を地図の高さから決める。上の＋−カードの下の端（--results-head-bottom）も測る
+   * （名前の帯をそのすぐ下に出す・下の一覧が上の＋−カードにかからないようにするため）。
+   */
+  updateSheetLayout() {
+    const map = this.mapEl.getBoundingClientRect();
+    const mobile = !this.isDesktop();
+    this.layoutEl.classList.toggle('sheet-compact', mobile && map.height < SHEET_COMPACT_MAX_MAP_HEIGHT);
+    const head = document.querySelector('.results-head');
+    const hb = head?.getBoundingClientRect();
+    const headBottom = mobile && hb && hb.height > 0 ? Math.round(hb.bottom - map.top) : 0;
+    const setVar = (name, value) => {
+      if (this.layoutEl.style.getPropertyValue(name) !== value) this.layoutEl.style.setProperty(name, value);
+    };
+    setVar('--results-head-bottom', `${headBottom}px`);
+    const avail = Math.max(0, map.height - headBottom - 8);
+    // 大でも、地図の見えている範囲を少なくともSHEET_LARGE_MIN_VISIBLE_MAPは残す（400×464では、地図の60%まで伸ばすと
+    // 見えている範囲が81pxしか残らず、円が最低ズームでも入りきらなかった）。ただし大の一覧が低くなりすぎないよう、
+    // SHEET_LARGE_MIN_HEIGHTより低くはしない。
+    const large = Math.max(Math.min(map.height * SHEET_LARGE_RATIO, avail - SHEET_LARGE_MIN_VISIBLE_MAP), Math.min(avail, SHEET_LARGE_MIN_HEIGHT));
+    setVar('--sheet-large-h', `${Math.round(large)}px`);
+  }
+
+  /**
+   * 【59本目】スマホで、右下の部品の列（ズーム＋−・方位磁針・戻るボタン・ハンドル）と出典が、上の＋−カードと
+   * 下の一覧の間に入りきらないときは、まずズーム＋−を隠し（指でつまんで拡大・縮小できるため）、それでも
+   * 入らなければ部品の列ごと隠す（見本⑥の大きい一覧には部品の列が無い）。PCでは何も隠さない。
+   * 入りきるかは、いったんすべて出してから測る（大きさが変わったときに戻すため）。
+   * @param {number} insetBottom 地図の下側に重なっている入れ物の高さ
+   */
+  fitControlsCluster(insetBottom) {
+    const cluster = document.getElementById('map-controls-cluster');
+    if (!cluster) return;
+    cluster.classList.remove('cluster-no-zoom', 'cluster-hidden');
+    if (this.isDesktop()) return;
+    const map = this.mapEl.getBoundingClientRect();
+    const head = document.querySelector('.results-head');
+    const hb = head?.getBoundingClientRect();
+    const top = hb && hb.height > 0 ? hb.bottom - map.top : 0;
+    const space = map.height - insetBottom - top;
+    if (cluster.getBoundingClientRect().height + CONTROLS_EXTRA_ROOM <= space) return;
+    cluster.classList.add('cluster-no-zoom');
+    if (cluster.getBoundingClientRect().height + CONTROLS_EXTRA_ROOM <= space) return;
+    cluster.classList.add('cluster-hidden');
   }
 
   /**

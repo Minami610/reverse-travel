@@ -213,63 +213,73 @@
         <p class="data-line"><button type="button" id="about-data-btn" class="data-line-btn">データ出典・免責</button></p>
       </div>
 
-      <!-- 結果の入れ物（56本目は仮置き：今の一覧と＋−をそのまま白い入れ物に入れる。見た目は57・58本目で作る）。
-           PCは地図の左、スマホは地図の下。結果の画面では金額を変えるのは＋−だけ（スライダーは出さない）。 -->
+      <!-- 結果の入れ物。PCは地図の左の一覧パネル（58本目、見本②③）。スマホは、上の＋−カード（.results-head）と
+           下から引き出す一覧（.results-sheet）の2つに分かれる（59本目、見本⑤⑥。スマホではこの入れ物自体は
+           display: contentsで箱を持たず、2つがそれぞれ地図の上に重なる入れ物になる）。
+           結果の画面では金額を変えるのは＋−だけ（スライダーも「¥◯で探す」も出さない。＋−で一覧も一緒に変わる）。 -->
       <div class="layout-right results-panel" data-map-overlay>
         <!-- 【58本目】PCだけ：パネルの右の縁の「◀」。押すと一覧を閉じ、地図の左上の細いバーになる（見本③） -->
         <button type="button" id="results-list-close-btn" class="results-list-close-btn" aria-label="一覧を閉じる" title="一覧を閉じる">◀</button>
         <!-- 【58本目】PCだけ：一覧を閉じているとき、細いバーのすぐ下に出す「☰ 一覧を開く」（バーと一緒に動くようパネルの中に置く） -->
         <button type="button" id="results-list-open-btn" class="results-list-open-btn">☰ 一覧を開く</button>
-        <div id="search-summary" class="search-summary" hidden>
-          <span id="search-summary-text"></span>
-          <!-- 【58本目】PCだけ：開いているときは「出発：○○」、閉じているときは「○○から」（main.jsのupdateSearchSummaryText()） -->
-          <span id="results-departure" class="results-departure"></span>
-          <button type="button" id="search-summary-toggle" aria-expanded="false"><span class="summary-toggle-arrow">▼</span>条件を変える</button>
-        </div>
 
-        <!-- 結果の画面の＋−（PC・スマホ共通。26本目の予算操作帯）。スライダーは置かない。 -->
-        <div id="mobile-budget-overlay" class="mobile-budget-overlay" hidden>
-          <button type="button" id="mobile-budget-decrement" aria-label="予算を100円減らす">−</button>
-          <!-- 【58本目】PCだけ：−と＋の間に今の金額、右に地図に出ている場所の数と「NEW +8」（見本②③） -->
-          <span class="results-budget-amount"><span class="results-budget-label">予算（往復）</span><span id="results-budget-value"></span></span>
-          <button type="button" id="mobile-budget-increment" aria-label="予算を100円増やす">＋</button>
-          <span class="results-counts"><span id="results-map-count"></span><span id="results-new-count" class="new-tag" hidden></span></span>
-          <!-- 【2026-10-14、25本目】まだこの金額で検索していない（ボタンが「¥◯で探す」のとき）だけ距離を出す。 -->
-          <span id="mobile-budget-distance" hidden></span>
-          <button type="button" id="mobile-budget-search-btn"></button>
-        </div>
-
-        <!-- 【58本目】PCだけ：色の説明（PCの結果画面では地図の上の中央の色の説明の代わりにここへ出す） -->
-        <p class="results-legend" aria-hidden="true">
-          <span class="map-legend-item"><span class="map-legend-dot map-legend-dot-blue"></span>みちどころ</span>
-          <span class="map-legend-item"><span class="map-legend-dot map-legend-dot-orange"></span>NEW</span>
-        </p>
-
-        <div id="results-container">
-          <h2 id="results-band-heading" class="results-band-heading" hidden></h2>
-          <div id="sort-controls">
-            <label for="sort-select">並び替え：</label>
-            <select id="sort-select">
-              <option value="recommended">おすすめ順</option>
-              <option value="price">価格が安い順</option>
-              <option value="duration">所要時間が短い順</option>
-              <option value="distance">距離が近い順</option>
-            </select>
+        <!-- 上の部分：出発駅と「条件を変える」、＋−。スマホでは地図の上に浮かせたカード（見本⑤） -->
+        <div class="results-head" data-map-overlay>
+          <div id="search-summary" class="search-summary" hidden>
+            <span id="search-summary-text"></span>
+            <!-- 【58本目】開いているときは「出発：○○」、PCで閉じているとき・スマホは「○○から」（main.jsのupdateSearchSummaryText()） -->
+            <span id="results-departure" class="results-departure"></span>
+            <button type="button" id="search-summary-toggle" aria-expanded="false"><span class="summary-toggle-arrow">▼</span>条件を変える</button>
           </div>
-          <div id="results-list"></div>
+
+          <!-- 結果の画面の＋−（PC・スマホ共通。26本目の予算操作帯）。スライダーは置かない。 -->
+          <div id="mobile-budget-overlay" class="mobile-budget-overlay" hidden>
+            <button type="button" id="mobile-budget-decrement" aria-label="予算を100円減らす">−</button>
+            <!-- 【58本目】−と＋の間に今の金額、右に地図に出ている場所の数と「NEW +8」（見本②③⑤） -->
+            <span class="results-budget-amount"><span class="results-budget-label">予算（往復）</span><span id="results-budget-value"></span></span>
+            <button type="button" id="mobile-budget-increment" aria-label="予算を100円増やす">＋</button>
+            <span class="results-counts"><span id="results-map-count"></span><span id="results-new-count" class="new-tag" hidden></span></span>
+          </div>
         </div>
 
-        <!-- スポット詳細表示エリア（data-view="detail"のときだけ、一覧の代わりに出す） -->
-        <div id="detail-container">
-          <!-- 「見てきた場所」の足あと（6本目E、Minami決定）。 -->
-          <nav id="detail-breadcrumb" aria-label="見てきた場所"></nav>
-          <div id="detail-content"></div>
-        </div>
+        <!-- 下の部分：色の説明・見出し・一覧・詳細。スマホでは下から引き出す一覧（小・大の2段、見本⑤⑥） -->
+        <div class="results-sheet" data-map-overlay>
+          <!-- 【59本目】スマホだけ：一覧の大きさを変えるつまみ（押す・上下にドラッグする） -->
+          <button type="button" id="results-sheet-handle" class="results-sheet-handle" aria-label="一覧を大きくする" aria-expanded="false"></button>
 
-        <p class="data-line"><button type="button" class="data-line-btn" data-open-about>データ出典・免責</button></p>
+          <!-- 【58本目】色の説明（結果画面では地図の上の中央の色の説明の代わりにここへ出す） -->
+          <p class="results-legend" aria-hidden="true">
+            <span class="map-legend-item"><span class="map-legend-dot map-legend-dot-blue"></span>みちどころ</span>
+            <span class="map-legend-item"><span class="map-legend-dot map-legend-dot-orange"></span>NEW</span>
+          </p>
+
+          <div id="results-container">
+            <h2 id="results-band-heading" class="results-band-heading" hidden></h2>
+            <div id="sort-controls">
+              <label for="sort-select">並び替え：</label>
+              <select id="sort-select">
+                <option value="recommended">おすすめ順</option>
+                <option value="price">価格が安い順</option>
+                <option value="duration">所要時間が短い順</option>
+                <option value="distance">距離が近い順</option>
+              </select>
+            </div>
+            <div id="results-list"></div>
+          </div>
+
+          <!-- スポット詳細表示エリア（data-view="detail"のときだけ、一覧の代わりに出す） -->
+          <div id="detail-container">
+            <!-- 「見てきた場所」の足あと（6本目E、Minami決定）。 -->
+            <nav id="detail-breadcrumb" aria-label="見てきた場所"></nav>
+            <div id="detail-content"></div>
+          </div>
+
+          <p class="data-line"><button type="button" class="data-line-btn" data-open-about>データ出典・免責</button></p>
+        </div>
       </div>
 
-      <!-- 【58本目】PCだけ：一覧を閉じている間の「データ出典・免責」（地図の右下の出典の文字の近く。結果画面ではいつも見える） -->
+      <!-- 【58本目】PCで一覧を閉じている間・【59本目】スマホで一覧が小のときの「データ出典・免責」（地図の右下の出典の文字の近く。
+           結果画面ではいつも見える） -->
       <p id="map-data-line" class="map-data-line"><button type="button" class="data-line-btn" data-open-about>データ出典・免責</button></p>
 
     </div>

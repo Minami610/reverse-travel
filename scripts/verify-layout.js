@@ -182,7 +182,8 @@ async function searchAt(page, stationText, budget) {
     el.dispatchEvent(new Event('input'));
   }, budget);
   await page.click('#search-btn');
-  await page.waitForSelector('.spot-card, .no-results', { timeout: 15000 });
+  // 【59本目】スマホの低い画面（400×464）では、下の一覧が小のときカードを出さない（見出しだけ）ため、見えるのを待たず、作られるのを待つ
+  await page.waitForSelector('.spot-card, .no-results', { timeout: 15000, state: 'attached' });
   await page.waitForTimeout(300);
 }
 
@@ -619,8 +620,23 @@ async function captureSuggestionsScreen(page, viewportLabel) {
   return screenshotPath;
 }
 
+/**
+ * 【59本目】スマホの結果画面で、下の一覧を大にする（小は横に並べたカードで、☆・共有・説明・「詳細を見る」を出さない、
+ * 見本⑤）。PCでは何もしない。
+ */
+async function showLargeListOnMobile(page) {
+  const changed = await page.evaluate(() => {
+    const h = document.getElementById('results-sheet-handle');
+    if (!h || h.offsetParent === null || document.getElementById('app-layout').classList.contains('sheet-large')) return false;
+    h.click();
+    return true;
+  });
+  if (changed) await page.waitForTimeout(700);
+}
+
 async function captureResultsListScreen(page, viewportLabel) {
   await searchAt(page, '高松築港', 1000);
+  await showLargeListOnMobile(page); // 【59本目】スマホの小の一覧は横のカード（☆・共有・説明を出さない）。今までのカードの検証は大で行う
   const screenshotPath = path.join(screenshotDir, `results-list-${viewportLabel}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: true });
 
@@ -702,6 +718,7 @@ async function captureSearchButtonPendingScreen(page, viewportLabel) {
  */
 async function captureCardFavoriteShareScreen(page, viewportLabel) {
   await searchAt(page, '高松築港', 1000);
+  await showLargeListOnMobile(page); // 【59本目】スマホの小の一覧は横のカード（☆・共有・説明を出さない）。今までのカードの検証は大で行う
   const screenshotPath = path.join(screenshotDir, `card-favorite-share-${viewportLabel}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: false });
 
@@ -732,6 +749,7 @@ async function captureCardFavoriteShareScreen(page, viewportLabel) {
 /** 詳細画面の☆・共有ボタンを確認する（2026-10-08追加） */
 async function captureDetailFavoriteShareScreen(page, viewportLabel) {
   await searchAt(page, '高松築港', 1000);
+  await showLargeListOnMobile(page); // 【59本目】スマホの小の一覧は横のカード（☆・共有・説明を出さない）。今までのカードの検証は大で行う
   await page.locator('.spot-card').first().click();
   await page.waitForSelector('#detail-content h2', { timeout: 15000 });
   const screenshotPath = path.join(screenshotDir, `detail-favorite-share-${viewportLabel}.png`);
@@ -762,6 +780,7 @@ async function captureDetailFavoriteShareScreen(page, viewportLabel) {
  */
 async function captureMylistScreen(page, viewportLabel) {
   await searchAt(page, '高松築港', 1000);
+  await showLargeListOnMobile(page); // 【59本目】スマホの小の一覧は横のカード（☆・共有・説明を出さない）。今までのカードの検証は大で行う
   // 直前のcaptureCardFavoriteShareScreen()が同じカードの☆を既に押している
   // 場合があるため（同じページ・同じlocalStorageを使い回すため状態が残る）、
   // 既に保存済みなら押し直さない（押すとトグルで解除されてしまう）。
@@ -806,6 +825,7 @@ async function captureMylistScreen(page, viewportLabel) {
  */
 async function captureSupportBadgeCardScreen(page, viewportLabel) {
   await searchAt(page, '富山駅前', 1600);
+  await showLargeListOnMobile(page); // 【59本目】スマホの小の一覧は横のカード（☆・共有・説明を出さない）。今までのカードの検証は大で行う
   const card = page.locator('.spot-card.spot-card-supported').first();
   const screenshotPath = path.join(screenshotDir, `support-badge-card-${viewportLabel}.png`);
   await screenshotElementSafely(page, card, screenshotPath, VIEWPORTS[viewportLabel]);
@@ -828,6 +848,7 @@ async function captureSupportBadgeCardScreen(page, viewportLabel) {
 /** ②マークなしのカード全体（便数の小さな表示が見えること）。富山駅前→TOYAMAキラリ、42便/日 */
 async function captureNonBadgeFrequencyScreen(page, viewportLabel) {
   await searchAt(page, '富山駅前', 400);
+  await showLargeListOnMobile(page); // 【59本目】スマホの小の一覧は横のカード（☆・共有・説明を出さない）。今までのカードの検証は大で行う
   const card = page.locator('.spot-card').filter({ has: page.locator('.spot-frequency-note') }).first();
   const screenshotPath = path.join(screenshotDir, `non-badge-frequency-card-${viewportLabel}.png`);
   await screenshotElementSafely(page, card, screenshotPath, VIEWPORTS[viewportLabel]);
@@ -852,6 +873,7 @@ async function captureNonBadgeFrequencyScreen(page, viewportLabel) {
  */
 async function captureReservationScreen(page, viewportLabel) {
   await searchAt(page, '八尾駅', 400);
+  await showLargeListOnMobile(page); // 【59本目】スマホの小の一覧は横のカード（☆・共有・説明を出さない）。今までのカードの検証は大で行う
   const card = page.locator('.spot-card').filter({ hasText: '要予約' }).first();
   const cardFound = await card.count() > 0;
   record(`[${viewportLabel}] 予約制: カードに「要予約」の文言があるスポットが見つかる`, cardFound);
@@ -887,6 +909,7 @@ async function captureReservationScreen(page, viewportLabel) {
  */
 async function captureOnwardSectionScreen(page, viewportLabel) {
   await searchAt(page, '高松築港', 1000);
+  await showLargeListOnMobile(page); // 【59本目】スマホの小の一覧は横のカード（☆・共有・説明を出さない）。今までのカードの検証は大で行う
   await page.locator('.spot-card').first().click();
   await page.waitForSelector('#detail-content h2', { timeout: 15000 });
   const onwardSection = page.locator('.onward-section');
@@ -928,6 +951,7 @@ async function captureOnwardSectionScreen(page, viewportLabel) {
  */
 async function captureOnwardBadgeScreen(page, viewportLabel) {
   await searchAt(page, '富山駅前', 1600);
+  await showLargeListOnMobile(page); // 【59本目】スマホの小の一覧は横のカード（☆・共有・説明を出さない）。今までのカードの検証は大で行う
   await page.locator('.spot-card').first().click();
   await page.waitForSelector('#detail-content h2', { timeout: 15000 });
   const heartCount = await page.locator('.onward-card .onward-heart').count();
@@ -1169,7 +1193,7 @@ async function checkBudgetSlider(browser, baseUrl, savedPaths) {
 
     await ensureFormExpanded(page);
     await page.click('#search-btn');
-    await page.waitForSelector('.spot-card, .no-results', { timeout: 15000 });
+    await page.waitForSelector('.spot-card, .no-results', { timeout: 15000, state: 'attached' });
     await page.waitForTimeout(200);
     const cardsAfterSearch = await page.locator('.spot-card h3').allTextContents();
     record(
@@ -1370,7 +1394,7 @@ async function checkWaveRevealAndCircleScreenshots(browser, baseUrl, savedPaths)
       }
       await ensureFormExpanded(page);
       await page.click('#search-btn');
-      await page.waitForSelector('.spot-card, .no-results', { timeout: 15000 });
+      await page.waitForSelector('.spot-card, .no-results', { timeout: 15000, state: 'attached' });
       // 【不具合修正、3回目】_waveFrameも、実はapplyBudget()自体が
       // requestAnimationFrame 1コマ分、実際の塗り替え（_paintBudget→
       // _startWaveReveal）を間引いている（スライダー連打対策、7本目からの
@@ -2446,10 +2470,15 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
         JSON.stringify(panelBox)
       );
       const selectedPinBoxAfterReveal = await page.locator('.map-pin-spot.map-pin-selected:visible').boundingBox();
+      // 【59本目】スマホの結果画面では名前の帯を見えている範囲の上の端（上の＋−カードのすぐ下）に出すようになったため、
+      // 「帯より上」ではなく、帯に隠れず（縦に重ならず）、下の一覧より上にあることを見る（PCは今までどおり帯より上）。
+      const sheetTop2d = await page.evaluate(() => { const el = document.querySelector('.results-sheet'); const b = el && el.getBoundingClientRect(); return b && b.height > 0 ? b.top : Infinity; });
       record(
-        `[2D/${label}] 選んだピンが情報帯より上に表示される`,
-        !!selectedPinBoxAfterReveal && !!panelBox && (selectedPinBoxAfterReveal.y + selectedPinBoxAfterReveal.height) < panelBox.y,
-        JSON.stringify({ selectedPinBoxAfterReveal, panelBox })
+        `[2D/${label}] 選んだピンが情報帯に隠れず、下の一覧より上に表示される`,
+        !!selectedPinBoxAfterReveal && !!panelBox
+          && ((selectedPinBoxAfterReveal.y + selectedPinBoxAfterReveal.height) < panelBox.y || selectedPinBoxAfterReveal.y > panelBox.y + panelBox.height)
+          && (selectedPinBoxAfterReveal.y + selectedPinBoxAfterReveal.height) < sheetTop2d,
+        JSON.stringify({ selectedPinBoxAfterReveal, panelBox, sheetTop2d })
       );
 
       const panelPath = path.join(screenshotDir, `spot-info-panel-2d-${label}.png`);
@@ -2598,10 +2627,13 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
           if (!feat) return null;
           return map.project(feat.geometry.coordinates).y;
         });
+        // 【59本目】スマホは帯を見えている範囲の上の端に出すため、帯に隠れず、下の一覧より上にあることを見る
+        const sheetTop3d = await page.evaluate(() => { const el = document.querySelector('.results-sheet'); const b = el && el.getBoundingClientRect(); return b && b.height > 0 ? b.top : Infinity; });
+        const pinY3d = selectedPinScreenY === null ? null : mapBox.y + selectedPinScreenY;
         record(
-          `[3D/${label}] 選んだピンが情報帯より上に表示される`,
-          selectedPinScreenY !== null && !!panelBox && (mapBox.y + selectedPinScreenY) < panelBox.y,
-          JSON.stringify({ selectedPinScreenY, mapBoxY: mapBox.y, panelBox })
+          `[3D/${label}] 選んだピンが情報帯に隠れず、下の一覧より上に表示される`,
+          pinY3d !== null && !!panelBox && (pinY3d < panelBox.y || pinY3d > panelBox.y + panelBox.height) && pinY3d < sheetTop3d,
+          JSON.stringify({ selectedPinScreenY, mapBoxY: mapBox.y, panelBox, sheetTop3d })
         );
 
         // 降りる→傾ける演出が終わるまで待つ。
@@ -3194,21 +3226,66 @@ async function checkTapOutsideClosesForm(browser, baseUrl, savedPaths) {
 }
 
 /**
- * 【22本目、Minami決定：B】スマホの予算操作帯（#mobile-budget-overlay）の検証。
- * - 検索後、地図タブの一番下に予算操作帯が出て、他の重ねたUI（名前の帯・
- *   2D/3D切替ボタン・出典ボタン・タブ・フッター）のどれとも重ならない。
- * - 地図の高さは240px以上を保つ（Minami報告の約70pxまでの崩れが直っていること）。
- * - ＋／−・スライダーは到達範囲の円だけを変え、点の数・一覧は変えない
- *   （「この金額で探す」を押すまで）。
- * - 「この金額で探す」を押すと点・一覧が変わり、要約バーの金額もその場で追従する。
- * - 薄いピン（帯より安いピン）を選んでもエラーにならない。
- * - 3DではMapLibreの「Map cannot fit」警告が出ない。
+ * 【22本目、Minami決定：B／59本目で書き直し】スマホの結果画面の＋−（#mobile-budget-overlay、上の＋−カードの中）の検証。
+ * - 検索後、上の＋−カードと下の一覧が出て、出典・右下の部品の列と重ならない。地図の高さは240px以上。
+ * - ＋を押すと、円が広がり、ピンの色分け・一覧の見出し（金額帯）・カードが一緒に今の金額に変わる（59本目、Minami決定：
+ *   「¥◯で探す」はやめた）。「¥◯で探す」のボタン・距離の文字は無い。
+ * - ピンを選ぶと、名前の帯は見えている範囲の上の端に出て、上の＋−カード・下の一覧・右下の部品の列・出典と重ならず、
+ *   見えているピンを隠さない（57本目から残っていた不具合、59本目で直した）。
+ * - 3D：ピンを押して傾く・降下直後に同じピンを連打しても傾く・金額帯より安い場所のピンを選べる・「Map cannot fit」の
+ *   警告が出ない。
  */
 async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
-  console.log('\n=== 22本目：スマホの予算操作帯の検証 ===');
+  console.log('\n=== 22本目（59本目で書き直し）：スマホの結果画面の＋−の検証 ===');
+
+  // 名前の帯が、上の＋−カード・下の一覧・右下の部品の列・出典と重ならず、見えているピン（まとめた丸を含む）を隠さないか
+  const bandCheck = (page, dim) => page.evaluate((dim) => {
+    const r = (el) => { if (!el) return null; const cs = getComputedStyle(el); if (el.hidden || cs.display === 'none' || cs.visibility === 'hidden') return null; const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0 ? b : null; };
+    const band = r(document.getElementById('spot-info-panel'));
+    if (!band) return { shown: false };
+    const hit = (a, b) => a && b && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    const others = {
+      head: r(document.querySelector('.results-head')), sheet: r(document.querySelector('.results-sheet')),
+      attrib: r(document.querySelector(dim === '3d' ? '#spots-map-3d .maplibregl-ctrl-attrib' : '#spots-map .leaflet-control-attribution')),
+    };
+    document.querySelectorAll('#map-controls-cluster > *').forEach((el, i) => { others[`cluster${i}`] = r(el); });
+    const overlaps = Object.entries(others).filter(([, b]) => hit(band, b)).map(([k]) => k);
+    // 隠しているピン：帯と重なるピン・まとめた丸（中心が帯の中）
+    let hidden = [];
+    if (dim === '3d') {
+      const m = window.__terrainMapForDebug;
+      const box = m.getContainer().getBoundingClientRect();
+      const absorbed = window.__terrainViewForDebug._absorbedIds || new Set();
+      hidden = m.queryRenderedFeatures({ layers: ['spots-circle', 'spots-plain-circle'] })
+        .filter((f) => !absorbed.has(f.properties.id))
+        .map((f) => { const p = m.project(f.geometry.coordinates); return { id: f.properties.id, x: box.left + p.x, y: box.top + p.y }; })
+        .filter((p) => p.x > band.left && p.x < band.right && p.y > band.top && p.y < band.bottom);
+      document.querySelectorAll('#spots-map-3d .map-cluster-3d').forEach((el) => {
+        const b = el.getBoundingClientRect();
+        const cx = b.left + b.width / 2; const cy = b.top + b.height / 2;
+        if (cx > band.left && cx < band.right && cy > band.top && cy < band.bottom) hidden.push({ id: 'cluster', x: cx, y: cy });
+      });
+    } else {
+      hidden = [...document.querySelectorAll('#spots-map .map-pin-spot, #spots-map .map-cluster')]
+        .map((n) => n.getBoundingClientRect()).filter((b) => b.width > 0)
+        .filter((b) => { const cx = b.left + b.width / 2; const cy = b.top + b.height / 2; return cx > band.left && cx < band.right && cy > band.top && cy < band.bottom; })
+        .map((b) => ({ x: Math.round(b.left), y: Math.round(b.top) }));
+    }
+    return { shown: true, band: { top: Math.round(band.top), bottom: Math.round(band.bottom), left: Math.round(band.left), right: Math.round(band.right) }, overlaps, hidden: hidden.slice(0, 5), hiddenCount: hidden.length };
+  }, dim);
+  const listState = (page) => page.evaluate(() => ({
+    heading: document.getElementById('results-band-heading').textContent,
+    cards: [...document.querySelectorAll('.spot-card')].map((c) => c.getAttribute('data-spot-id')).join(','),
+    count: document.getElementById('results-map-count').textContent,
+    amount: document.getElementById('results-budget-value').textContent,
+    searchBtn: !!document.getElementById('mobile-budget-search-btn'),
+    distance: !!document.getElementById('mobile-budget-distance'),
+  }));
+  const headingBudget = (h) => parseInt((h.match(/〜¥([\d,]+) の場所/) || [])[1]?.replace(/,/g, ''), 10);
 
   for (const [label, viewport] of Object.entries(MOBILE_FORM_COLLAPSE_VIEWPORTS)) {
     const context = await browser.newContext({ viewport });
+    await context.addInitScript(() => { try { localStorage.setItem('reverse-travel-rotate-hint-seen', 'true'); } catch { /* 無視 */ } });
     const page = await context.newPage();
     const pageErrors = [];
     page.on('pageerror', (e) => pageErrors.push(e.message));
@@ -3217,287 +3294,67 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
     await searchAt(page, '富山駅前', 800);
-
-    // --- 【26本目①、不具合修正】一覧タブでも予算操作帯が使えること ---
-    // 検索直後のデフォルトは「一覧」タブ（まだmapタブへは切り替えていない）。
-    // 以前は#mobile-budget-overlayが#map-area（地図タブ選択時しかDOM上の
-    // 見える位置に無いラッパー）の中にあり、一覧タブでは触れなかった
-    // （Cowork指摘）。タブパネルの外に出した効果をここで確認する。
-    const listTabActive = await page.evaluate(() => document.getElementById('results-list').offsetParent !== null);
-    // 【56本目】一覧／地図タブはやめた。一覧は結果の入れ物の中にいつも見えている。
-    record(`[${label}/一覧] 検索直後は一覧が見えている（この検証の前提）`, listTabActive);
-    const overlayVisibleOnList = await page.locator('#mobile-budget-overlay').isVisible().catch(() => false);
-    record(`[${label}/一覧タブ] 予算操作帯が表示される`, overlayVisibleOnList);
-    const cardsBeforeListDrag = await page.locator('.spot-card').count();
-    await page.click('#mobile-budget-increment');
-    await page.click('#mobile-budget-increment');
-    await page.waitForTimeout(200);
-    const cardsAfterListDrag = await page.locator('.spot-card').count();
-    const tabStillListAfterDrag = await page.evaluate(() => document.getElementById('results-list').offsetParent !== null);
-    record(
-      `[${label}/一覧] 予算操作帯の＋を2回押しても一覧は見えたまま・変わらない（帯の文言だけ変わる）`,
-      cardsBeforeListDrag === cardsAfterListDrag && tabStillListAfterDrag,
-      JSON.stringify({ cardsBeforeListDrag, cardsAfterListDrag, tabStillListAfterDrag })
-    );
-    // 【2026-10-20、36本目、Minami指示】＋を2回押して検索し直す前（pending
-    // 状態）の「¥◯で探す」ボタンが、PCの「この条件で検索」
-    // （#search-btn.search-btn-pending）と同じオレンジ（--color-accent系の
-    // グラデーション）になっていること。以前は緑（--color-main、検索前の
-    // #search-btnの既定色と同じ）だった。
-    const pendingBtnStyle = await page.evaluate(() => {
-      const btn = document.getElementById('mobile-budget-search-btn');
-      const cs = getComputedStyle(btn);
-      return {
-        isPending: btn.classList.contains('mobile-budget-search-btn-pending'),
-        backgroundImage: cs.backgroundImage,
-      };
-    });
-    record(
-      `[${label}/一覧タブ] 予算変更後（検索前）の「¥◯で探す」ボタンがPCの「この条件で検索」と同じオレンジ`,
-      pendingBtnStyle.isPending
-        && pendingBtnStyle.backgroundImage.includes('gradient')
-        && !pendingBtnStyle.backgroundImage.includes('114, 176, 29') /* --color-main(緑)のrgbが含まれていない */,
-      JSON.stringify(pendingBtnStyle)
-    );
-    await page.click('#mobile-budget-search-btn');
-    await page.waitForFunction(
-      (prev) => document.querySelectorAll('.spot-card').length !== prev || document.querySelector('.no-results') !== null,
-      cardsAfterListDrag,
-      { timeout: 15000 }
-    );
-    await page.waitForTimeout(200);
-    const cardsAfterListSearch = await page.locator('.spot-card').count();
-    const tabStillListAfterSearch = await page.evaluate(() => document.getElementById('results-list').offsetParent !== null);
-    record(
-      `[${label}/一覧] 「¥◯で探す」を押すと一覧は見えたまま変わる`,
-      cardsAfterListSearch !== cardsAfterListDrag && tabStillListAfterSearch,
-      JSON.stringify({ cardsAfterListDrag, cardsAfterListSearch, tabStillListAfterSearch })
-    );
-    // 【26本目③、28本目、不具合修正】帯の文言（件数込み・距離のみどちらでも）
-    // がはみ出して省略記号で切れないこと（scrollWidth<=clientWidth）。
-    // 400×464で「¥1,000・17件・最大11…」のように切れる実例が
-    // スクリーンショットで見つかった（このassert自体は当時も通っていた＝
-    // 件数込みの文言がちょうど収まる境界値scrollWidth===clientWidthで設計
-    // されており、フォントのサブピクセル描画の環境差で±1px転ぶ際どさが
-    // 原因と判明。updateMobileBudgetOverlay()に安全マージン
-    // （TEXT_FIT_SAFETY_MARGIN_PX）を設けて解消した）。
-    // スクリーンショットより先に測定し、撮った画像が実際に「収まっている」と
-    // 判定した状態と一致するようにする。
-    const bandTruncationList = await page.evaluate(() => {
-      const btn = document.getElementById('mobile-budget-search-btn');
-      return { text: btn.textContent, scrollWidth: btn.scrollWidth, clientWidth: btn.clientWidth };
-    });
-    record(
-      `[${label}/一覧タブ] 予算操作帯のボタン文言が省略記号で切れない（scrollWidth<=clientWidth）`,
-      bandTruncationList.scrollWidth <= bandTruncationList.clientWidth,
-      JSON.stringify(bandTruncationList)
-    );
-    const listTabBandPath = path.join(screenshotDir, `mobile-budget-overlay-list-tab-${label}.png`);
-    await page.screenshot({ path: listTabBandPath });
-    savedPaths.push(listTabBandPath);
-
-    await showMapTab(page);
-    await page.waitForTimeout(300);
+    await waitForWaveRevealSettled(page);
+    await waitForAllSpotsPrefetchSettled(page);
+    await page.waitForTimeout(500);
 
     // --- 2D：地図の高さ・重なり ---
     const mapHeight2d = await page.locator('#map-area').boundingBox().then((b) => b?.height || 0);
     record(`[${label}/2D] 地図の高さが240px以上`, mapHeight2d >= 240, `height=${mapHeight2d}`);
-
     const overlayVisible = await page.locator('#mobile-budget-overlay').isVisible().catch(() => false);
-    record(`[${label}/2D] 検索後、予算操作帯が表示される`, overlayVisible);
-
-    // 【56本目】タブ・フッターはやめ、2D/3D切替はヘッダー（スマホは「☰」の中）へ移したため、それらとの重なりの
-    // 検証は消した。予算操作帯は結果の入れ物の中。出典（右下）が予算操作帯・結果の入れ物と重ならないことを見る。
-    const overlayBox = await page.locator('#mobile-budget-overlay').boundingBox();
+    record(`[${label}/2D] 検索後、上の＋−カードに＋−が出る`, overlayVisible);
     const attribBox2d = await page.locator('#map-area .leaflet-control-attribution').boundingBox().catch(() => null);
-    const panelBox2d = await page.locator('.results-panel').boundingBox().catch(() => null);
-    record(`[${label}/2D] 出典ボタンが結果の入れ物（予算操作帯を含む）と重ならない`, !rectsOverlap(attribBox2d, panelBox2d) && !rectsOverlap(attribBox2d, overlayBox), JSON.stringify({ attribBox2d, panelBox2d }));
+    const headBox2d = await page.locator('.results-head').boundingBox().catch(() => null);
+    const sheetBox2d = await page.locator('.results-sheet').boundingBox().catch(() => null);
+    record(`[${label}/2D] 出典ボタンが上の＋−カード・下の一覧と重ならない`, !rectsOverlap(attribBox2d, headBox2d) && !rectsOverlap(attribBox2d, sheetBox2d), JSON.stringify({ attribBox2d, headBox2d, sheetBox2d }));
 
-    // 波の演出（検索直後、近い順にピンが広がって出る）が終わるまで待ってから撮る
-    // （Cowork指摘。待たずに撮るとピンが1つも写らない画面になる）。
-    await waitForWaveRevealSettled(page);
-
-    // 【28本目】地図タブでも帯の文言が省略記号で切れないこと（一覧タブと
-    // 同じ安全マージンを使うため、理論上は同じ状態になるはずだが、
-    // タブをまたいで実機相当で確かめる）。
-    const bandTruncationMap2d = await page.evaluate(() => {
-      const btn = document.getElementById('mobile-budget-search-btn');
-      return { text: btn.textContent, scrollWidth: btn.scrollWidth, clientWidth: btn.clientWidth };
-    });
+    // ＋を2回：円が広がり、ピン・一覧の見出し・カード・「◯か所」が一緒に変わる。「¥◯で探す」は無い。
+    const before2d = await listState(page);
+    const circleBefore2d = await page.evaluate(() => window.__mapViewForDebug._reachCircleRadiusKm);
+    record(`[${label}/2D] 結果画面に「¥◯で探す」のボタン・距離の文字が無い（59本目）`, !before2d.searchBtn && !before2d.distance, JSON.stringify(before2d));
+    await clickElementChecked(page, 'mobile-budget-increment', `[${label}/2D] ＋`);
+    await page.waitForTimeout(150);
+    await clickElementChecked(page, 'mobile-budget-increment', `[${label}/2D] ＋（2回目）`);
+    await page.waitForTimeout(600);
+    const after2d = await listState(page);
+    const circleAfter2d = await page.evaluate(() => window.__mapViewForDebug._reachCircleRadiusKm);
+    const liveCats2d = await readPinCategories(page, '2d');
     record(
-      `[${label}/2D] 予算操作帯のボタン文言が省略記号で切れない（scrollWidth<=clientWidth）`,
-      bandTruncationMap2d.scrollWidth <= bandTruncationMap2d.clientWidth,
-      JSON.stringify(bandTruncationMap2d)
+      `[${label}/2D] ＋を2回押すと、一覧の見出しの金額帯・カード・「◯か所」が今の金額（¥1,000）に合わせて変わる`,
+      headingBudget(after2d.heading) === 1000 && after2d.amount === '¥1,000' && after2d.heading !== before2d.heading && after2d.cards !== before2d.cards && after2d.count !== before2d.count,
+      JSON.stringify({ before2d, after2d })
     );
+    record(`[${label}/2D] ＋を2回押すと、円の半径が大きくなり、ピンの色分けは決まりどおり`, circleAfter2d > circleBefore2d && liveCats2d.mismatchCount === 0,
+      JSON.stringify({ circleBefore2d, circleAfter2d, live: liveCats2d.live, searched: liveCats2d.searched, mismatches: liveCats2d.mismatches }));
+    const mapLabelCount2d = await page.evaluate(() => document.querySelectorAll('.reach-circle-label').length);
+    record(`[${label}/2D] 地図の上に「最大◯km先まで」のラベルが無い`, mapLabelCount2d === 0, `count=${mapLabelCount2d}`);
+    await waitForCircleSettled(page, '2d');
+    await page.waitForTimeout(500);
+    const midPath2d = path.join(screenshotDir, `mobile-budget-overlay-plus2-2d-${label}.png`);
+    await page.screenshot({ path: midPath2d });
+    savedPaths.push(midPath2d);
 
-    const mapTab2dPath = path.join(screenshotDir, `mobile-budget-overlay-2d-${label}.png`);
-    await page.screenshot({ path: mapTab2dPath });
-    savedPaths.push(mapTab2dPath);
-
-    // 名前の帯（ピン選択）が予算操作帯と重ならない
+    // 名前の帯
     const pinBox2d = await (await uncoveredPin(page)).boundingBox().catch(() => null);
     if (pinBox2d) {
       await page.mouse.click(pinBox2d.x + pinBox2d.width / 2, pinBox2d.y + pinBox2d.height / 2);
-      await page.waitForTimeout(150);
-      const panelBox2d = await page.locator('#spot-info-panel').boundingBox();
-      record(`[${label}/2D] 名前の帯が予算操作帯と重ならない`, !rectsOverlap(panelBox2d, overlayBox), JSON.stringify({ panelBox2d, overlayBox }));
-
-      // 【24本目①】選んだピンと、ほかのピンが地図の上に出ていて、画面の中で
-      // 帯（名前の帯・予算操作帯のうち、より上にある方＝名前の帯）より上に
-      // あることを検証する（Cowork指摘の再発防止）。
-      const pinsAfterSelect = await page.evaluate(() => {
-        // 【不具合修正】':visible'はPlaywrightのlocator専用の拡張疑似クラスで、
-        // ブラウザ本体のquerySelectorAll()には存在しない（構文エラーになる）。
-        // getBoundingClientRect()の幅・高さで可視判定する。
-        // 【43本目】近いピンはまとめた丸（.map-cluster）になるため、まとめた丸も「見えているピン」に数える。
-        const nodes = [...document.querySelectorAll('.map-pin-spot, #spots-map .map-cluster')].filter((n) => {
-          const r = n.getBoundingClientRect();
-          return r.width > 0 && r.height > 0;
-        });
-        return nodes.map((n) => n.getBoundingClientRect().top);
-      });
-      const bandTop2d = panelBox2d ? panelBox2d.y : overlayBox.y;
-      record(
-        `[${label}/2D] 選んだピンを含め、複数のピン（まとめた丸を含む）が地図上に見えている`,
-        pinsAfterSelect.length >= 2,
-        `見えているピン数=${pinsAfterSelect.length}`
-      );
-      record(
-        `[${label}/2D] 見えているピンがすべて帯より上にある`,
-        pinsAfterSelect.length > 0 && pinsAfterSelect.every((top) => top < bandTop2d),
-        JSON.stringify({ pinsAfterSelect, bandTop2d })
-      );
-
+      await page.waitForTimeout(800);
+      const bc = await bandCheck(page, '2d');
+      record(`[${label}/2D] ピンを押すと名前の帯が出て、上の＋−カード・下の一覧・右下の部品の列・出典と重ならない`, bc.shown && bc.overlaps.length === 0, JSON.stringify(bc));
+      record(`[${label}/2D] 名前の帯が、見えているピン（まとめた丸を含む）を隠さない`, bc.shown && bc.hiddenCount === 0, JSON.stringify(bc));
       const pinSelectedPath2d = path.join(screenshotDir, `mobile-budget-overlay-pin-selected-2d-${label}.png`);
       await page.screenshot({ path: pinSelectedPath2d });
       savedPaths.push(pinSelectedPath2d);
       await page.click('#spot-info-close').catch(() => {});
       await page.waitForTimeout(100);
+    } else {
+      record(`[${label}/2D] 押せるピンがある（検証の前提）`, false);
     }
-
-    // 【不具合修正】検索後、裏で¥2000全域のデータを先読みする
-    // （scheduleMaxBudgetPrefetch、WAVE_REVEAL_SAFE_DELAY_MS≒1200ms後に完了）。
-    // これを待たずに「＋を押す前」の基準値を読むと、まだ帯だけの狭いデータ
-    // セットのままのマーカー数を基準にしてしまい、先読み完了が＋操作の直後に
-    // たまたま割り込むと「点が増えた」という誤検出になる（checkBudgetSlider()の
-    // 同種のコメント参照）。確実に先読みが終わってから基準値を読む。
-    await page.waitForTimeout(1500);
-
-    // ＋を2回：円だけ変わり、点の数・一覧は変わらない
-    const before2d = await page.evaluate(() => ({
-      cards: document.querySelectorAll('.spot-card').length,
-      visiblePins: Array.from(window.__mapViewForDebug.markersBySpotId.values())
-        .filter((m) => m.getElement()?.style.display !== 'none').length,
-      circleKm: window.__mapViewForDebug._reachCircleRadiusKm,
-    }));
-    before2d.summaryText = await page.locator('#search-summary-text').textContent();
-    before2d.bandHeading = await page.locator('#results-band-heading').textContent();
-    // 【25本目③】検索済みの帯のボタンは「¥◯・◯件・最大◯km」の形（距離入り）。
-    record(
-      `[${label}/2D] 検索済みの帯のボタンに距離（最大◯km）が入る`,
-      /最大[\d.]+km/.test(await page.locator('#mobile-budget-search-btn').textContent()),
-      await page.locator('#mobile-budget-search-btn').textContent()
-    );
-    await page.click('#mobile-budget-increment');
-    await page.click('#mobile-budget-increment');
-    await page.waitForTimeout(200);
-    const duringDrag2d = await page.evaluate(() => ({
-      cards: document.querySelectorAll('.spot-card').length,
-      visiblePins: Array.from(window.__mapViewForDebug.markersBySpotId.values())
-        .filter((m) => m.getElement()?.style.display !== 'none').length,
-      circleKm: window.__mapViewForDebug._reachCircleRadiusKm,
-    }));
-    // 【43本目C、Minami決定】金額を変えたら地図のピンはその場で新しい金額帯に合わせて入れ替わる
-    // （以前は「検索するまで点は変えない」を検証していた）。一覧は変わらないこと・ピンの色分けが
-    // 新しい金額帯どおりであることを見る。
-    const liveCats2d = await readPinCategories(page, '2d');
-    record(
-      `[${label}/2D] 予算操作帯の＋を2回押すと、一覧は変わらず、ピンの色分けは新しい金額帯に合わせて入れ替わる`,
-      before2d.cards === duringDrag2d.cards && liveCats2d.mismatchCount === 0 && liveCats2d.live !== liveCats2d.searched,
-      JSON.stringify({ before2d, duringDrag2d, live: liveCats2d.live, searched: liveCats2d.searched, counts: liveCats2d.counts, mismatches: liveCats2d.mismatches })
-    );
-    record(
-      `[${label}/2D] 予算操作帯の＋を2回押すと円の半径は大きくなる`,
-      duringDrag2d.circleKm > before2d.circleKm,
-      JSON.stringify({ before2d, duringDrag2d })
-    );
-    const pendingText = await page.locator('#mobile-budget-search-btn').textContent();
-    const pendingClass = await page.evaluate(
-      () => document.getElementById('mobile-budget-search-btn').classList.contains('mobile-budget-search-btn-pending')
-    );
-    record(`[${label}/2D] 金額を変えると帯のボタンが「〜で探す」に変わる`, pendingClass && /で探す$/.test(pendingText || ''), pendingText);
-    // 【25本目①】地図上の「最大◯km先まで」ラベルは廃止。代わりに、操作帯の
-    // 距離spanが動かすたびに変わる（ボタンの文言は「¥◯で探す」のまま）。
-    const distanceInfo = await page.evaluate(() => ({
-      hidden: document.getElementById('mobile-budget-distance').hidden,
-      text: document.getElementById('mobile-budget-distance').textContent,
-    }));
-    record(
-      `[${label}/2D] スライダーを動かしている間、ボタンの近くに距離（最大◯km）が出る`,
-      !distanceInfo.hidden && /最大[\d.]+km/.test(distanceInfo.text),
-      JSON.stringify(distanceInfo)
-    );
-    const mapLabelCount2d = await page.evaluate(() => document.querySelectorAll('.reach-circle-label').length);
-    record(`[${label}/2D] 地図の上に「最大◯km先まで」のラベルが無い`, mapLabelCount2d === 0, `count=${mapLabelCount2d}`);
-    // 【25本目②、不具合修正】スライダーを動かしただけでは、上の要約バー・
-    // 一覧の見出しは最後に検索した条件のまま変わらないこと（Cowork指摘の
-    // 再発防止：以前はupdateMobileBudgetOverlay()が要約バーもその場で
-    // 書き換えており、一覧の見出しと食い違っていた）。
-    const summaryTextDuringDrag = await page.locator('#search-summary-text').textContent();
-    const bandHeadingDuringDrag = await page.locator('#results-band-heading').textContent();
-    record(
-      `[${label}/2D] スライダーを動かしても、上の要約バーの金額は変わらない（最後に検索した条件のまま）`,
-      summaryTextDuringDrag === before2d.summaryText,
-      JSON.stringify({ before: before2d.summaryText, during: summaryTextDuringDrag })
-    );
-    record(
-      `[${label}/2D] スライダーを動かしても、一覧の見出しは変わらない（要約バーと同じ金額のまま）`,
-      bandHeadingDuringDrag === before2d.bandHeading,
-      JSON.stringify({ before: before2d.bandHeading, during: bandHeadingDuringDrag })
-    );
-    const midDragPath2d = path.join(screenshotDir, `mobile-budget-overlay-mid-drag-2d-${label}.png`);
-    await page.screenshot({ path: midDragPath2d });
-    savedPaths.push(midDragPath2d);
-
-    // 「この金額で探す」を押すと点・一覧が変わる。
-    // 【不具合修正】このボタンは「地図」タブを見ながら押す想定のUIで、一覧タブ
-    // パネルは地図タブ表示中display:noneのため.spot-cardは「存在するが不可視」
-    // になる（このファイルの他箇所、957行目付近と同じ事情）。可視状態を待つ
-    // 既定のwaitForSelectorではなく、件数の変化そのものをDOM上で待つ。
-    await page.click('#mobile-budget-search-btn');
-    await page.waitForFunction(
-      (prevCount) => document.querySelectorAll('.spot-card').length !== prevCount || document.querySelector('.no-results') !== null,
-      before2d.cards,
-      { timeout: 15000 }
-    );
-    await page.waitForTimeout(200);
-    const afterOverlaySearch = await page.evaluate(() => ({
-      cards: document.querySelectorAll('.spot-card').length,
-      pendingClass: document.getElementById('mobile-budget-search-btn').classList.contains('mobile-budget-search-btn-pending'),
-      summaryText: document.getElementById('search-summary-text').textContent,
-      bandHeading: document.getElementById('results-band-heading').textContent,
-    }));
-    record(
-      `[${label}/2D] 「この金額で探す」を押すと一覧が変わり、帯のボタンが件数表示に戻る`,
-      afterOverlaySearch.cards !== before2d.cards && !afterOverlaySearch.pendingClass,
-      JSON.stringify({ before: before2d.cards, after: afterOverlaySearch })
-    );
-    // 【25本目②】「¥◯で探す」を押すと、上の要約バー・一覧の見出しが
-    // そろって新しい金額に変わること（要約バー末尾の金額＝見出しの上限額）。
-    const summaryBudget = parseInt((afterOverlaySearch.summaryText.match(/¥([\d,]+)$/) || [])[1]?.replace(/,/g, ''), 10);
-    // 【51本目】見出しが「¥1,001〜¥1,200 の場所　23か所」の形になったため、金額の後ろを「で」から「 の場所」に変えた。
-    const headingBudget = parseInt((afterOverlaySearch.bandHeading.match(/〜¥([\d,]+) の場所/) || [])[1]?.replace(/,/g, ''), 10);
-    record(
-      `[${label}/2D] 「この金額で探す」を押すと、要約バーの金額が変わり、一覧の見出しとそろう`,
-      afterOverlaySearch.summaryText !== before2d.summaryText && summaryBudget === headingBudget,
-      JSON.stringify({ afterOverlaySearch, summaryBudget, headingBudget })
-    );
-
     if (pageErrors.length > 0) {
-      record(`[${label}/2D] 予算操作帯の操作中にページエラーが発生していない`, false, pageErrors.join('; '));
+      record(`[${label}/2D] ＋−の操作中にページエラーが発生していない`, false, pageErrors.join('; '));
     }
 
-    // --- 3D：高さ・重なり・円のみ変化・薄いピン選択時の無エラー ---
+    // --- 3D ---
     pageErrors.length = 0;
     const consoleMessages3d = [];
     page.on('console', (msg) => {
@@ -3512,118 +3369,58 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
 
     if (became3d) {
       await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+      await waitForTerrainCameraIdle(page);
       await page.waitForTimeout(500);
 
       const mapHeight3d = await page.locator('#map-area').boundingBox().then((b) => b?.height || 0);
       record(`[${label}/3D] 地図の高さが240px以上`, mapHeight3d >= 240, `height=${mapHeight3d}`);
-
-      const overlayBox3d = await page.locator('#mobile-budget-overlay').boundingBox();
-      // 【56本目】2D/3D切替はヘッダー（スマホは「☰」の中で、閉じているときは見えない）へ移し、タブはやめた。
-      const toggleBox3d = null;
-      // 【23本目、不具合修正】方位磁針（.maplibregl-ctrl-top-right）は
-      // 回転ハンドルに置き換えて廃止したため、代わりにハンドルとの重なりを見る。
-      const compassBox3d = await page.locator('#map-rotate-handle').boundingBox().catch(() => null);
       const attribBox3d = await page.locator('#map-area .maplibregl-ctrl-bottom-right').boundingBox().catch(() => null);
-      const panelBox3d = await page.locator('.results-panel').boundingBox().catch(() => null);
-      record(`[${label}/3D] 出典ボタンが結果の入れ物（予算操作帯を含む）と重ならない`, !rectsOverlap(attribBox3d, panelBox3d), JSON.stringify({ attribBox3d, panelBox3d }));
-      if (compassBox3d) {
-        record(`[${label}/3D] 回転ハンドルが2D/3D切替ボタンと重ならない`, !rectsOverlap(compassBox3d, toggleBox3d), JSON.stringify({ compassBox3d, toggleBox3d }));
-      }
-
+      const headBox3d = await page.locator('.results-head').boundingBox().catch(() => null);
+      const sheetBox3d = await page.locator('.results-sheet').boundingBox().catch(() => null);
+      record(`[${label}/3D] 出典ボタンが上の＋−カード・下の一覧と重ならない`, !rectsOverlap(attribBox3d, headBox3d) && !rectsOverlap(attribBox3d, sheetBox3d), JSON.stringify({ attribBox3d, headBox3d, sheetBox3d }));
       const mapLabelCount3d = await page.evaluate(() => document.querySelectorAll('.reach-circle-label').length);
       record(`[${label}/3D] 地図の上に「最大◯km先まで」のラベルが無い`, mapLabelCount3d === 0, `count=${mapLabelCount3d}`);
-
-      // 【28本目】地図タブ（3D）でも帯の文言が省略記号で切れないこと。
-      const bandTruncationMap3d = await page.evaluate(() => {
-        const btn = document.getElementById('mobile-budget-search-btn');
-        return { text: btn.textContent, scrollWidth: btn.scrollWidth, clientWidth: btn.clientWidth };
-      });
-      record(
-        `[${label}/3D] 予算操作帯のボタン文言が省略記号で切れない（scrollWidth<=clientWidth）`,
-        bandTruncationMap3d.scrollWidth <= bandTruncationMap3d.clientWidth,
-        JSON.stringify(bandTruncationMap3d)
-      );
-
       const mapTab3dPath = path.join(screenshotDir, `mobile-budget-overlay-3d-${label}.png`);
       await page.screenshot({ path: mapTab3dPath });
       savedPaths.push(mapTab3dPath);
 
-      // 普通のピン（帯内）を選ぶ：名前の帯が予算操作帯・最初の見え方に戻るボタンと重ならない
-      // 【43本目】押す位置を求めてから押すまでの間に、裏取得の反映で点のデータが作り直されると、その点が
-      // まとめた丸に入って押せなくなることがある（フルスイートの中で発生）。反映が終わってから求める。
+      // 普通のピンを選ぶ：名前の帯の置き場所、傾き
       await waitForAllSpotsPrefetchSettled(page);
       await page.waitForFunction(() => (window.__terrainViewForDebug._lastSpots || []).length === (window.__mapViewForDebug._lastSpots || []).length, { timeout: 20000 }).catch(() => {});
       await page.waitForTimeout(500);
-      const pinScreenPos = await spotScreenPos3d(page, { maxFare: 800 });
+      const pinScreenPos = await spotScreenPos3d(page, { maxFare: 1000 });
       if (pinScreenPos) {
         const mapBox3d = await page.locator('#map-area').boundingBox();
-        // 【24本目②、不具合修正】checkCrossDimensionSelectionScroll()と同じ、
-        // クリック前にonTiltCompleteを仕込み、クリック後はtiltComplete→
-        // MapLibreの'idle'の順で待ってからスクリーンショットを撮る
-        // （固定300ms待ちのままだと航空写真がぼやけた状態で撮ってしまう）。
         const tiltCompletePromise3d = page.evaluate(() => new Promise((resolve) => {
           window.__terrainViewForDebug.onTiltComplete = () => resolve();
-          // 【2026-10-17、32本目A、不具合修正】10秒は混雑時のタイル読み込みに
-          // 対して短すぎることがある（理由は上のtiltCompletePromiseの注釈参照）。36秒に伸ばす。
           setTimeout(resolve, 36000);
         }));
         await page.mouse.click(mapBox3d.x + pinScreenPos.x, mapBox3d.y + pinScreenPos.y);
-        await page.waitForTimeout(300);
-        const panelBox3d = await page.locator('#spot-info-panel').boundingBox();
-        record(`[${label}/3D] 名前の帯が予算操作帯と重ならない`, !rectsOverlap(panelBox3d, overlayBox3d), JSON.stringify({ panelBox3d, overlayBox3d }));
-        const resetBox3d = await page.locator('#map-reset-view-btn').boundingBox().catch(() => null);
-        if (resetBox3d) {
-          record(`[${label}/3D] 最初の見え方に戻るボタンが回転ハンドルと重ならない`, !compassBox3d || !rectsOverlap(resetBox3d, compassBox3d), JSON.stringify({ resetBox3d, compassBox3d }));
-        }
         await tiltCompletePromise3d;
-        // 【26本目②、不具合修正】ピンを押したあと、読み込みが終わっても
-        // pitchが0（真上から見た状態）のまま戻ってこない不具合があった
-        // （flyTo()が「中心・ズームが現在と同じ＝移動距離ゼロ」と判定し、
-        // pitchのアニメーションを正しく行わないまま終わるケースが原因。
-        // terrain-map-view.jsのflyToSpot()・_ensurePitchThenComplete()参照）。
-        // onTiltCompleteが発火した時点でpitchが傾いていることを確認する。
         const pitchAfterTiltComplete = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
-        record(
-          `[${label}/3D] ピンを押して読み込みが終わった後、pitchが55度以上に傾いている`,
-          pitchAfterTiltComplete >= 55,
-          `pitch=${pitchAfterTiltComplete}`
-        );
+        record(`[${label}/3D] ピンを押して読み込みが終わった後、pitchが55度以上に傾いている`, pitchAfterTiltComplete >= 55, `pitch=${pitchAfterTiltComplete}`);
         await page.evaluate(() => new Promise((resolve) => {
           const map = window.__terrainMapForDebug;
           map.once('idle', resolve);
           setTimeout(resolve, 8000);
         }));
         await page.waitForTimeout(300);
+        const bc3 = await bandCheck(page, '3d');
+        record(`[${label}/3D] ピンを押すと名前の帯が出て、上の＋−カード・下の一覧・右下の部品の列・出典と重ならない`, bc3.shown && bc3.overlaps.length === 0, JSON.stringify(bc3));
         const pinSelectedPath3d = path.join(screenshotDir, `mobile-budget-overlay-pin-selected-3d-${label}.png`);
         await page.screenshot({ path: pinSelectedPath3d });
         savedPaths.push(pinSelectedPath3d);
         await page.click('#spot-info-close').catch(() => {});
         await page.waitForTimeout(100);
 
-        // 【26本目②、不具合修正の再発防止】真上から降り切った直後（まだ
-        // 傾け始める前）に同じピンをもう一度押しても、最終的にpitchが
-        // 55度以上まで傾くこと。実機相当の計測で、同じ中心・ズームへの
-        // flyTo()の再呼び出しがpitchのアニメーションを正しく完了させない
-        // ことがある不具合を確認済み（flyToSpot()の修正参照）。
-        // 【不具合修正】このピンは直前のブロックで既に選択・寄り済み
-        // （_focusedOnSpot・_flyFocusedSpotIdが一致した状態）のため、
-        // そのまま押すと「既にこの場所にいる」ショートカット経路（単発の
-        // easeTo、onOverheadSettledを呼ばない）を通ってしまい、
-        // onOverheadSettledを待つこのテスト自体がハングしていた
-        // （実際に実行して確認：verify-layout全体が停止した）。
-        // 最初の見え方に戻るボタン（41本目、以前の「全体を見る」）で一度フォーカスを外してから押し直すことで、
-        // ここでの最初のクリックが必ず「降りる→傾ける」の2段階を
-        // 通るようにする。
-        await page.click('#map-reset-view-btn').catch(() => {});
+        // 【26本目②、不具合修正の再発防止】真上から降り切った直後に同じピンをもう一度押しても、最終的にpitchが55度以上まで傾く。
+        // 最初の見え方に戻るボタンで一度フォーカスを外してから押し直し、最初のクリックが必ず「降りる→傾ける」の2段階を通るようにする。
+        await page.evaluate(() => document.getElementById('map-reset-view-btn').click());
         await page.waitForTimeout(2000);
-        // 【43本目】最初の見え方に戻ったあとは、同じピンの画面上の位置が変わる（小さい画面では、
-        // 押せるようにするため補助関数がそのピンへ寄っていたことがある）。同じピンの位置を求め直す。
         const retryPos = await spotScreenPos3d(page, { id: pinScreenPos.id });
         if (retryPos) { pinScreenPos.x = retryPos.x; pinScreenPos.y = retryPos.y; }
         const overheadPromise = page.evaluate(() => new Promise((resolve) => {
           window.__terrainViewForDebug.onOverheadSettled = () => resolve();
-          // 【2026-10-17、32本目A、不具合修正】10秒は混雑時のタイル読み込みに
-          // 対して短すぎることがある（理由は上のtiltCompletePromiseの注釈参照）。36秒に伸ばす。
           setTimeout(resolve, 36000);
         }));
         await page.mouse.click(mapBox3d.x + pinScreenPos.x, mapBox3d.y + pinScreenPos.y);
@@ -3635,64 +3432,28 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
         await page.mouse.click(mapBox3d.x + pinScreenPos.x, mapBox3d.y + pinScreenPos.y); // 同じピンをすぐもう一度
         await tiltCompleteRetryPromise;
         const pitchAfterSamePinRetry = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
-        record(
-          `[${label}/3D] 降下直後に同じピンを連打しても、最終的にpitchが55度以上に傾く`,
-          pitchAfterSamePinRetry >= 55,
-          `pitch=${pitchAfterSamePinRetry}`
-        );
+        record(`[${label}/3D] 降下直後に同じピンを連打しても、最終的にpitchが55度以上に傾く`, pitchAfterSamePinRetry >= 55, `pitch=${pitchAfterSamePinRetry}`);
         await page.click('#spot-info-close').catch(() => {});
         await page.waitForTimeout(100);
+      } else {
+        record(`[${label}/3D] 押せるピンがある（検証の前提）`, false);
       }
 
-      // ＋を2回：円だけ変わり、点のフィルタ（帯の判定）は変わらない
-      const filterBefore = await page.evaluate(() => window.__terrainViewForDebug._spotDataSignature);
-      const circleBefore3d = await page.evaluate(() => window.__terrainViewForDebug._reachCircleRadiusKm);
-      const summaryBefore3d = await page.locator('#search-summary-text').textContent();
-      const headingBefore3d = await page.locator('#results-band-heading').textContent();
-      await page.click('#mobile-budget-increment');
-      await page.click('#mobile-budget-increment');
-      await page.waitForTimeout(300);
-      const filterAfter = await page.evaluate(() => window.__terrainViewForDebug._spotDataSignature);
-      const circleAfter3d = await page.evaluate(() => window.__terrainViewForDebug._reachCircleRadiusKm);
-      // 【43本目C、Minami決定】金額を変えたらピンはその場で新しい金額帯に合わせて入れ替わる
-      // （以前は「検索するまで点は変えない」を検証していた）。色の決まりどおりかを見る。
+      // −を2回：一覧も一緒に¥800へ戻る
+      await page.evaluate(() => document.getElementById('map-reset-view-btn').click());
+      await page.waitForTimeout(1800);
+      const before3d = await listState(page);
+      await clickElementChecked(page, 'mobile-budget-decrement', `[${label}/3D] −`);
+      await page.waitForTimeout(150);
+      await clickElementChecked(page, 'mobile-budget-decrement', `[${label}/3D] −（2回目）`);
+      await page.waitForTimeout(600);
+      const after3d = await listState(page);
       const liveCats3d = await readPinCategories(page, '3d');
-      record(`[${label}/3D] 予算操作帯の＋を2回押すと、点の色分けが新しい金額帯に合わせて入れ替わる`, liveCats3d.mismatchCount === 0 && liveCats3d.live !== liveCats3d.searched, JSON.stringify({ live: liveCats3d.live, searched: liveCats3d.searched, counts: liveCats3d.counts, mismatches: liveCats3d.mismatches, changed: filterBefore !== filterAfter }));
-      record(`[${label}/3D] 予算操作帯の＋を2回押すと円の半径は大きくなる`, circleAfter3d > circleBefore3d, JSON.stringify({ circleBefore3d, circleAfter3d }));
-      const distanceInfo3d = await page.evaluate(() => ({
-        hidden: document.getElementById('mobile-budget-distance').hidden,
-        text: document.getElementById('mobile-budget-distance').textContent,
-      }));
-      record(
-        `[${label}/3D] スライダーを動かしている間、ボタンの近くに距離（最大◯km）が出る`,
-        !distanceInfo3d.hidden && /最大[\d.]+km/.test(distanceInfo3d.text),
-        JSON.stringify(distanceInfo3d)
-      );
-      const summaryDuring3d = await page.locator('#search-summary-text').textContent();
-      const headingDuring3d = await page.locator('#results-band-heading').textContent();
-      record(
-        `[${label}/3D] スライダーを動かしても、上の要約バー・一覧の見出しは変わらない`,
-        summaryDuring3d === summaryBefore3d && headingDuring3d === headingBefore3d,
-        JSON.stringify({ summaryBefore3d, summaryDuring3d, headingBefore3d, headingDuring3d })
-      );
-      const midDragPath3d = path.join(screenshotDir, `mobile-budget-overlay-mid-drag-3d-${label}.png`);
-      await page.screenshot({ path: midDragPath3d });
-      savedPaths.push(midDragPath3d);
+      record(`[${label}/3D] −を2回押すと、一覧の見出しの金額帯・カード・「◯か所」が今の金額（¥800）に合わせて変わり、ピンの色分けは決まりどおり`,
+        headingBudget(after3d.heading) === 800 && after3d.amount === '¥800' && after3d.cards !== before3d.cards && after3d.count !== before3d.count && liveCats3d.mismatchCount === 0,
+        JSON.stringify({ before3d, after3d, mismatches: liveCats3d.mismatches }));
 
-      // 【2026-10-18、33本目、不具合修正】薄いピン（帯より安い＝COLOR_CHEAPER、
-      // fare <= budget かつ fare <= budget-BAND_WIDTH）を選んでもエラーにならない。
-      // 以前はfare > budgetで絞り込んでいたが、これは _paintBudget() が
-      // 地図のレイヤーに設定するfilter（['<=',['get','fare'],budget]）に
-      // そもそも引っかかって描画されない点（＝実在しても画面上は存在しない
-      // ピン）を探していた不具合だった。querySourceFeatures()はレイヤーの
-      // filterを無視してソースの生データを返すため、座標は計算できても
-      // 実際にはそこに描画されたピンが無く、クリックしても何にも当たらない
-      // （情報枠が開かない）という、テスト自体の設計ミスだった
-      // （33本目で人の操作速度を模した10回の実機相当検証で確認：
-      // 修正後の条件は10/10成功、修正前の条件は10/10「クリックしても
-      // 情報枠が開かない」で失敗し続けた）。
-      // 【43本目】薄い（灰色の）点：金額帯より安い点。まとめた丸に入っていれば寄ってから。
-      // 【49本目】灰色はやめた（紺の点になった）。金額帯より安い場所の点（まとめない紺の点）を選ぶ。
+      // 金額帯より安い場所のピン（49本目から紺）を選んでもエラーにならない
       let paleScreenPos = await page.evaluate(() => {
         const map = window.__terrainMapForDebug;
         const budget = window.__terrainViewForDebug._lastBudget;
@@ -3716,33 +3477,9 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       }
       record(`[${label}/3D] 金額帯より安い場所のピン（49本目から紺）を選ぶ操作がある`, !!paleScreenPos);
 
-      // 「この金額で探す」を押すと点・一覧が変わる（地図タブ表示中は一覧タブ
-      // パネルがdisplay:noneのため、可視状態を待つのではなく件数の変化を待つ）。
-      const beforeOverlaySearch3d = await page.locator('.spot-card').count();
-      await page.click('#mobile-budget-search-btn');
-      await page.waitForFunction(
-        (prevCount) => document.querySelectorAll('.spot-card').length !== prevCount || document.querySelector('.no-results') !== null,
-        beforeOverlaySearch3d,
-        { timeout: 15000 }
-      );
-      await page.waitForTimeout(300);
-      const afterOverlaySearch3d = await page.locator('.spot-card').count();
-      record(
-        `[${label}/3D] 「この金額で探す」を押すと一覧が変わる`,
-        afterOverlaySearch3d !== beforeOverlaySearch3d,
-        `${beforeOverlaySearch3d} -> ${afterOverlaySearch3d}`
-      );
-
-      record(
-        `[${label}/3D] ここまでの一連の操作でMapLibreの「Map cannot fit」警告が出ない`,
-        !containsMapCannotFitWarning(consoleMessages3d)
-      );
+      record(`[${label}/3D] ここまでの一連の操作でMapLibreの「Map cannot fit」警告が出ない`, !containsMapCannotFitWarning(consoleMessages3d));
       const unexpected3d = consoleMessages3d.filter((m) => !isKnownAcceptableConsoleMessage(m));
-      record(
-        `[${label}/3D] 薄いピン選択・予算操作・再検索の一連の操作でコンソールエラー・警告が出ない`,
-        unexpected3d.length === 0 && pageErrors.length === 0,
-        [...unexpected3d, ...pageErrors].join(' | ')
-      );
+      record(`[${label}/3D] ピン選択・＋−の一連の操作でコンソールエラー・警告が出ない`, unexpected3d.length === 0 && pageErrors.length === 0, [...unexpected3d, ...pageErrors].join(' | '));
     }
 
     await context.close();
@@ -4190,14 +3927,23 @@ async function waitForTerrainCameraIdle(page, { timeoutMs = 20000 } = {}) {
  */
 /**
  * 【56本目】結果の画面では、トップの検索カード（#budget-increment等・#search-btn）は隠れていて、
- * 金額を変えるのは結果の入れ物の＋−・「¥◯で探す」だけ（PC・スマホ共通）。隠れているときはそちらの部品のIDを返す。
+ * 金額を変えるのは結果の入れ物の＋−だけ（PC・スマホ共通）。隠れているときはそちらの部品のIDを返す。
+ * 【59本目】結果画面の「¥◯で探す」（#mobile-budget-search-btn）はやめた。結果画面で今の条件のまま検索し直すときは、
+ * 「条件を変える」で検索カードを開いてから「この条件で探す」を押す（その手順をここで行い、#search-btnを返す）。
  */
 async function resultScreenEquivalentId(page, elementId) {
   const RESULT_SCREEN_EQUIVALENT = {
     'budget-increment': 'mobile-budget-increment',
     'budget-decrement': 'mobile-budget-decrement',
-    'search-btn': 'mobile-budget-search-btn',
   };
+  if (elementId === 'search-btn' || elementId === 'mobile-budget-search-btn') {
+    const hidden = await page.evaluate(() => document.getElementById('search-btn').offsetParent === null);
+    if (hidden) {
+      await page.evaluate(() => document.getElementById('search-summary-toggle').click());
+      await page.waitForTimeout(300);
+    }
+    return 'search-btn';
+  }
   if (!RESULT_SCREEN_EQUIVALENT[elementId]) return elementId;
   const hiddenHere = await page.evaluate((id) => {
     const el = document.getElementById(id);
@@ -5181,6 +4927,8 @@ async function measureCircleState(page, dim) {
       const cs = getComputedStyle(el);
       if (el.hidden || cs.display === 'none' || cs.visibility === 'hidden') return;
       if (el.getAttribute('data-map-overlay') === 'bar') return; // 【58本目】PCで一覧を閉じたときの細いバーは覆う入れ物ではない
+      const outer = el.parentElement && el.parentElement.closest('[data-map-overlay]'); // 【59本目】入れ物の中の入れ物は外の入れ物で数える
+      if (outer && getComputedStyle(outer).display !== 'contents') return;
       const b = el.getBoundingClientRect();
       if (!(b.width > 0 && b.height > 0)) return;
       const o = { left: b.left - cr.left, top: b.top - cr.top, right: b.right - cr.left, bottom: b.bottom - cr.top };
@@ -6121,6 +5869,13 @@ async function checkReturnToListMatchesSearchView(browser, baseUrl, savedPaths) 
         // 一覧タブのカードから詳細を開く（地図タブは隠れている）。
         await showListTab(page);
         await page.waitForTimeout(300);
+        // 【59本目】スマホの低い画面（400×464）では、下の一覧が小のときカードを出さない。つまみを押して大にしてから押す。
+        const opened = await page.evaluate(() => {
+          const c = document.querySelector('.spot-card');
+          if (c && c.offsetParent === null) { document.getElementById('results-sheet-handle')?.click(); return true; }
+          return false;
+        });
+        if (opened) await page.waitForTimeout(800);
         await page.locator('.spot-card').first().click();
       }
       await page.waitForFunction(() => document.getElementById('app-layout').getAttribute('data-view') === 'detail', { timeout: 10000 });
@@ -6140,11 +5895,14 @@ async function checkReturnToListMatchesSearchView(browser, baseUrl, savedPaths) 
       await waitForTerrainCameraIdle(page);
       const back = await measureCircleState(page, '3d');
       const shift = await centerShiftPx(page, '3d', baseline.center);
+      // 【59本目】スマホでは詳細を開くと下の一覧が大になり、一覧に戻ったあとも大のまま（見えている範囲が狭い）。そのときは
+      // 「検索した直後と同じ決まり」（見えている範囲の短辺の0.85・出発駅が真ん中、57本目のア）で合っているかを見る。
+      const sameArea = Math.abs(back.visShort - baseline.visShort) < 1;
       record(
-        `${label} 「一覧」で戻ると、検索した直後と同じ中心・ズーム・傾きに戻る`,
-        Math.abs(back.zoom - baseline.zoom) < 0.05 && shift < 3 && Math.abs(back.pitch - baseline.pitch) < 0.5
-          && Math.abs(back.bearing - baseline.bearing) < 0.5,
-        JSON.stringify({ baselineZoom: baseline.zoom, backZoom: back.zoom, centerShiftPx: +shift.toFixed(2), baselinePitch: baseline.pitch, backPitch: back.pitch })
+        `${label} 「一覧」で戻ると、検索した直後と同じ中心・ズーム・傾きに戻る（見えている範囲が変わったときは、同じ決まりで合わせ直す）`,
+        (sameArea ? Math.abs(back.zoom - baseline.zoom) < 0.05 && shift < 3 : back.depOffsetPx <= 3 && back.ratio >= 0.5 && back.ratio <= 0.9)
+          && Math.abs(back.pitch - baseline.pitch) < 0.5 && Math.abs(back.bearing - baseline.bearing) < 0.5,
+        JSON.stringify({ sameArea, baselineZoom: baseline.zoom, backZoom: back.zoom, centerShiftPx: +shift.toFixed(2), backRatio: +back.ratio.toFixed(3), backDepOffsetPx: +back.depOffsetPx.toFixed(1), baselinePitch: baseline.pitch, backPitch: back.pitch })
       );
       const box = await page.locator('#map-area').boundingBox();
       if (box) {
@@ -7047,10 +6805,11 @@ async function checkLiveBudgetPins(browser, baseUrl, savedPaths) {
           }
           await waitForCircleSettled(page, dim);
           const cardsDuring = await page.evaluate(() => [...document.querySelectorAll('.spot-card')].map((c) => c.dataset.spotId).join(','));
-          record(`${label} 金額を変えただけでは、一覧（カード）は変わらない`, cardsDuring === cardsBefore);
-          const searchBtnId = isMobile ? 'mobile-budget-search-btn' : 'search-btn';
+          // 【59本目、Minami決定】結果画面では＋−で一覧も一緒に変わる（「¥◯で探す」はやめた）
+          record(`${label} 金額を変えると、一覧（カード）も一緒に変わる（59本目）`, cardsDuring !== cardsBefore);
+          const searchBtnId = 'search-btn'; // 【59本目】スマホも「条件を変える」→「この条件で探す」（resultScreenEquivalentId()）
           const prefetchBefore = await page.evaluate(() => window.__maxBudgetPrefetchAppliedCount || 0);
-          await clickElementChecked(page, searchBtnId, `${label} ${isMobile ? '「¥◯で探す」' : '「この条件で検索」'}`);
+          await clickElementChecked(page, searchBtnId, `${label} 「この条件で探す」`);
           await page.waitForFunction((n) => (window.__maxBudgetPrefetchAppliedCount || 0) > n, prefetchBefore, { timeout: 20000 }).catch(() => {});
           await page.waitForTimeout(1500);
           if (dim === '3d') await waitForTerrainCameraIdle(page);
@@ -7592,7 +7351,7 @@ async function checkRound47(browser, baseUrl, savedPaths) {
     const isMobile = vLabel !== 'pc';
     const full = vLabel === 'pc' || vLabel === 'own'; // まとめ方・円の大きさ・スクリーンショットはPCと400×464
     const incId = isMobile ? 'mobile-budget-increment' : 'budget-increment';
-    const searchBtnId = isMobile ? 'mobile-budget-search-btn' : 'search-btn';
+    const searchBtnId = 'search-btn'; // 【59本目】スマホも「条件を変える」→「この条件で探す」（resultScreenEquivalentId()）
     for (const dim of ['2d', '3d']) {
       const label = `[47/${vLabel}/${dim}]`;
       const context = await browser.newContext({ viewport });
@@ -7787,7 +7546,7 @@ async function checkRound47(browser, baseUrl, savedPaths) {
         // --- 4. 「この条件で検索」で検索し直す。【49本目】直前の検索（¥1,000）から増えた場所（¥1,001〜¥1,400）は
         //     オレンジのまま。紺をまとめる形に戻るのは、−で¥1,000まで下げてオレンジがなくなったとき（下で見る）。 ---
         const prefetchBefore = await page.evaluate(() => window.__maxBudgetPrefetchAppliedCount || 0);
-        await clickElementChecked(page, searchBtnId, `${label} ${isMobile ? '「¥◯で探す」' : '「この条件で検索」'}`);
+        await clickElementChecked(page, searchBtnId, `${label} 「この条件で探す」`);
         await page.waitForFunction((n) => (window.__maxBudgetPrefetchAppliedCount || 0) > n, prefetchBefore, { timeout: 20000 }).catch(() => {});
         await page.waitForTimeout(1500);
         if (dim === '3d') { await waitForTerrainCameraIdle(page); await waitForTerrainTilesLoaded(page); }
@@ -7937,7 +7696,7 @@ async function checkRound51(browser, baseUrl, savedPaths) {
   for (const [vLabel, viewport] of Object.entries(viewports)) {
     const isMobile = vLabel !== 'pc';
     const incId = isMobile ? 'mobile-budget-increment' : 'budget-increment';
-    const searchBtnId = isMobile ? 'mobile-budget-search-btn' : 'search-btn';
+    const searchBtnId = 'search-btn'; // 【59本目】スマホも「条件を変える」→「この条件で探す」（resultScreenEquivalentId()）
     for (const dim of ['2d', '3d']) {
       const label = `[51/${vLabel}/${dim}]`;
       const context = await browser.newContext({ viewport });
@@ -8562,12 +8321,18 @@ async function checkRound56(browser, baseUrl, savedPaths) {
         const res = await page.evaluate(() => {
           const vis = (el) => !!el && el.offsetParent !== null && el.getBoundingClientRect().width > 0 && getComputedStyle(el).visibility !== 'hidden';
           const sliders = [...document.querySelectorAll('input[type="range"]')].filter(vis).map((el) => el.id);
-          const panel = document.querySelector('.results-panel');
+          // 【59本目】スマホでは結果の入れ物自体は箱を持たず（display: contents）、上の＋−カードと下の一覧の2つになる
+          const outer = document.querySelector('.results-panel');
+          const split = getComputedStyle(outer).display === 'contents';
+          const panel = split ? document.querySelector('.results-sheet') : outer;
+          const head = split ? document.querySelector('.results-head') : outer;
           const r = (el) => { const b = el.getBoundingClientRect(); return { left: b.left, top: b.top, right: b.right, bottom: b.bottom }; };
           return {
-            sliders, cardVisible: vis(document.getElementById('layout-left')), panelVisible: vis(panel),
+            sliders, cardVisible: vis(document.getElementById('layout-left')), panelVisible: vis(panel) && vis(head),
             dataLine: vis(panel.querySelector('[data-open-about]')),
-            panel: r(panel), cluster: r(document.getElementById('map-controls-cluster')),
+            panel: r(panel), head: r(head), cluster: r(document.getElementById('map-controls-cluster')),
+            zoomHiddenByDesign: document.getElementById('map-controls-cluster').classList.contains('cluster-no-zoom')
+              || document.getElementById('map-controls-cluster').classList.contains('cluster-hidden'),
             attrib: r(document.querySelector(document.getElementById('map-area').classList.contains('mode-3d') ? '#spots-map-3d .maplibregl-ctrl-attrib' : '#spots-map .leaflet-control-attribution')),
             heading: document.getElementById('results-band-heading').textContent,
             cards: document.querySelectorAll('.spot-card').length,
@@ -8576,17 +8341,30 @@ async function checkRound56(browser, baseUrl, savedPaths) {
         record(`${label} 結果画面：スライダーがどこにも見えない（金額を変えるのは＋−だけ）`, res.sliders.length === 0, JSON.stringify(res.sliders));
         record(`${label} 結果画面：検索カードは隠れ、結果の入れ物（一覧${res.cards}か所）が見える`, !res.cardVisible && res.panelVisible && res.cards > 0, JSON.stringify({ cardVisible: res.cardVisible, panelVisible: res.panelVisible, cards: res.cards }));
         const ov = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-        record(`${label} 結果画面：右下の部品の列・出典が、結果の入れ物と重ならない`, !ov(res.cluster, res.panel) && !ov(res.attrib, res.panel), JSON.stringify({ panel: res.panel, cluster: res.cluster, attrib: res.attrib }));
-        await notCovered('#map-zoom-in', '地図の＋', '結果画面');
-        await notCovered('#map-zoom-out', '地図の−', '結果画面');
-        await notCovered('.results-panel [data-open-about]', '結果の入れ物の一番下の「データ出典・免責」', '結果画面');
+        record(`${label} 結果画面：右下の部品の列・出典が、結果の入れ物（スマホは上の＋−カード・下の一覧）と重ならない`,
+          !ov(res.cluster, res.panel) && !ov(res.attrib, res.panel) && !ov(res.cluster, res.head) && !ov(res.attrib, res.head),
+          JSON.stringify({ panel: res.panel, head: res.head, cluster: res.cluster, attrib: res.attrib }));
+        // 【59本目】スマホで部品の列が上の＋−カードと下の一覧の間に入りきらないときは、ズーム＋−を隠す（指でつまんで
+        // 拡大・縮小できるため。layout-controller.jsのfitControlsCluster()）。そのときは＋−の検証をしない。
+        if (!res.zoomHiddenByDesign) {
+          await notCovered('#map-zoom-in', '地図の＋', '結果画面');
+          await notCovered('#map-zoom-out', '地図の−', '結果画面');
+        } else {
+          console.log(`  ${label} 結果画面：部品の列が入りきらないため、ズーム＋−は隠している（59本目の決まり）`);
+        }
+        // 【59本目】スマホで下の一覧が小のときの「データ出典・免責」は、地図の右下の出典のすぐ左
+        const dataLineSel = await page.evaluate(() => (document.getElementById('map-data-line').offsetParent !== null
+          ? '#map-data-line [data-open-about]' : '.results-sheet [data-open-about]'));
+        await notCovered(dataLineSel, '結果画面の「データ出典・免責」', '結果画面');
         // 地図の＋で実際に地図が拡大する
-        const zBefore = await page.evaluate((dim) => (dim === '3d' ? window.__terrainMapForDebug.getZoom() : window.__mapViewForDebug.map.getZoom()), dim);
-        await clickElementChecked(page, 'map-zoom-in', `${label} 地図の＋`);
-        await page.waitForTimeout(900);
-        if (dim === '3d') await waitForTerrainCameraIdle(page);
-        const zAfter = await page.evaluate((dim) => (dim === '3d' ? window.__terrainMapForDebug.getZoom() : window.__mapViewForDebug.map.getZoom()), dim);
-        record(`${label} 地図の＋を押すと、地図が拡大する`, zAfter > zBefore + 0.5, JSON.stringify({ zBefore, zAfter }));
+        if (!res.zoomHiddenByDesign) {
+          const zBefore = await page.evaluate((dim) => (dim === '3d' ? window.__terrainMapForDebug.getZoom() : window.__mapViewForDebug.map.getZoom()), dim);
+          await clickElementChecked(page, 'map-zoom-in', `${label} 地図の＋`);
+          await page.waitForTimeout(900);
+          if (dim === '3d') await waitForTerrainCameraIdle(page);
+          const zAfter = await page.evaluate((dim) => (dim === '3d' ? window.__terrainMapForDebug.getZoom() : window.__mapViewForDebug.map.getZoom()), dim);
+          record(`${label} 地図の＋を押すと、地図が拡大する`, zAfter > zBefore + 0.5, JSON.stringify({ zBefore, zAfter }));
+        }
         await page.click('#map-reset-view-btn');
         await page.waitForTimeout(1800);
         if (dim === '3d') { await waitForTerrainCameraIdle(page); await waitForTerrainTilesLoaded(page); }
@@ -8598,7 +8376,8 @@ async function checkRound56(browser, baseUrl, savedPaths) {
         const back = await page.evaluate(() => {
           const vis = (el) => !!el && el.offsetParent !== null && el.getBoundingClientRect().width > 0;
           return {
-            cardVisible: vis(document.getElementById('layout-left')), panelVisible: vis(document.querySelector('.results-panel')),
+            cardVisible: vis(document.getElementById('layout-left')),
+            panelVisible: vis(document.querySelector('.results-panel')) || vis(document.querySelector('.results-head')) || vis(document.querySelector('.results-sheet')),
             sliderVisible: vis(document.getElementById('budget-slider')), headingVisible: vis(document.getElementById('results-band-heading')),
             closeVisible: vis(document.getElementById('form-close-btn')),
           };
@@ -8611,7 +8390,8 @@ async function checkRound56(browser, baseUrl, savedPaths) {
         await page.waitForTimeout(400);
         const closed = await page.evaluate(() => ({
           cardVisible: document.getElementById('layout-left').offsetParent !== null,
-          panelVisible: document.querySelector('.results-panel').offsetParent !== null,
+          // 【59本目】スマホでは結果の入れ物自体は箱を持たないため、上の＋−カードで見る
+          panelVisible: document.querySelector('.results-panel').offsetParent !== null || document.querySelector('.results-head').offsetParent !== null,
         }));
         record(`${label} 「▲閉じる」で結果の画面に戻る`, !closed.cardVisible && closed.panelVisible, JSON.stringify(closed));
         record(`${label} コンソールにエラーが出ていない（標高タイルの404を除く）`, errors.length === 0, errors.join(' / '));
@@ -8667,7 +8447,7 @@ async function checkRound49(browser, baseUrl, savedPaths) {
     const isMobile = vLabel !== 'pc';
     const incId = isMobile ? 'mobile-budget-increment' : 'budget-increment';
     const decId = isMobile ? 'mobile-budget-decrement' : 'budget-decrement';
-    const searchBtnId = isMobile ? 'mobile-budget-search-btn' : 'search-btn';
+    const searchBtnId = 'search-btn'; // 【59本目】スマホも「条件を変える」→「この条件で探す」（resultScreenEquivalentId()）
     for (const dim of ['2d', '3d']) {
       const label = `[49/${vLabel}/${dim}]`;
       const context = await browser.newContext({ viewport });
@@ -8727,7 +8507,7 @@ async function checkRound49(browser, baseUrl, savedPaths) {
         await stage('②＋で¥800：¥501〜¥800がオレンジ、¥500までは紺', { blueMax: 500, live: 800 }, four ? 'round49-2-plus800-2d-pc.png' : null);
 
         const prefetchBefore = await page.evaluate(() => window.__maxBudgetPrefetchAppliedCount || 0);
-        await clickElementChecked(page, searchBtnId, `${label} ${isMobile ? '「¥◯で探す」' : '「この条件で検索」'}（¥800）`);
+        await clickElementChecked(page, searchBtnId, `${label} 「この条件で探す」（¥800）`);
         await page.waitForFunction((n) => (window.__maxBudgetPrefetchAppliedCount || 0) > n, prefetchBefore, { timeout: 20000 }).catch(() => {});
         await page.waitForTimeout(1500);
         if (dim === '3d') { await waitForTerrainCameraIdle(page); await waitForTerrainTilesLoaded(page); } else await waitForWaveRevealSettled(page);
@@ -9083,7 +8863,7 @@ async function checkRound58(browser, baseUrl, savedPaths) {
         const st1 = await measureCircleState(page, dim);
         console.log(`  ${label} 開いているとき：円の直径÷見えている範囲の短辺=${st1.ratio.toFixed(3)}（短辺${Math.round(st1.visShort)}px）、出発駅と真ん中のずれ=${st1.depOffsetPx.toFixed(1)}px`);
         record(`${label} 開いているとき：出発駅が見えている範囲の真ん中（3px以内）、円は短辺の0.5〜0.86`, st1.depOffsetPx <= 3 && st1.ratio >= 0.5 && st1.ratio <= 0.86, desc(st1));
-        const dl1 = await shown('.results-panel > .data-line .data-line-btn');
+        const dl1 = await shown('.results-sheet > .data-line .data-line-btn');
         record(`${label} 開いているとき：「データ出典・免責」が見えていて隠れていない`, dl1.ok, JSON.stringify(dl1));
         // 一覧のスクロール
         const scroll = await page.evaluate(async () => {
@@ -9181,6 +8961,277 @@ async function checkRound58(browser, baseUrl, savedPaths) {
       } finally {
         await context.close();
       }
+    }
+  }
+}
+
+/**
+ * 【2026-10-26、59本目】スマホの結果画面（上の＋−カードと、下から引き出す一覧）。390×844・375×667・400×464、2Dと3D。
+ * 富山駅前・¥800。
+ * 1. 上の＋−カード・下の一覧・右下の部品の列・出典が重ならない（ピンを押したときの名前の帯も）。
+ * 2. つまみで小⇔大を切り替えられる（押す：clickElementChecked、上下にドラッグ）。
+ * 3. 小でも大でも、出発駅が見えている範囲の真ん中（3px以内）、円は見えている範囲の短辺の0.5〜0.86（部品を避けて
+ *    小さくなるのは可）。
+ * 4. 小でも大でも「データ出典・免責」が見えていて隠れていない（小は地図の右下、大は一覧の一番下）。
+ * 5. ＋−で一覧の見出し・カード・「◯か所」が一緒に変わる。「¥◯で探す」が無い（PC 1920×1080でも確かめる）。
+ * 6. 「条件を変える」で検索カードが開く。
+ * 7. 地図を動かしてから小⇔大を切り替えると、ズーム（3Dは傾き・向きも）はそのままで、それまで見えている範囲の
+ *    真ん中にあった場所が、新しい見えている範囲の真ん中へ来る（Minami決定：A）。
+ * 8. 一覧のカードを押すと詳細が大の一覧の中に出て、足あとの「一覧」が見えていて押せる。
+ * スクリーンショット：小・大（3画面×2D/3D）、名前の帯を出したところ（390×844の2D）。
+ */
+async function checkRound59(browser, baseUrl, savedPaths) {
+  console.log('\n=== 59本目：スマホの結果画面（上の＋−カードと、下から引き出す一覧） ===');
+  const vps = { std: { width: 390, height: 844 }, se: { width: 375, height: 667 }, own: { width: 400, height: 464 } };
+  const desc = (s) => JSON.stringify({ ratio: +s.ratio.toFixed(3), visShort: Math.round(s.visShort), depOffsetPx: +s.depOffsetPx.toFixed(1), zoom: +s.zoom.toFixed(2) });
+  const listState = (page) => page.evaluate(() => ({
+    heading: document.getElementById('results-band-heading').textContent,
+    cards: [...document.querySelectorAll('.spot-card')].map((c) => c.getAttribute('data-spot-id')).join(','),
+    count: document.getElementById('results-map-count').textContent,
+    amount: document.getElementById('results-budget-value').textContent,
+    searchBtn: !!document.getElementById('mobile-budget-search-btn') || [...document.querySelectorAll('button')].some((b) => /で探す$/.test(b.textContent.trim()) && b.offsetParent !== null && b.id !== 'search-btn'),
+  }));
+  const headingBudget = (h) => parseInt((h.match(/〜¥([\d,]+) の場所/) || [])[1]?.replace(/,/g, ''), 10);
+  const overlapsOf = (page, dim) => page.evaluate((dim) => {
+    const r = (el) => { if (!el || el.hidden) return null; const cs = getComputedStyle(el); if (cs.display === 'none' || cs.visibility === 'hidden') return null; const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0 ? b : null; };
+    const items = {
+      head: r(document.querySelector('.results-head')), sheet: r(document.querySelector('.results-sheet')),
+      attrib: r(document.querySelector(dim === '3d' ? '#spots-map-3d .maplibregl-ctrl-attrib' : '#spots-map .leaflet-control-attribution')),
+      dataLine: r(document.getElementById('map-data-line')), band: r(document.getElementById('spot-info-panel')),
+    };
+    document.querySelectorAll('#map-controls-cluster > *').forEach((el) => { items[el.id || el.className] = r(el); });
+    const keys = Object.keys(items).filter((k) => items[k]);
+    const out = [];
+    for (let i = 0; i < keys.length; i++) for (let j = i + 1; j < keys.length; j++) {
+      const a = items[keys[i]]; const b = items[keys[j]];
+      if (a.left < b.right - 0.5 && a.right > b.left + 0.5 && a.top < b.bottom - 0.5 && a.bottom > b.top + 0.5) out.push(`${keys[i]}×${keys[j]}`);
+    }
+    // 右下の部品の列・出典は地図の中（上の＋−カードより下、下の一覧より上）
+    const map = document.getElementById('map-area').getBoundingClientRect();
+    const outside = keys.filter((k) => !['head', 'sheet'].includes(k)).filter((k) => items[k].top < map.top || items[k].bottom > map.bottom + 0.5 || items[k].right > map.right + 0.5);
+    return { overlaps: out, outside };
+  }, dim);
+  const shown = (page, sel) => page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el || el.offsetParent === null) return { ok: false, why: 'hidden' };
+    const b = el.getBoundingClientRect();
+    const t = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+    const inView = b.left >= 0 && b.top >= 0 && b.right <= innerWidth + 1 && b.bottom <= innerHeight + 1;
+    return { ok: b.width > 0 && inView && !!t && el.contains(t), top: t && (t.id || String(t.className)) };
+  }, sel);
+
+  for (const [vLabel, viewport] of Object.entries(vps)) {
+    for (const dim of ['2d', '3d']) {
+      const label = `[59/${vLabel}/${dim}]`;
+      const context = await browser.newContext({ viewport });
+      await context.addInitScript(() => { try { localStorage.setItem('reverse-travel-rotate-hint-seen', 'true'); } catch { /* 無視 */ } });
+      const page = await context.newPage();
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+      page.on('console', (msg) => {
+        if (msg.type() === 'error' && !isKnownAcceptableConsoleMessage(msg.text())) errors.push(msg.text());
+      });
+      const settle = async () => {
+        await page.waitForTimeout(1300);
+        if (dim === '3d') await waitForTerrainCameraIdle(page);
+      };
+      const shot = async (name) => {
+        await waitForBaseMapLoaded(page, dim);
+        const file = path.join(screenshotDir, name);
+        await page.screenshot({ path: file });
+        savedPaths.push(file);
+      };
+      const isLarge = () => page.evaluate(() => document.getElementById('app-layout').classList.contains('sheet-large'));
+      try {
+        await page.goto(baseUrl, { waitUntil: 'load' });
+        await page.waitForSelector('#departure-input');
+        await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+        await searchExactStation(page, '富山駅前', 800, true);
+        if (dim === '3d') {
+          await clickDimensionToggle(page);
+          const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+          record(`${label} 3D化（検証の前提）`, ok);
+          if (!ok) continue;
+          await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+          await waitForTerrainCameraIdle(page);
+        } else {
+          await waitForWaveRevealSettled(page);
+        }
+        await waitForAllSpotsPrefetchSettled(page);
+        await settle();
+
+        // ---- 小 ----
+        const top = await page.evaluate(() => {
+          const t = (sel) => document.querySelector(sel)?.textContent.replace(/\s+/g, ' ').trim();
+          const vis = (sel) => { const el = document.querySelector(sel); return !!el && el.offsetParent !== null && el.getBoundingClientRect().width > 0; };
+          return {
+            departure: t('.results-departure-closed'), toggle: t('#search-summary-toggle'), amount: t('#results-budget-value'),
+            label: t('.results-budget-label'), count: t('#results-map-count'), heading: t('#results-band-heading'), legend: t('.results-sheet .results-legend'),
+            cardsShown: vis('.spot-card'), compact: document.getElementById('app-layout').classList.contains('sheet-compact'),
+          };
+        });
+        record(`${label} 小：上のカードに「富山駅前から」「条件を変える」・「予算（往復）」¥800・「◯か所」、下の一覧に見出し「¥601〜¥800 の場所」と色の説明`,
+          top.departure === '富山駅前から' && /条件を変える/.test(top.toggle) && top.amount === '¥800' && top.label === '予算（往復）' && /^\d+か所$/.test(top.count)
+            && /^¥601〜¥800 の場所/.test(top.heading) && /みちどころ/.test(top.legend) && /NEW/.test(top.legend), JSON.stringify(top));
+        record(`${label} 小：横のカードは、高さが足りない画面（地図の高さ560px未満）では出さず、それ以外では出す`,
+          top.compact === (vLabel === 'own') && top.cardsShown === !top.compact, JSON.stringify({ compact: top.compact, cardsShown: top.cardsShown }));
+        const ov1 = await overlapsOf(page, dim);
+        record(`${label} 小：上のカード・下の一覧・部品・出典・「データ出典・免責」が重ならず、部品は地図の中`, ov1.overlaps.length === 0 && ov1.outside.length === 0, JSON.stringify(ov1));
+        const st1 = await measureCircleState(page, dim);
+        console.log(`  ${label} 小：円の直径÷見えている範囲の短辺=${st1.ratio.toFixed(3)}（短辺${Math.round(st1.visShort)}px）、出発駅と真ん中のずれ=${st1.depOffsetPx.toFixed(1)}px`);
+        record(`${label} 小：出発駅が見えている範囲の真ん中（3px以内）、円は短辺の0.5〜0.86`, st1.depOffsetPx <= 3 && st1.ratio >= 0.5 && st1.ratio <= 0.86, desc(st1));
+        const dl1 = await shown(page, '#map-data-line .data-line-btn');
+        record(`${label} 小：「データ出典・免責」が地図の右下に見えていて隠れていない`, dl1.ok, JSON.stringify(dl1));
+        await shot(`round59-${vLabel}-${dim}-small.png`);
+
+        // ＋−で一覧も一緒に変わる。「¥◯で探す」は無い。
+        const b0 = await listState(page);
+        record(`${label} 結果画面に「¥◯で探す」が無い`, !b0.searchBtn, JSON.stringify(b0));
+        await clickElementChecked(page, 'mobile-budget-increment', `${label} ＋`);
+        await page.waitForTimeout(700);
+        const b1 = await listState(page);
+        record(`${label} ＋を押すと、一覧の見出しの金額帯・カード・「◯か所」が今の金額（¥900）に合わせて一緒に変わる`,
+          headingBudget(b1.heading) === 900 && b1.amount === '¥900' && b1.heading !== b0.heading && b1.cards !== b0.cards && b1.count !== b0.count, JSON.stringify({ b0, b1 }));
+        await clickElementChecked(page, 'mobile-budget-decrement', `${label} −`);
+        await page.waitForTimeout(700);
+        const b2 = await listState(page);
+        record(`${label} −を押すと、一覧も¥800に戻る`, headingBudget(b2.heading) === 800 && b2.cards === b0.cards && b2.count === b0.count, JSON.stringify(b2));
+        await settle();
+
+        // ---- 大（押す） ----
+        await clickElementChecked(page, 'results-sheet-handle', `${label} つまみ（押す）`);
+        await settle();
+        record(`${label} つまみを押すと大になる`, await isLarge());
+        const ov2 = await overlapsOf(page, dim);
+        record(`${label} 大：上のカード・下の一覧・部品・出典が重ならず、部品は地図の中`, ov2.overlaps.length === 0 && ov2.outside.length === 0, JSON.stringify(ov2));
+        const st2 = await measureCircleState(page, dim);
+        console.log(`  ${label} 大：円の直径÷見えている範囲の短辺=${st2.ratio.toFixed(3)}（短辺${Math.round(st2.visShort)}px）、出発駅と真ん中のずれ=${st2.depOffsetPx.toFixed(1)}px`);
+        record(`${label} 大：出発駅が見えている範囲の真ん中（3px以内）、円は短辺の0.5〜0.86`, st2.depOffsetPx <= 3 && st2.ratio >= 0.5 && st2.ratio <= 0.86, desc(st2));
+        const large = await page.evaluate(() => {
+          const t = (sel) => document.querySelector(sel)?.textContent.replace(/\s+/g, ' ').trim();
+          const vis = (sel) => { const el = document.querySelector(sel); return !!el && el.offsetParent !== null; };
+          return { heading: t('#results-band-heading'), sort: vis('#sort-select'), cards: vis('.spot-card'), mapDataLine: vis('#map-data-line') };
+        });
+        record(`${label} 大：見出し・並び替え・縦の一覧が出る`, /^¥601〜¥800 の場所\s*\d+か所$/.test(large.heading) && large.sort && large.cards, JSON.stringify(large));
+        const dl2 = await shown(page, '.results-sheet > .data-line .data-line-btn');
+        record(`${label} 大：「データ出典・免責」が一覧の一番下に見えていて隠れていない`, dl2.ok && !large.mapDataLine, JSON.stringify(dl2));
+        await shot(`round59-${vLabel}-${dim}-large.png`);
+
+        // ---- 小（下へドラッグ） ----
+        const hb = await page.locator('#results-sheet-handle').boundingBox();
+        await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2 + 60, { steps: 6 });
+        await page.mouse.up();
+        await settle();
+        record(`${label} つまみを下へドラッグすると小に戻る`, !(await isLarge()));
+        const st3 = await measureCircleState(page, dim);
+        record(`${label} 小に戻したとき（地図を動かしていない）：出発駅が見えている範囲の真ん中、円は小のときと同じ（差0.02以内）`, st3.depOffsetPx <= 3 && Math.abs(st3.ratio - st1.ratio) <= 0.02, desc(st3));
+
+        // ---- 地図を動かしてから大（上へドラッグ）：Aの決まり ----
+        await page.evaluate((dim) => {
+          if (dim === '3d') window.__terrainMapForDebug.panBy([40, -30], { duration: 0 });
+          else window.__mapViewForDebug.map.panBy([40, -30], { animate: false });
+        }, dim);
+        await page.waitForTimeout(400);
+        const beforeA = await page.evaluate((dim) => {
+          const el = dim === '3d' ? window.__terrainMapForDebug.getContainer() : window.__mapViewForDebug.map.getContainer();
+          const head = document.querySelector('.results-head').getBoundingClientRect();
+          const sheet = document.querySelector('.results-sheet').getBoundingClientRect();
+          const c = el.getBoundingClientRect();
+          const x = c.width / 2; const y = ((head.bottom - c.top) + (sheet.top - c.top)) / 2;
+          if (dim === '3d') { const m = window.__terrainMapForDebug; const ll = m.unproject([x, y]); return { ll: [ll.lng, ll.lat], zoom: m.getZoom(), pitch: m.getPitch(), bearing: m.getBearing() }; }
+          const m = window.__mapViewForDebug.map; const ll = m.containerPointToLatLng([x, y]); return { ll: [ll.lng, ll.lat], zoom: m.getZoom() };
+        }, dim);
+        const hb2 = await page.locator('#results-sheet-handle').boundingBox();
+        await page.mouse.move(hb2.x + hb2.width / 2, hb2.y + hb2.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(hb2.x + hb2.width / 2, hb2.y + hb2.height / 2 - 60, { steps: 6 });
+        await page.mouse.up();
+        await settle();
+        record(`${label} つまみを上へドラッグすると大になる`, await isLarge());
+        const afterA = await page.evaluate(({ dim, ll }) => {
+          const el = dim === '3d' ? window.__terrainMapForDebug.getContainer() : window.__mapViewForDebug.map.getContainer();
+          const head = document.querySelector('.results-head').getBoundingClientRect();
+          const sheet = document.querySelector('.results-sheet').getBoundingClientRect();
+          const c = el.getBoundingClientRect();
+          const x = c.width / 2; const y = ((head.bottom - c.top) + (sheet.top - c.top)) / 2;
+          if (dim === '3d') { const m = window.__terrainMapForDebug; const p = m.project(ll); return { d: Math.hypot(p.x - x, p.y - y), zoom: m.getZoom(), pitch: m.getPitch(), bearing: m.getBearing() }; }
+          const m = window.__mapViewForDebug.map; const p = m.latLngToContainerPoint([ll[1], ll[0]]); return { d: Math.hypot(p.x - x, p.y - y), zoom: m.getZoom() };
+        }, { dim, ll: beforeA.ll });
+        record(`${label} 地図を動かしてから大にすると、ズーム${dim === '3d' ? '・傾き・向き' : ''}はそのままで、それまで真ん中にあった場所が新しい見えている範囲の真ん中へ来る（3px以内、Minami決定：A）`,
+          afterA.d <= 3 && Math.abs(afterA.zoom - beforeA.zoom) < 0.01 && (dim !== '3d' || (Math.abs(afterA.pitch - beforeA.pitch) < 0.5 && Math.abs(afterA.bearing - beforeA.bearing) < 0.5)),
+          JSON.stringify({ beforeA, afterA }));
+
+        // ---- カードを押すと詳細が大の一覧の中に出て、足あとの「一覧」で戻れる ----
+        await page.evaluate(() => document.querySelector('.spot-card').click());
+        const detail = await page.waitForFunction(() => document.getElementById('app-layout').getAttribute('data-view') === 'detail', { timeout: 10000 }).then(() => true).catch(() => false);
+        await page.waitForTimeout(800);
+        record(`${label} カードを押すと詳細が出て、一覧は大のまま`, detail && await isLarge());
+        const crumb = await shown(page, '#detail-breadcrumb .breadcrumb-list-link');
+        record(`${label} 詳細の足あとの「一覧」が見えていて押せる`, crumb.ok, JSON.stringify(crumb));
+        await clickSelectorChecked(page, '#detail-breadcrumb .breadcrumb-list-link', `${label} 足あとの「一覧」`);
+        const back = await page.waitForFunction(() => document.getElementById('app-layout').getAttribute('data-view') === 'results', { timeout: 10000 }).then(() => true).catch(() => false);
+        record(`${label} 足あとの「一覧」で一覧に戻る`, back);
+        await settle();
+
+        // ---- 「条件を変える」で検索カードが開く ----
+        await clickElementChecked(page, 'search-summary-toggle', `${label} 「条件を変える」`);
+        await page.waitForTimeout(400);
+        const form = await page.evaluate(() => ({ card: document.getElementById('layout-left').offsetParent !== null, head: document.querySelector('.results-head').offsetParent !== null }));
+        record(`${label} 「条件を変える」で検索カードが開き、上の＋−カードは隠れる`, form.card && !form.head, JSON.stringify(form));
+
+        // ---- 名前の帯（390×844の2Dで撮る） ----
+        if (vLabel === 'std' && dim === '2d') {
+          await page.evaluate(() => document.getElementById('form-close-btn')?.click());
+          await page.waitForTimeout(400);
+          await page.evaluate(() => document.getElementById('results-sheet-handle').click());
+          await settle();
+          const pin = await (await uncoveredPin(page)).boundingBox().catch(() => null);
+          if (pin) {
+            await page.mouse.click(pin.x + pin.width / 2, pin.y + pin.height / 2);
+            await page.waitForTimeout(900);
+            const ov3 = await overlapsOf(page, dim);
+            record(`${label} 名前の帯を出しても、上のカード・下の一覧・部品・出典と重ならない`, ov3.overlaps.length === 0, JSON.stringify(ov3));
+            await shot('round59-std-2d-band.png');
+          }
+        }
+        record(`${label} コンソールにエラーが出ない`, errors.length === 0, errors.join(' | '));
+      } catch (e) {
+        record(`${label} 検証中にクラッシュしない`, false, e.message);
+      } finally {
+        await context.close();
+      }
+    }
+  }
+
+  // ---- PC：＋−で一覧も一緒に変わる・「¥◯で探す」が無い ----
+  for (const dim of ['2d']) {
+    const label = `[59/pc/${dim}]`;
+    const context = await browser.newContext({ viewport: VIEWPORTS.pc });
+    const page = await context.newPage();
+    try {
+      await page.goto(baseUrl, { waitUntil: 'load' });
+      await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+      await searchExactStation(page, '富山駅前', 800, false);
+      await waitForWaveRevealSettled(page);
+      await waitForAllSpotsPrefetchSettled(page);
+      await page.waitForTimeout(800);
+      const b0 = await listState(page);
+      record(`${label} 結果画面に「¥◯で探す」が無い`, !b0.searchBtn, JSON.stringify(b0));
+      await clickElementChecked(page, 'mobile-budget-increment', `${label} ＋`);
+      await page.waitForTimeout(700);
+      const b1 = await listState(page);
+      record(`${label} ＋を押すと、一覧の見出しの金額帯・カード・「◯か所」が今の金額（¥900）に合わせて一緒に変わる`,
+        headingBudget(b1.heading) === 900 && b1.amount === '¥900' && b1.cards !== b0.cards && b1.count !== b0.count, JSON.stringify({ b0, b1 }));
+      await clickElementChecked(page, 'search-summary-toggle', `${label} 「条件を変える」`);
+      await page.waitForTimeout(300);
+      const pend = await page.evaluate(() => ({ note: !document.getElementById('search-pending-note').hidden, budget: document.getElementById('budget-display').textContent }));
+      record(`${label} ＋のあと「条件を変える」を開くと、検索カードは今の金額（¥900）で、「条件が変わりました」は出ない`, !pend.note && /900/.test(pend.budget), JSON.stringify(pend));
+    } catch (e) {
+      record(`${label} 検証中にクラッシュしない`, false, e.message);
+    } finally {
+      await context.close();
     }
   }
 }
@@ -10398,6 +10449,7 @@ async function main() {
     await runWithFreshBrowser(checkRound56, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound57, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound58, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkRound59, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBreadcrumbTrail, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBudgetSlider, baseUrl, savedPaths);
     await runWithFreshBrowser(checkWaveRevealAndCircleScreenshots, baseUrl, savedPaths);

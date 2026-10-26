@@ -159,6 +159,10 @@ function visibleMapRect(container) {
     if (el.hidden) return;
     // 【58本目】PCで一覧を閉じたときの細いバー（data-map-overlay="bar"）は、覆う入れ物ではなく円が避ける部品
     if (el.getAttribute('data-map-overlay') === 'bar') return;
+    // 【59本目】入れ物の中の入れ物（PCの一覧パネルの中の上の部分・下の部分）は、外の入れ物で数える。
+    // スマホでは外の入れ物（.results-panel）がdisplay: contentsで箱を持たないため、中の2つを数える。
+    const outer = el.parentElement && el.parentElement.closest('[data-map-overlay]');
+    if (outer && getComputedStyle(outer).display !== 'contents') return;
     const cs = getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden') return;
     const b = el.getBoundingClientRect();
@@ -1101,12 +1105,18 @@ export class MapView {
    * 描画される。向き（bearing）は2Dに無いため変更不要。
    * @param {[number, number]} latlng
    */
+  /** 【59本目】revealAboveBand()で選んだピンを置く場所（地図の入れ物の左上を基準にしたpx）。 */
+  _revealTargetPoint() {
+    const { x, y, vis } = this._visibleCenter();
+    return { x, y: Math.min(y, vis.bottom - REVEAL_ABOVE_BAND_OFFSET_PX) };
+  }
+
   revealAboveBand(latlng) {
     if (!this.map) return;
     const zoom = this.map.getZoom();
     // 【57本目】選んだピンは、見えている範囲（重ねた入れ物を除く）の真ん中に、ただし下の帯にかからない高さに置く。
-    const { x, y, vis } = this._visibleCenter();
-    const target = this._centerPlacingAt(latlng, zoom, x, Math.min(y, vis.bottom - REVEAL_ABOVE_BAND_OFFSET_PX));
+    const t = this._revealTargetPoint();
+    const target = this._centerPlacingAt(latlng, zoom, t.x, t.y);
     if (reachPrefersReducedMotion()) {
       this.map.panTo(target, { animate: false });
     } else {
@@ -1367,20 +1377,68 @@ export class MapView {
   }
 
   /**
-   * 【58本目】見えている範囲が変わったとき（PCの一覧パネルを開け閉めしたとき）。地図が最後に円に合わせたときの
-   * ままなら、新しい見えている範囲の真ん中へ出発駅を合わせ直す（円の大きさの決め方・動きの時間は今までの
-   * 地図合わせと同じ）。利用者が地図を動かしたあと（ピンへ寄ったあとを含む）は合わせ直さない（58本目の報告で
-   * 確認中）。地図が見えていない（3D表示中）ときは、次に見えたとき（handleShown()）に合わせ直す。
+   * 【59本目】画面上の四角（clientの座標）の中に中心がある、描いているピン・まとめた丸の数（名前の帯の置き場所を
+   * 選ぶため。main.jsのplaceSpotInfoPanel()）。
    */
-  handleVisibleAreaChanged() {
+  countDrawnPinsInRect(rect, { afterRevealOf = null } = {}) {
+    if (!this.map || !this.isContainerVisible()) return 0;
+    // ピンを選んだ直後は、このあと選んだピンを見えている範囲の真ん中へずらす（revealAboveBand()）。その分だけ
+    // 動いたあとの位置で数える（帯を出すのは、ずらし始める前のため）。
+    let sx = 0;
+    let sy = 0;
+    const ll = afterRevealOf && this.spotsLatLngById.get(afterRevealOf);
+    if (ll) {
+      const t = this._revealTargetPoint(ll);
+      const p = this.map.latLngToContainerPoint(ll);
+      sx = t.x - p.x;
+      sy = t.y - p.y;
+    }
+    let n = 0;
+    this.map.getContainer().querySelectorAll('.map-pin-spot, .map-cluster').forEach((el) => {
+      const b = el.getBoundingClientRect();
+      if (!(b.width > 0)) return;
+      const cx = b.left + b.width / 2 + sx;
+      const cy = b.top + b.height / 2 + sy;
+      if (cx > rect.left && cx < rect.right && cy > rect.top && cy < rect.bottom) n++;
+    });
+    return n;
+  }
+
+  /** 【59本目】今の見えている範囲の真ん中（地図の入れ物の左上を基準にしたpx）。見えていないときはnull。 */
+  captureVisibleCenter() {
+    if (!this.map || !this.isContainerVisible()) return null;
+    const { x, y } = this._visibleCenter();
+    return { x, y };
+  }
+
+  /**
+   * 【58本目・59本目】見えている範囲が変わったとき（PCの一覧パネルの開け閉め、スマホの下の一覧の小・大）。
+   * - 地図が最後に円に合わせたときのままなら、新しい見えている範囲の真ん中へ出発駅を合わせ直す（円の大きさの
+   *   決め方・動きの時間は今までの地図合わせと同じ）。
+   * - 利用者が地図を動かしたあと（ピンへ寄ったあとを含む）は、ズームはそのままで、それまで見えている範囲の
+   *   真ん中にあった場所を、新しい見えている範囲の真ん中へ横にずらす（59本目、Minami決定：A）。
+   * 地図が見えていない（3D表示中）ときは、円に合わせたままなら次に見えたとき（handleShown()）に合わせ直す。
+   * @param {{x:number, y:number}|null} [prevCenter] 変わる前の見えている範囲の真ん中（captureVisibleCenter()）
+   */
+  handleVisibleAreaChanged(prevCenter = null) {
     if (!this.map || !this.departureLatLng || !(this._reachCircleRadiusKm > 0)) return;
     if (!this.isContainerVisible()) {
       if (this.isAtLastCircleFit()) this._pendingVisibleAreaRefit = true;
       return;
     }
     this._pendingVisibleAreaRefit = false;
-    if (!this.isAtLastCircleFit()) return;
-    this.fitCircleToView({ radiusKm: this._reachCircleRadiusKm });
+    if (this.isAtLastCircleFit()) {
+      this.fitCircleToView({ radiusKm: this._reachCircleRadiusKm });
+      return;
+    }
+    if (!prevCenter) return;
+    const now = this._visibleCenter();
+    const dx = prevCenter.x - now.x;
+    const dy = prevCenter.y - now.y;
+    if (Math.hypot(dx, dy) < 1) return;
+    // panBy(p)は地図をpだけ動かす（中身はその逆へ動く）。中身をnow−prevだけ動かすため、prev−nowを渡す。
+    const animate = !reachPrefersReducedMotion();
+    this.map.panBy([dx, dy], { animate, duration: MAP_CIRCLE_FIT_DURATION_SEC });
   }
 
   /**

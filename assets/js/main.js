@@ -21,11 +21,6 @@ import {
 // 予算の帯の幅（¥）。表示するのは「予算−BAND_WIDTHより高く、予算以下」の場所だけ
 // （2026-10-06、Minamiさんの判断により「予算以下すべて」から変更）。
 const BAND_WIDTH = 200;
-// 【2026-10-16、28本目、不具合修正】予算操作帯のボタン文言の「収まるか」判定で、
-// scrollWidthがclientWidthとちょうど同じ（際どい境界値）場合でもフォントの
-// サブピクセル描画の環境差で省略記号が出ることがあったため設けた安全マージン
-// （updateMobileBudgetOverlay()参照）。
-const TEXT_FIT_SAFETY_MARGIN_PX = 3;
 const MIN_BUDGET = 200;
 const MAX_BUDGET = 2000; // 2026-10-06、Minamiさんの判断により¥1000から変更
 const BUDGET_STEP = 100;
@@ -161,7 +156,14 @@ class ReverseTravel {
     // （3本目「この先へ」機能。openSpotDetailById/openSharedSpotForStationなど、
     // 一覧・共有リンクから新規に詳細を開く経路ではこのスタックをリセットする）。
     this.currentReachableCount = 0; // 帯内の到達駅数（デバッグ・将来利用のため保持。表示の分岐には使わない）
-    this.currentBudget = null; // 帯の見出し・0件時のボタン計算に使う直近の検索予算
+    this.currentBudget = null; // 直近の検索予算（地図のピンの色の「検索した金額」）
+    // 【59本目】一覧（見出しの金額帯・カード）が今出している金額。結果画面で＋−を押すと、検索し直さずにこれだけ変わる
+    // （「¥◯で探す」はやめた）。0件時の案内文もこの金額で出す。
+    this.listBudget = null;
+    this.listHasCheaperSpots = false;
+    // 【59本目】¥2,000分の裏取得（scheduleMaxBudgetPrefetch()）が、どの出発駅の分まで終わっているか。
+    // 終わるまでは検索した金額の帯の場所しか持っていないため、＋−で一覧を合わせるのを待つ。
+    this._allSpotsStationId = null;
     this.currentHasCheaperSpots = false; // 帯は0件だが、予算以下にはスポットがあるか（0件案内文の出し分けに使う）
     this.currentSortOrder = 'recommended';
     // 直近に検索した条件（出発駅欄の文字列＋予算）。nullは「まだ一度も検索していない」。
@@ -210,8 +212,7 @@ class ReverseTravel {
       mobileBudgetSlider: document.getElementById('mobile-budget-slider'),
       mobileBudgetDecrement: document.getElementById('mobile-budget-decrement'),
       mobileBudgetIncrement: document.getElementById('mobile-budget-increment'),
-      mobileBudgetSearchBtn: document.getElementById('mobile-budget-search-btn'),
-      mobileBudgetDistance: document.getElementById('mobile-budget-distance'),
+      resultsSheetHandle: document.getElementById('results-sheet-handle'),
       budgetIncrement: document.getElementById('budget-increment'),
       searchBtn: document.getElementById('search-btn'),
       searchPendingNote: document.getElementById('search-pending-note'),
@@ -341,19 +342,6 @@ class ReverseTravel {
       onListTabActivated: () => this.scrollSelectedCardIntoView(),
     });
 
-    // 【2026-10-16、28本目、不具合修正】タブ切替・画面サイズ変更のたびに
-    // 予算操作帯の文字を再判定する（refitMobileBudgetOverlay()参照）。
-    // タブ切替はdisplay:none→flexへの反映後に幅が確定するよう次フレームで
-    // 呼ぶ。resizeは連続発火するため短い間隔で間引く。
-    document.querySelectorAll('.tab-btn').forEach((btn) => {
-      btn.addEventListener('click', () => requestAnimationFrame(() => this.refitMobileBudgetOverlay()));
-    });
-    let resizeRefitTimer = null;
-    window.addEventListener('resize', () => {
-      clearTimeout(resizeRefitTimer);
-      resizeRefitTimer = setTimeout(() => this.refitMobileBudgetOverlay(), 150);
-    });
-
     // 2D/3D切替（4本目①「3D地図の土台」、feature/3d-mapブランチ）。
     // 失敗時（WebGL非対応・ライブラリ/タイル取得失敗）はエラー文言を出さず、
     // 2Dのまま据え置く（Minami指示）。出発駅が決まる前（検索前）は中心座標が
@@ -453,10 +441,6 @@ class ReverseTravel {
       this.updateBudgetUI();
       this.updateMapBudgetLive(value);
     });
-    this.elements.mobileBudgetSearchBtn?.addEventListener('click', () => {
-      this.performSearch();
-    });
-
     this.updateBudgetUI();
 
     // 【2026-10-10追記】スマホ本体の戻る操作（ジェスチャー・物理ボタン）の
@@ -754,83 +738,42 @@ class ReverseTravel {
   }
 
   /**
-   * 【2026-10-13、22本目、Minami決定：B】地図下の予算操作帯の「¥800・16件」
-   * 表示。まだこの金額で検索していない（#budget-inputの値が直近の検索条件と
-   * 違う）間は「¥900で探す」のような押せる見た目のボタンに変える。
-   * 【2026-10-14、25本目、Minami決定：B】地図上の「最大◯km先まで」ラベルを
-   * 廃止した代わりに、ここへ距離を出す。検索済みのときはボタンの文言自体に
-   * 「・最大◯km」を含める。まだ検索していない（スライダーを動かした直後）
-   * ときは、ボタンは「¥◯で探す」のまま変えず、別のspan（#mobile-budget-
-   * distance）に「最大◯km」とだけ出す（動かすたびに変わる）。
-   * 【不具合修正】以前はここで上の要約バー（#search-summary-text）の金額も
-   * その場で書き換えていたが、これだと一覧タブの見出し（「往復¥◯〜¥◯で
-   * 行ける場所」、最後に検索した金額のまま）と食い違う（Cowork指摘）。
-   * 要約バーは「最後に検索した条件」を表す場所なので、ここでは触らない
-   * （検索確定時はdisplayResults()が別途updateSearchSummaryText()を呼ぶ）。
+   * 結果画面の＋−の間の金額（今の金額）。
+   * 【2026-10-26、59本目、Minami決定】以前はここで「¥800・16件・最大7.7km」「¥900で探す」のボタン
+   * （#mobile-budget-search-btn、22本目・25本目）の文言を出し分けていたが、結果画面では＋−を押すと一覧も
+   * 一緒に変わるようにした（syncListToBudget()）ため、ボタンごとやめた（PC・スマホ共通）。
    */
   updateMobileBudgetOverlay(budget) {
-    const btn = this.elements.mobileBudgetSearchBtn;
-    const distanceEl = this.elements.mobileBudgetDistance;
-    if (!btn) return;
-    const pending = this.lastSearchedBudget !== null && budget !== this.lastSearchedBudget;
-    // 【58本目】PCの一覧パネル・細いバーの−と＋の間の金額（今の金額）
     if (this.elements.resultsBudgetValue) this.elements.resultsBudgetValue.textContent = `¥${formatThousands(budget)}`;
-    const radiusKm = this.mapView.computeReachRadiusKm(budget);
-    const distanceText = `最大${formatReachRadiusKm(radiusKm)}`;
-    if (pending) {
-      btn.textContent = `¥${formatThousands(budget)}で探す`;
-      btn.classList.add('mobile-budget-search-btn-pending');
-      if (distanceEl) {
-        distanceEl.textContent = distanceText;
-        distanceEl.hidden = false;
-      }
-    } else {
-      const count = this.currentAllSpots?.length
-        ? this.filterBandFromAllSpots(this.currentAllSpots, budget).bandSpots.length
-        : 0;
-      // 【25本目】375px幅でも1行に収まるよう、まず件数込みの文言を試し、
-      // はみ出す（scrollWidth>clientWidth）場合だけ件数を落として距離を残す
-      // （Minami指示：「収まらないときは件数より距離を優先する」）。
-      // 【2026-10-16、26本目、不具合修正】「+1」の許容差は測定誤差を吸収する
-      // つもりで入れていたが、scrollWidth/clientWidthは整数に丸められた値の
-      // ため、実際に1px超過していて見た目には省略記号で切れているケース
-      // （400×464で実測：scrollWidth160・clientWidth159）まで「収まっている」
-      // と誤判定していた。text-overflow:ellipsisは1px未満の超過でも発動する
-      // ため、許容差を設けず厳密な不等号にする。
-      // 【2026-10-16、28本目、不具合修正】↑の修正だけでは不十分だった。
-      // 件数込みの文言はちょうど収まる幅ギリギリ（scrollWidth===clientWidth）
-      // で設計されており、フォントのサブピクセル描画が環境によって数値を
-      // ±1px押し出すだけで省略記号が出てしまう（実機の確認用スクリーン
-      // ショットで実際に「¥1,000・17件・最大11…」の切れを確認、手元の計測では
-      // 同じ操作で159=159（ちょうど収まる）だった＝環境差でどちらにも転びうる
-      // 際どい境界値だったと判明）。ここに余裕（TEXT_FIT_SAFETY_MARGIN_PX）を
-      // 持たせ、ギリギリの場合は安全側（距離のみ）に倒す。
-      btn.classList.remove('mobile-budget-search-btn-pending');
-      if (distanceEl) distanceEl.hidden = true;
-      btn.textContent = `¥${formatThousands(budget)}・${count}件・${distanceText}`;
-      if (btn.scrollWidth > btn.clientWidth - TEXT_FIT_SAFETY_MARGIN_PX) {
-        btn.textContent = `¥${formatThousands(budget)}・${distanceText}`;
-      }
-    }
   }
 
   /**
-   * 【2026-10-16、28本目、不具合修正】updateMobileBudgetOverlay()の
-   * 件数込み／距離のみの出し分けは、呼ばれた時点でのbtn.clientWidthを見て
-   * 判定するため、呼んだとき実際に見えている幅と違う幅で判定してしまうと
-   * 結果が狂う。検索・金額操作のたびには呼んでいたが、「一覧／地図」タブを
-   * 切り替えたとき・画面の大きさが変わったとき（スマホの回転等）には
-   * 呼んでおらず、Cowork実機で一覧タブの操作帯が「¥1,000・17件・最大1…」と
-   * 切れたまま直らない例が見つかった。今の#budget-inputの値でいつでも
-   * 再判定できるよう、この薄いラッパーをタブ切替・resizeのたびに呼ぶ
-   * （setupEventListeners()のタブボタン・window.resizeのリスナー参照）。
+   * 【2026-10-26、59本目、Minami決定】結果画面で＋−を押したら、一覧（見出しの金額帯・カード）も今の金額に
+   * 合わせる（地図・「◯か所」「NEW +N」と一緒に変わる。押すボタンは＋−だけ）。検索し直しはしない（地図の
+   * 合わせ方・＋の波・ピンの色は今までの＋−の決まりのまま。ピンの色の「検索した金額」も変えない）。
+   * ¥2,000分の裏取得が終わるまでは検索した金額の帯の場所しか持っていないため、終わってから合わせる
+   * （裏取得の反映でupdateMapBudgetLive()が呼ばれ直す）。
+   * 一覧が今の金額を出しているので、「この条件で探す」の比べる相手（lastSearchedBudget）もこの金額にする
+   * （「条件を変える」で開いたとき「条件が変わりました」と出さない・「▲閉じる」でこの金額に戻す）。
+   * @param {number} budget
    */
-  refitMobileBudgetOverlay() {
-    if (!this.elements.mobileBudgetOverlay || this.elements.mobileBudgetOverlay.hidden) return;
-    this.updateMobileBudgetOverlay(parseInt(this.elements.budgetInput.value, 10));
+  syncListToBudget(budget) {
+    const layout = this.elements.appLayout;
+    if (!layout.classList.contains('has-results') || !layout.classList.contains('form-collapsed')) return;
+    if (this.listBudget === null || budget === this.listBudget) return;
+    if (this._allSpotsStationId === null || this._allSpotsStationId !== this.currentDepartureStationId) return;
+    const { bandSpots, hasCheaperSpots } = this.filterBandFromAllSpots(this.currentAllSpots, budget);
+    this.listBudget = budget;
+    this.listHasCheaperSpots = !!hasCheaperSpots;
+    this.currentSpots = bandSpots;
+    this.lastSearchedBudget = budget;
+    if (this.elements.bandHeading) this.elements.bandHeading.innerHTML = bandHeadingHtml(budget, bandSpots.length);
+    this.renderResultsList();
+    this.updateSearchButtonState();
   }
 
   /**
+   * 予算スライダー・±ボタンの1コマ分  /**
    * 予算スライダー・±ボタンの1コマ分（4本目③、2026-10-13 10本目①で全面変更）。
    * 【10本目、Minami決定：A】地図の点（光る点・薄い点）は変えない。点は、
    * 最後に検索したときの状態のまま。代わりに、出発駅を中心にした到達範囲の円
@@ -878,6 +821,8 @@ class ReverseTravel {
       this.mapView.scheduleFitCircleToView();
       this.terrainMapView?.scheduleFitCircleToView();
     }
+    // 【59本目】結果画面では一覧も一緒に今の金額に合わせる
+    this.syncListToBudget(budget);
     if (!this.currentAllSpots || this.currentAllSpots.length === 0) {
       this.elements.budgetBandPreview.hidden = true;
       return;
@@ -1351,6 +1296,7 @@ class ReverseTravel {
         const { allSpots } = await this.computeSearchResult(stationId, MAX_BUDGET);
         if (this.currentDepartureStationId !== stationId) return;
         this.currentAllSpots = allSpots;
+        this._allSpotsStationId = stationId; // 【59本目】これで＋−の一覧合わせができる
         // 【2026-10-13、10本目②修正】ここで即render()し直すと、検索直後に
         // 始まったばかりの「波のように出る」演出を、マーカーの作り直しで
         // 無言のまま中断・リセットしてしまう（render()はwaveの進行中かどうかに
@@ -1464,6 +1410,10 @@ class ReverseTravel {
     this.currentReachableCount = reachableCount;
     this.currentBudget = budget;
     this.currentHasCheaperSpots = !!hasCheaperSpots;
+    this.listBudget = budget;
+    this.listHasCheaperSpots = !!hasCheaperSpots;
+    // 渡されたallSpotsが¥2,000分かどうかはここでは分からないため、いったん「まだ」にする（裏取得・共有リンクで付け直す）
+    this._allSpotsStationId = null;
     this.currentSortOrder = 'recommended';
     this.elements.sortSelect.value = 'recommended';
 
@@ -1696,6 +1646,34 @@ class ReverseTravel {
     this.elements.resultsListCloseBtn?.addEventListener('click', () => this.setResultsListOpen(false));
     this.elements.resultsListOpenBtn?.addEventListener('click', () => this.setResultsListOpen(true));
 
+    // 【59本目】スマホの下の一覧のつまみ：押すと小⇔大、上にドラッグすると大、下にドラッグすると小
+    // （30px以上動かしたときだけドラッグとして扱い、そのあとのclickは無視する）。
+    const handle = this.elements.resultsSheetHandle;
+    if (handle) {
+      let dragStartY = null;
+      let dragged = false;
+      handle.addEventListener('pointerdown', (e) => {
+        dragStartY = e.clientY;
+        dragged = false;
+        handle.setPointerCapture?.(e.pointerId);
+      });
+      handle.addEventListener('pointermove', (e) => {
+        if (dragStartY === null) return;
+        const dy = e.clientY - dragStartY;
+        if (Math.abs(dy) < 30) return;
+        dragged = true;
+        dragStartY = null;
+        this.setSheetLarge(dy < 0);
+      });
+      const end = () => { dragStartY = null; };
+      handle.addEventListener('pointerup', end);
+      handle.addEventListener('pointercancel', end);
+      handle.addEventListener('click', () => {
+        if (dragged) { dragged = false; return; }
+        this.setSheetLarge(!this.layoutController?.isSheetLarge());
+      });
+    }
+
     // スマホのヘッダーの「☰」：使い方・2D / 3D・マイリストを出す。メニューの外を押したら閉じる。
     this.elements.headerMenuBtn?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1910,6 +1888,7 @@ class ReverseTravel {
       this.updateSearchButtonState();
 
       this.displayResults(bandSpots, stationId, prefCode, reachableCount, alignedBudget, hasCheaperSpots, allSpots);
+      this._allSpotsStationId = stationId; // 【59本目】ここで渡したallSpotsは¥2,000分
       this.detailHistory = []; // 共有リンク・マイリストからの新規の詳細表示なので履歴をリセットする
       history.pushState({}, ''); // スマホの戻る操作で一覧に戻れるよう、履歴を1つ積む（URLは変えない）
       this.showSpotDetail(spotForDetail);
@@ -2261,10 +2240,11 @@ class ReverseTravel {
    * this.currentHasCheaperSpots（performSearch()が設定）で両者を出し分ける。
    */
   async buildNoResultsMessage() {
-    const budget = this.currentBudget;
+    // 【59本目】＋−で一覧が今の金額に合わせて変わるため、検索した金額ではなく一覧の金額で出す
+    const budget = this.listBudget ?? this.currentBudget;
     const { lower, higher } = await this.findNearestBudgetsWithResults(budget);
 
-    let html = this.currentHasCheaperSpots
+    let html = this.listHasCheaperSpots
       ? `<p class="no-results">この駅からは、往復¥${budget - BAND_WIDTH}以下で行ける場所しかありません。</p>`
       : `<p class="no-results">往復${formatBandLabel(budget)}で行ける場所は見つかりませんでした。</p>`;
     if (lower !== null || higher !== null) {
@@ -2513,6 +2493,56 @@ class ReverseTravel {
     this.elements.spotInfoContent.querySelector('.spot-info-detail-btn')
       ?.addEventListener('click', () => this.openSpotDetailById(spot.id));
     this.elements.spotInfoPanel.hidden = false;
+    this.placeSpotInfoPanel();
+  }
+
+  /**
+   * 【2026-10-26、59本目】スマホの結果画面の名前の帯の置き場所：見えている範囲の上の端（上の＋−カードのすぐ下）の
+   * 左寄せ・右寄せ、下の端（下の一覧のすぐ上）の左寄せのうち、描いているピン・まとめた丸を隠す数が一番少ないところ
+   * （同じなら、上の左→上の右→下の順）。右下の部品の列・出典にかかる置き場所は選ばない。選ぶのは帯を出したとき
+   * だけ（地図が止まるたびに選び直すと、ピンを押したあとの地図の動きで帯が跳び、押そうとした「詳細を見る」が逃げるため）。
+   * そのあと帯の幅を、右下の部品の列・出典の手前までにする。
+   * PCは今までどおり（下の端、幅はupdateSpotInfoPanelMaxWidth()）。
+   */
+  placeSpotInfoPanel() {
+    const panel = this.elements.spotInfoPanel;
+    if (!panel || panel.hidden) return;
+    const layout = this.elements.appLayout;
+    const mobileResults = !window.matchMedia('(min-width: 760px)').matches
+      && layout.classList.contains('has-results') && layout.classList.contains('form-collapsed');
+    panel.classList.remove('spot-info-at-bottom', 'spot-info-at-right');
+    if (!mobileResults) {
+      this.updateSpotInfoPanelMaxWidth();
+      return;
+    }
+    const mapArea = document.getElementById('map-area');
+    const map = mapArea.getBoundingClientRect();
+    const head = document.querySelector('.results-head')?.getBoundingClientRect();
+    const sheet = document.querySelector('.results-sheet')?.getBoundingClientRect();
+    const pb = panel.getBoundingClientRect();
+    const h = pb.height || 40;
+    const w = pb.width || map.width - 16;
+    const topY = (head && head.height > 0 ? head.bottom : map.top) + 6;
+    const bottomY = (sheet && sheet.height > 0 ? sheet.top : map.bottom) - 8 - h;
+    const view = this.mapMode === '3d' && mapArea.classList.contains('mode-3d') ? this.terrainMapView : this.mapView;
+    // 右側の部品（部品の列の中の部品・出典・「データ出典・免責」）
+    const rightParts = [...(document.getElementById('map-controls-cluster')?.children || []),
+      mapArea.querySelector('.leaflet-control-attribution, .maplibregl-ctrl-attrib'), document.getElementById('map-data-line')]
+      .filter((el) => el && el.offsetParent !== null && !el.hidden && getComputedStyle(el).visibility !== 'hidden')
+      .map((el) => el.getBoundingClientRect()).filter((b) => b.width > 0);
+    const hits = (r) => rightParts.some((b) => r.left < b.right && r.right > b.left && r.top < b.bottom && r.bottom > b.top);
+    const candidates = [
+      { cls: null, rect: { left: map.left + 8, right: map.left + 8 + w, top: topY, bottom: topY + h } },
+      { cls: 'spot-info-at-right', rect: { left: map.right - 8 - w, right: map.right - 8, top: topY, bottom: topY + h } },
+      { cls: 'spot-info-at-bottom', rect: { left: map.left + 8, right: map.left + 8 + w, top: bottomY, bottom: bottomY + h } },
+    ].filter((c, i) => i === 0 || (c.rect.top >= topY && !hits(c.rect)));
+    let best = candidates[0];
+    let bestCount = Infinity;
+    candidates.forEach((c) => {
+      const n = view?.countDrawnPinsInRect(c.rect, { afterRevealOf: this.selectedSpotId }) ?? 0;
+      if (n < bestCount) { best = c; bestCount = n; }
+    });
+    if (best.cls) panel.classList.add(best.cls);
     this.updateSpotInfoPanelMaxWidth();
   }
 
@@ -2534,7 +2564,24 @@ class ReverseTravel {
     if (!panel) return;
     const isDesktop = window.matchMedia('(min-width: 760px)').matches;
     if (!isDesktop) {
+      // 【59本目】スマホの結果画面では帯を見えている範囲の上の端に出す（style.css）。右下の部品の列が帯の高さまで
+      // 伸びているときは、その手前（すき間8px）までの幅にする（PCと同じやり方）。
       panel.style.maxWidth = '';
+      const mapArea = document.getElementById('map-area');
+      const cluster = document.getElementById('map-controls-cluster');
+      if (!mapArea || !cluster) return;
+      const pr = panel.getBoundingClientRect();
+      if (pr.height === 0) return;
+      // 帯と縦に重なる右側の部品（部品の列の中の部品・出典・「データ出典・免責」）の左の端の手前まで
+      const parts = [...cluster.children, mapArea.querySelector('.leaflet-control-attribution, .maplibregl-ctrl-attrib'), document.getElementById('map-data-line')]
+        .filter((el) => el && el.offsetParent !== null && !el.hidden && getComputedStyle(el).visibility !== 'hidden')
+        .map((el) => el.getBoundingClientRect())
+        .filter((b) => b.width > 0 && b.top < pr.bottom + 4 && b.bottom > pr.top - 4);
+      if (parts.length > 0) {
+        const left = parseFloat(getComputedStyle(panel).left) || 8;
+        const right = Math.min(...parts.map((b) => b.left)) - mapArea.getBoundingClientRect().left;
+        panel.style.maxWidth = `${Math.max(100, right - left - 8)}px`;
+      }
       return;
     }
     const mapArea = document.getElementById('map-area');
@@ -2696,11 +2743,32 @@ class ReverseTravel {
    * @param {boolean} open
    */
   setResultsListOpen(open) {
-    if (!this.layoutController?.setResultsListOpen(open)) return;
+    this.changeVisibleArea(() => this.layoutController?.setResultsListOpen(open));
+  }
+
+  /**
+   * 【2026-10-26、59本目】スマホの結果画面の下の一覧を大・小にする（見本⑤⑥）。見えている範囲が変わるため、
+   * 一覧の開け閉めと同じ決まり（A）で地図を合わせ直す。PCでは何もしない。
+   * @param {boolean} large
+   */
+  setSheetLarge(large) {
+    this.changeVisibleArea(() => this.layoutController?.setSheetLarge(large));
+  }
+
+  /**
+   * 【59本目】見えている範囲が変わる操作（applyがtrueを返したら変わった）。変わる前の見えている範囲の真ん中を
+   * 覚えておき、2D・3Dに知らせる（handleVisibleAreaChanged()：円に合わせたままなら合わせ直す、利用者が
+   * 動かしたあとなら、それまで真ん中にあった場所を新しい真ん中へ横にずらす。59本目、Minami決定：A）。
+   * @param {() => boolean} apply
+   */
+  changeVisibleArea(apply) {
+    const before2d = this.mapView.captureVisibleCenter();
+    const before3d = this.terrainMapView?.captureVisibleCenter() ?? null;
+    if (!apply()) return;
     this.updateSpotInfoPanelMaxWidth();
     requestAnimationFrame(() => {
-      this.mapView.handleVisibleAreaChanged();
-      this.terrainMapView?.handleVisibleAreaChanged();
+      this.mapView.handleVisibleAreaChanged(before2d);
+      this.terrainMapView?.handleVisibleAreaChanged(before3d);
     });
   }
 
@@ -2903,6 +2971,8 @@ class ReverseTravel {
     this._currentDetailSpot = spot; // 詳細画面の☆・共有ボタンから参照する
     // 【58本目】詳細は一覧パネルの中に出すため、PCで一覧を閉じているときは開く
     this.setResultsListOpen(true);
+    // 【59本目】スマホでは下の一覧を大にする（詳細は一覧の中に出すため）
+    this.setSheetLarge(true);
     const routeInfoHtml = this.routeFormatter && this.currentDepartureStationId
       ? this.routeFormatter.format(this.currentDepartureStationId, spot)
       : '';

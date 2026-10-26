@@ -3209,9 +3209,6 @@ body {
     color: #333;
   }
 
-  #app-layout.has-results.form-collapsed .map-legend {
-    display: none;
-  }
 
   /* 見出し「¥601〜¥800 の場所」と右に「12か所」、下に紺の線。一覧だけがパネルの中でスクロールする */
   .results-panel #results-container {
@@ -3370,7 +3367,7 @@ body {
 
   #app-layout.results-list-closed .results-panel #results-container,
   #app-layout.results-list-closed .results-panel #detail-container,
-  #app-layout.results-list-closed .results-panel > .data-line,
+  #app-layout.results-list-closed .results-sheet > .data-line,
   #app-layout.results-list-closed .results-panel #search-summary-toggle,
   #app-layout.results-list-closed .results-panel #mobile-budget-search-btn,
   #app-layout.results-list-closed .results-panel #mobile-budget-distance,
@@ -3439,5 +3436,507 @@ body {
   /* 名前の帯：閉じている間は、検索前と同じ位置 */
   #app-layout.has-results.form-collapsed.results-list-closed .spot-info-panel {
     left: 90px;
+  }
+}
+
+/* ========================================
+   【2026-10-26、59本目】スマホの結果画面（見本⑤：上の＋−カードと小さい一覧、⑥：大きい一覧）
+   結果の入れ物（.results-panel）は、上の部分（.results-head）と下の部分（.results-sheet）に分けてある。
+   PCでは2つともdisplay: contentsで、中身がこれまでどおりパネルの中に並ぶ（58本目の見た目のまま）。
+   スマホではパネル自体がdisplay: contentsになり、上の部分は地図の上に浮かせたカード、下の部分は下から
+   引き出す一覧（小・大の2段。#app-layoutの.sheet-large、低い画面では小を見出しだけにする.sheet-compact。
+   layout-controller.jsのupdateSheetLayout()）。
+   ======================================== */
+.results-head,
+.results-sheet {
+  display: contents;
+}
+
+.results-sheet-handle {
+  display: none;
+}
+
+/* 結果画面では、色の説明は地図の上の中央ではなく、一覧（PCはパネル・バー、スマホは下の一覧）の中に出す */
+#app-layout.has-results.form-collapsed .map-legend {
+  display: none;
+}
+
+@media (max-width: 759px) {
+  #app-layout.has-results.form-collapsed .results-panel {
+    display: contents;
+  }
+
+  /* ---- 上の＋−カード ---- */
+  #app-layout.has-results.form-collapsed .results-head {
+    display: block;
+    position: absolute;
+    z-index: 1100;
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    padding: 7px 14px 9px;
+    border-radius: 12px;
+    background: white;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  }
+
+  /* 1行目：「○○から　条件を変える」（PCの閉じたときのバーと同じ言い方） */
+  .results-head .search-summary {
+    justify-content: flex-start;
+    gap: 12px;
+    margin: 0 0 4px;
+    padding: 0;
+    background: none;
+    border-radius: 0;
+    box-shadow: none;
+    font-size: 0.72rem;
+    font-weight: 400;
+  }
+
+  .results-head #search-summary-text,
+  .results-head .summary-toggle-arrow,
+  .results-departure-open {
+    display: none;
+  }
+
+  .results-departure {
+    display: inline;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-text-sub);
+  }
+
+  .results-departure-closed {
+    display: inline;
+  }
+
+  .results-head #search-summary-toggle {
+    padding: 0;
+    color: var(--color-text-sub);
+    font-size: 0.72rem;
+    font-weight: 400;
+    text-decoration: underline;
+  }
+
+  /* 2行目：−・「予算（往復）」¥800・＋、右に「◯か所」「NEW +N」 */
+  .results-head .mobile-budget-overlay {
+    height: auto;
+    margin: 0;
+    padding: 0;
+    gap: 8px;
+    border: none;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  .results-head .mobile-budget-overlay #mobile-budget-decrement,
+  .results-head .mobile-budget-overlay #mobile-budget-increment {
+    width: 36px;
+    height: 36px;
+    border: 2px solid var(--color-accent);
+    color: var(--color-accent);
+    font-size: 1.3rem;
+    line-height: 1;
+  }
+
+  .results-head .mobile-budget-overlay #mobile-budget-increment {
+    background: var(--color-accent);
+    color: white;
+  }
+
+  .results-budget-amount {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.1;
+  }
+
+  .results-budget-label {
+    font-size: 0.62rem;
+    color: var(--color-text-sub);
+  }
+
+  #results-budget-value {
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: var(--color-text);
+    white-space: nowrap;
+  }
+
+  .results-counts {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 3px;
+    margin-left: auto;
+  }
+
+  #results-map-count {
+    font-size: 1.1rem;
+    font-weight: 800;
+    color: var(--color-text);
+    white-space: nowrap;
+  }
+
+  /* ---- 下から引き出す一覧 ---- */
+  #app-layout.has-results.form-collapsed .results-sheet {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    z-index: 1100;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-height: calc(100% - var(--results-head-bottom, 90px) - 8px);
+    padding: 0 12px;
+    border-radius: 14px 14px 0 0;
+    background: white;
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.15);
+  }
+
+  /* 上のつまみ（横棒）。押すと小⇔大、上下にドラッグしても切り替わる（main.js） */
+  .results-sheet-handle {
+    display: block;
+    position: relative;
+    flex: 0 0 auto;
+    align-self: center;
+    width: 88px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .results-sheet-handle::before {
+    content: '';
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    width: 40px;
+    height: 4px;
+    margin-left: -20px;
+    border-radius: 2px;
+    background: #c8c8c8;
+  }
+
+  .results-sheet #results-container,
+  .results-sheet #detail-container {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .results-sheet #results-container {
+    overflow: hidden;
+  }
+
+  .results-sheet #detail-container {
+    overflow-y: auto;
+  }
+
+  /* 色の説明：小のときは見出しと同じ行の右（見本⑤）、大のときは見出しの上の右（見本⑥） */
+  .results-sheet .results-legend {
+    display: flex;
+    gap: 10px;
+    margin: 0;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 16px;
+    color: #333;
+  }
+
+  #app-layout:not(.sheet-large) .results-sheet .results-legend {
+    position: absolute;
+    top: 24px;
+    right: 12px;
+  }
+
+  .results-sheet .results-band-heading {
+    margin: 0 0 8px;
+    padding-right: 140px;
+    color: var(--color-text);
+    font-size: 0.95rem;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+
+  /* 小：横に並べたカード（3枚目が少し見える幅、横にスクロール）。写真が上、名前・NEW・金額が下 */
+  #app-layout:not(.sheet-large) .results-sheet #sort-controls,
+  #app-layout:not(.sheet-large) .results-sheet > .data-line,
+  #app-layout:not(.sheet-large) .results-sheet #detail-container {
+    display: none;
+  }
+
+  #app-layout:not(.sheet-large) .results-sheet #results-list {
+    display: flex;
+    flex-direction: row;
+    gap: 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 10px;
+    scroll-snap-type: x proximity;
+  }
+
+  #app-layout:not(.sheet-large) .results-sheet .spot-card {
+    flex: 0 0 40%;
+    min-height: 0;
+    border: 1px solid var(--color-border);
+    box-shadow: none;
+    scroll-snap-align: start;
+  }
+
+  #app-layout:not(.sheet-large) .results-sheet .spot-card:hover {
+    transform: none;
+  }
+
+  #app-layout:not(.sheet-large) .results-sheet .spot-image {
+    height: 78px;
+  }
+
+  #app-layout:not(.sheet-large) .results-sheet .spot-card h3 {
+    padding: 6px 8px 0;
+    font-size: 0.82rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #app-layout:not(.sheet-large) .results-sheet .spot-summary {
+    padding: 0 8px;
+    margin: 2px 0 6px;
+    font-size: 0.72rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #app-layout:not(.sheet-large) .results-sheet .spot-card-actions,
+  #app-layout:not(.sheet-large) .results-sheet .spot-description,
+  #app-layout:not(.sheet-large) .results-sheet .support-badge,
+  #app-layout:not(.sheet-large) .results-sheet .support-badge-note,
+  #app-layout:not(.sheet-large) .results-sheet .spot-frequency-note,
+  #app-layout:not(.sheet-large) .results-sheet .detail-btn {
+    display: none;
+  }
+
+  #app-layout:not(.sheet-large) .results-sheet .spot-card-new {
+    top: 4px;
+    left: 4px;
+    padding: 0 4px;
+    font-size: 10px;
+    line-height: 15px;
+  }
+
+  /* 低い画面（.sheet-compact）の小：見出しの1行だけ（横のカードは出さず、見えている範囲を広げる） */
+  #app-layout.sheet-compact:not(.sheet-large) .results-sheet #results-list {
+    display: none;
+  }
+
+  /* 0件のときの案内文と「往復¥◯で探す」のボタン（0件の案内）は、小でも縦に並べ、低い画面でも隠さない */
+  #app-layout:not(.sheet-large) .results-sheet #results-list:has(.no-results) {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    overflow-x: hidden;
+  }
+
+  #app-layout.sheet-compact:not(.sheet-large) .results-sheet .results-band-heading {
+    margin-bottom: 10px;
+  }
+
+  /* 小のときの「データ出典・免責」は、地図の右下の出典の「i」のすぐ左（PCの閉じたときと同じ） */
+  #app-layout.has-results.form-collapsed:not(.sheet-large) .map-data-line {
+    display: block;
+    position: absolute;
+    right: var(--map-attrib-room, 40px);
+    bottom: calc(var(--map-inset-bottom, 0px) + 3px);
+    z-index: 1000;
+    margin: 0;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+    font-size: 0.72rem;
+  }
+
+  /* 大：色の説明、見出し「¥601〜¥800 の場所」と右に「12か所」・紺の線、縦の一覧、並び替え、一番下に「データ出典・免責」 */
+  #app-layout.sheet-large .results-sheet {
+    height: var(--sheet-large-h, 60%);
+  }
+
+  #app-layout.sheet-large .results-sheet .results-legend {
+    justify-content: flex-end;
+    margin: 0 0 2px;
+  }
+
+  #app-layout.sheet-large .results-sheet .results-band-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin: 0 0 6px;
+    padding: 0 0 6px;
+    border-bottom: 2px solid #1f3c88;
+  }
+
+  #app-layout.sheet-large .band-heading-count {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--color-text-sub);
+  }
+
+  #app-layout.sheet-large .results-sheet #sort-controls {
+    margin-bottom: 4px;
+    font-size: 0.75rem;
+  }
+
+  #app-layout.sheet-large .results-sheet #sort-select {
+    padding: 0.15rem 0.4rem;
+    font-size: 0.75rem;
+  }
+
+  #app-layout.sheet-large .results-sheet #results-list {
+    gap: 0;
+  }
+
+  #app-layout.sheet-large .results-sheet > .data-line {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 6px 0 8px;
+  }
+
+  /* 大のカードはPCの一覧パネルと同じ並び（写真を左に64px、名前・運賃などを右に） */
+  #app-layout.sheet-large .results-sheet .spot-card {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr) auto;
+    column-gap: 10px;
+    align-items: start;
+    min-height: 0;
+    padding: 10px 2px;
+    border-bottom: 1px solid var(--color-border);
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  #app-layout.sheet-large .results-sheet .spot-card:hover {
+    transform: none;
+    box-shadow: none;
+  }
+
+  #app-layout.sheet-large .results-sheet .spot-card > * {
+    grid-column: 2 / 4;
+  }
+
+  #app-layout.sheet-large .results-sheet .spot-image {
+    grid-column: 1;
+    grid-row: 1 / span 4;
+    width: 64px;
+    height: 64px;
+    border-radius: 8px;
+  }
+
+  #app-layout.sheet-large .results-sheet .spot-card h3 {
+    grid-column: 2;
+    grid-row: 1;
+    padding: 0;
+    font-size: 0.9rem;
+  }
+
+  #app-layout.sheet-large .results-sheet .spot-card-actions {
+    position: static;
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    gap: 2px;
+  }
+
+  #app-layout.sheet-large .results-sheet .favorite-btn,
+  #app-layout.sheet-large .results-sheet .share-btn {
+    box-shadow: none;
+  }
+
+  #app-layout.sheet-large .results-sheet .spot-card-new {
+    top: 8px;
+    left: 0;
+    padding: 0 4px;
+    font-size: 10px;
+    line-height: 15px;
+  }
+
+  #app-layout.sheet-large .results-sheet .spot-summary {
+    grid-column: 2;
+    grid-row: 2;
+    padding: 0;
+    margin: 2px 0;
+    font-size: 0.8rem;
+  }
+
+  #app-layout.sheet-large .results-sheet .spot-description {
+    padding: 0;
+    margin: 0 0 2px;
+    font-size: 0.75rem;
+    -webkit-line-clamp: 1;
+  }
+
+  #app-layout.sheet-large .results-sheet .support-badge {
+    padding: 2px 0 0;
+  }
+
+  #app-layout.sheet-large .results-sheet .support-badge-note {
+    margin: 4px 0;
+    font-size: 0.72rem;
+  }
+
+  #app-layout.sheet-large .results-sheet .spot-frequency-note {
+    padding: 0;
+    margin: 0 0 2px;
+    font-size: 0.7rem;
+  }
+
+  #app-layout.sheet-large .results-sheet .detail-btn {
+    justify-self: end;
+    width: auto;
+    margin-top: 2px;
+    padding: 2px 12px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+  }
+
+  /* ---- 名前の帯：見えている範囲の上の端（上の＋−カードのすぐ下）。下の方のピン・右下の部品の列・出典にかぶらない ---- */
+  #app-layout.has-results.form-collapsed .spot-info-panel {
+    top: calc(var(--results-head-bottom, 90px) + 6px);
+    bottom: auto;
+    /* 中身の幅だけ（PCと同じ）。隠すピンを少なくするため */
+    right: auto;
+    width: fit-content;
+    max-width: calc(100% - 16px);
+  }
+
+  /* 上の端だと描いているピンを多く隠すときは、下の端（下の一覧のすぐ上）に出す（main.jsのplaceSpotInfoPanel()） */
+  /* 上の端の左寄せだとピンを多く隠すときは、右寄せにする（main.jsのplaceSpotInfoPanel()） */
+  #app-layout.has-results.form-collapsed .spot-info-panel.spot-info-at-right {
+    left: auto;
+    right: 8px;
+  }
+
+  #app-layout.has-results.form-collapsed .spot-info-panel.spot-info-at-bottom {
+    top: auto;
+    bottom: calc(var(--map-inset-bottom, 0px) + 8px);
+  }
+
+  /* ---- 右下の部品の列：上の＋−カードと下の一覧の間に入りきらないときは、ズーム＋−から隠す（layout-controller.js） ---- */
+  .map-controls-cluster.cluster-no-zoom .map-zoom-controls {
+    display: none;
+  }
+
+  .map-controls-cluster.cluster-hidden {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .map-controls-cluster.cluster-hidden * {
+    visibility: hidden;
+    pointer-events: none;
   }
 }

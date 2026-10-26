@@ -276,6 +276,10 @@ function visibleMapRect(container) {
     if (el.hidden) return;
     // 【58本目】PCで一覧を閉じたときの細いバー（data-map-overlay="bar"）は、覆う入れ物ではなく円が避ける部品
     if (el.getAttribute('data-map-overlay') === 'bar') return;
+    // 【59本目】入れ物の中の入れ物（PCの一覧パネルの中の上の部分・下の部分）は、外の入れ物で数える。
+    // スマホでは外の入れ物（.results-panel）がdisplay: contentsで箱を持たないため、中の2つを数える。
+    const outer = el.parentElement && el.parentElement.closest('[data-map-overlay]');
+    if (outer && getComputedStyle(outer).display !== 'contents') return;
     const cs = getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden') return;
     const b = el.getBoundingClientRect();
@@ -2009,12 +2013,49 @@ export class TerrainMapView {
   }
 
   /**
-   * 【58本目】見えている範囲が変わったとき（PCの一覧パネルを開け閉めしたとき）。地図が最後に円に合わせたときの
-   * ままなら、新しい見えている範囲の真ん中へ出発駅を合わせ直す（傾き・向きはそのまま。円の大きさの決め方・
-   * 動きの時間は今までの地図合わせと同じ）。利用者が地図を動かしたあと（ピンへ寄ったあとを含む）は合わせ直さない
-   * （58本目の報告で確認中）。地図が見えていない（2D表示中）ときは、次に見えたとき（resize()）に合わせ直す。
+   * 【59本目】画面上の四角（clientの座標）の中に中心がある、描いている点・まとめた丸の数（名前の帯の置き場所を
+   * 選ぶため。main.jsのplaceSpotInfoPanel()）。丸に入れて透明にした点は数えない。
    */
-  handleVisibleAreaChanged() {
+  countDrawnPinsInRect(rect) {
+    if (!this.map) return 0;
+    const container = this.map.getContainer();
+    if (container.clientWidth === 0 || container.clientHeight === 0) return 0;
+    const box = container.getBoundingClientRect();
+    const layers = [SPOTS_LAYER_ID, 'spots-plain-circle'].filter((id) => this.map.getLayer(id));
+    let n = 0;
+    try {
+      const absorbed = this._absorbedIds || new Set();
+      this.map.queryRenderedFeatures([[rect.left - box.left, rect.top - box.top], [rect.right - box.left, rect.bottom - box.top]], { layers })
+        .forEach((f) => { if (!absorbed.has(f.properties.id)) n++; });
+    } catch { /* 地図の準備前 */ }
+    container.querySelectorAll('.map-cluster-3d').forEach((el) => {
+      const b = el.getBoundingClientRect();
+      const cx = b.left + b.width / 2;
+      const cy = b.top + b.height / 2;
+      if (cx > rect.left && cx < rect.right && cy > rect.top && cy < rect.bottom) n++;
+    });
+    return n;
+  }
+
+  /** 【59本目】今の見えている範囲の真ん中（地図の入れ物の左上を基準にしたpx）。見えていないときはnull。 */
+  captureVisibleCenter() {
+    if (!this.map) return null;
+    const container = this.map.getContainer();
+    if (container.clientWidth === 0 || container.clientHeight === 0) return null;
+    const v = visibleMapRect(container);
+    return { x: (v.left + v.right) / 2, y: (v.top + v.bottom) / 2 };
+  }
+
+  /**
+   * 【58本目・59本目】見えている範囲が変わったとき（PCの一覧パネルの開け閉め、スマホの下の一覧の小・大）。
+   * - 地図が最後に円に合わせたときのままなら、新しい見えている範囲の真ん中へ出発駅を合わせ直す（傾き・向きは
+   *   そのまま。円の大きさの決め方・動きの時間は今までの地図合わせと同じ）。
+   * - 利用者が地図を動かしたあと（ピンへ寄ったあとを含む）は、ズーム・傾き・向きはそのままで、それまで見えている
+   *   範囲の真ん中にあった場所を、新しい見えている範囲の真ん中へ横にずらす（59本目、Minami決定：A）。
+   * 地図が見えていない（2D表示中）ときは、円に合わせたままなら次に見えたとき（resize()）に合わせ直す。
+   * @param {{x:number, y:number}|null} [prevCenter] 変わる前の見えている範囲の真ん中（captureVisibleCenter()）
+   */
+  handleVisibleAreaChanged(prevCenter = null) {
     if (!this.map || !this._lastDepartureStation || !(this._reachCircleRadiusKm > 0)) return;
     const container = this.map.getContainer();
     if (container.clientWidth === 0 || container.clientHeight === 0) {
@@ -2022,9 +2063,22 @@ export class TerrainMapView {
       return;
     }
     this._pendingVisibleAreaRefit = false;
-    if (!this.isAtLastCircleFit()) return;
-    this._cancelFitCircleToView();
-    this.fitCircleToView({ radiusKm: this._reachCircleRadiusKm });
+    if (this.isAtLastCircleFit()) {
+      this._cancelFitCircleToView();
+      this.fitCircleToView({ radiusKm: this._reachCircleRadiusKm });
+      return;
+    }
+    if (!prevCenter) return;
+    // それまで見えている範囲の真ん中にあった地面の場所を、新しい見えている範囲の真ん中（padding）に置く。
+    this._flySpotToken++; // 寄る途中（降りる→傾ける）だったら、あとの傾けで位置を上書きしない
+    this.map.easeTo({
+      center: this.map.unproject([prevCenter.x, prevCenter.y]),
+      zoom: this.map.getZoom(),
+      pitch: this.map.getPitch(),
+      bearing: this.map.getBearing(),
+      padding: visiblePadding(container),
+      duration: prefersReducedMotion() ? 0 : CIRCLE_FIT_DURATION_MS,
+    });
   }
 
   // 【2026-10-20、39本目】ここにあった旧「全体表示」fitToBudget()（スポット座標基準・
