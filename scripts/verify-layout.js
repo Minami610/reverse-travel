@@ -1958,11 +1958,13 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
         if (pinScreenPos) {
           const box = await page.locator('#map-area').boundingBox();
           await page.mouse.click(box.x + pinScreenPos.x, box.y + pinScreenPos.y);
-          detailBtnVisible = await page.locator('.spot-info-detail-btn').first().isVisible().catch(() => false);
+          // 【64本目】名前の帯はやめ、スマホではピンを押すと下の一覧（小）がその場所のカードに入れ替わる
+          await page.waitForTimeout(200);
+          detailBtnVisible = await page.locator('.sheet-spot-detail-btn').first().isVisible().catch(() => false);
         }
-        record(`[${label}] 地図タブでピンをタップすると下の情報枠が出る`, detailBtnVisible);
+        record(`[${label}] 地図でピンをタップすると下にその場所のカードが出る`, detailBtnVisible);
         if (detailBtnVisible) {
-          const btnBox = await page.locator('.spot-info-detail-btn').first().boundingBox();
+          const btnBox = await page.locator('.sheet-spot-detail-btn').first().boundingBox();
           await page.mouse.click(btnBox.x + btnBox.width / 2, btnBox.y + btnBox.height / 2);
           await page.waitForFunction(
             () => document.getElementById('app-layout')?.getAttribute('data-view') === 'detail',
@@ -1972,7 +1974,7 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
         const dataViewAfterReturn = await page.evaluate(
           () => document.getElementById('app-layout')?.getAttribute('data-view')
         );
-        record(`[${label}] 地図タブで情報枠の「詳細を見る」を実クリックすると詳細へ戻れる`, dataViewAfterReturn === 'detail', `data-view=${dataViewAfterReturn}`);
+        record(`[${label}] 場所のカードの「詳細を見る」を実クリックすると詳細へ戻れる`, dataViewAfterReturn === 'detail', `data-view=${dataViewAfterReturn}`);
       }
 
       // 詳細画面に戻ってスクロール位置を確認（この先へ経由の確認は別関数、
@@ -2408,383 +2410,252 @@ async function checkDescendTiltChoreography(browser, baseUrl, savedPaths) {
 }
 
 /**
- * 【2026-10-15、11本目①、Minami決定：A】地図の吹き出し（ポップアップ）を
- * 廃止し、地図の下の固定情報枠（#spot-info-panel）に統一したことの検証
- * （2D・3D、PC・スマホ375px）。
- * - ピンを押すと枠が出て、吹き出しは出ないこと
- * - 枠の「詳細を見る」を実際にクリックすると詳細が開くこと
- * - 選んだピンだけが強調されること（白縁＋光の輪）
- * - 枠が地図のボタン類（2D/3D切替・出典）と重ならないこと
- * - 応援マーク対象のスポットは名前の横にハートが付くこと
- * - 枠を閉じる（×）・検索し直す・予算を触るといずれも枠とピンの強調が消えること
+ * 【64本目、Minami決定】ピンを押したとき（名前の帯はやめた。11本目①〜59本目の帯の検証を書き直した）。
+ * - PC（2D・3D）：ピンを押すと左のパネルにその場所の詳細が出る（パネルを閉じていたら開く）。吹き出しは出ない。
+ *   選んだピンだけが強調される。「一覧」の足あとで一覧へ戻れる。
+ * - スマホ（375×667・390×844・400×464、2D・3D）：ピンを押すと下の一覧（小）がその場所のカードに入れ替わり
+ *   （名前・往復の金額）、下の一覧の高さは変わらない（地図を狭くしない）。中身は下の一覧の中に収まる。
+ *   「詳細を見る」で大にして詳細を出す。×・地図の何もないところを押すと元の小に戻り、ピンの強調も外れる。
+ * - 別のピンを選ぶと前のピンの強調が外れる。予算（＋−）を触る・検索し直すと、カードが閉じ強調も外れる。
  */
 async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
-  console.log('\n=== 地図の下の固定情報枠の検証（11本目①） ===');
-
-  // --- 2D ---
-  for (const [label, viewport] of Object.entries(VIEWPORTS)) {
-    const context = await browser.newContext({ viewport });
-    const page = await context.newPage();
-    const pageErrors = [];
-    page.on('pageerror', (e) => pageErrors.push(e.message));
+  console.log('\n=== 64本目：ピンを押したとき（PCは詳細、スマホは場所のカード） ===');
+  const cardState = (page) => page.evaluate(() => {
+    const card = document.getElementById('sheet-spot-card');
+    const sheet = document.querySelector('.results-sheet').getBoundingClientRect();
+    const shown = !!card && !card.hidden && card.getBoundingClientRect().height > 0;
+    const outside = shown ? [...card.querySelectorAll('.sheet-spot-image, .sheet-spot-name, .sheet-spot-fare, .sheet-spot-meta, .sheet-spot-detail-btn')]
+      .map((el) => ({ c: el.className.split(' ')[0], b: el.getBoundingClientRect() })).filter(({ b }) => b.width > 0)
+      .filter(({ b }) => b.top < sheet.top - 0.5 || b.bottom > sheet.bottom + 0.5 || b.left < sheet.left - 0.5 || b.right > sheet.right + 0.5)
+      .map(({ c }) => c) : [];
+    return {
+      shown,
+      name: shown ? card.querySelector('.sheet-spot-name')?.textContent : null,
+      outside,
+      sheetH: Math.round(sheet.height),
+      fare: shown ? card.querySelector('.sheet-spot-fare')?.textContent : null,
+      hasDetailBtn: shown && !!card.querySelector('.sheet-spot-detail-btn'),
+      view: document.getElementById('app-layout').getAttribute('data-view'),
+      large: document.getElementById('app-layout').classList.contains('sheet-large'),
+      heading: document.querySelector('#detail-content h2')?.textContent ?? null,
+      band: !!document.getElementById('spot-info-panel'),
+      popups: document.querySelectorAll('.leaflet-popup, .maplibregl-popup').length,
+    };
+  });
+  const selectedCount = (page, dim) => page.evaluate((dim) => (dim === '3d'
+    ? (window.__terrainMapForDebug.getSource('selected-spot')?._data?.features?.length ?? 0)
+    : document.querySelectorAll('#spots-map .map-pin-spot.map-pin-selected').length), dim);
+  const open = async (page) => {
     await page.goto(baseUrl, { waitUntil: 'load' });
     await page.waitForSelector('#departure-input');
     await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
-    await searchAt(page, '高松築港', 1000);
-    if (label === 'sp') {
-      await showMapTab(page);
-      await page.waitForTimeout(200);
-    }
-
-    // 実際のピン（.map-pin-spot、L.divIcon）を本物のクリックで押す
-    // （直接呼び出しは使わない）。.map-pin-spot:visibleで実際に見えている
-    // ピンに絞り、boundingBox()を取ってmouse.click()で座標指定して押す
-    // （locator.click()はピン密集時に別マーカーに「intercepts pointer
-    // events」で奪われることがあったため）。
-    const pinLocator = (await uncoveredPin(page));
-    const pinBox = await pinLocator.boundingBox();
-    if (pinBox) await page.mouse.click(pinBox.x + pinBox.width / 2, pinBox.y + pinBox.height / 2);
-    await page.waitForTimeout(150);
-
-    const panelVisible = await page.locator('#spot-info-panel').isVisible().catch(() => false);
-    record(`[2D/${label}] ピンをクリックすると下の情報枠が出る`, panelVisible);
-    const popupCount = await page.locator('.leaflet-popup').count();
-    record(`[2D/${label}] 吹き出し（ポップアップ）は出ない`, popupCount === 0, `.leaflet-popup数=${popupCount}`);
-    const selectedPinCount = await page.locator('.map-pin-spot.map-pin-selected:visible').count();
-    record(`[2D/${label}] 選んだピンだけが強調される`, selectedPinCount === 1, `強調中のピン数=${selectedPinCount}`);
-
-    if (panelVisible) {
-      const spotName = (await page.locator('#spot-info-content .spot-info-name').textContent()) || '';
-      const panelBox = await page.locator('#spot-info-panel').boundingBox();
-      const toggleBox = await page.locator('#map-dimension-toggle').boundingBox();
-      const attribBox = await page.locator('#spots-map .leaflet-control-attribution').boundingBox().catch(() => null);
-      // 【24本目③、不具合修正】PCでは「長崎鼻古墳」程度（10文字まで）の名前は
-      // 省略されないこと（Cowork指摘：以前は帯の幅の見積もりが狭すぎて
-      // 5文字でも省略されていた）。
-      if (label === 'pc' && spotName.length <= 10) {
-        const nameTruncated = await page.evaluate(() => {
-          const el = document.querySelector('.spot-info-name');
-          return el ? el.scrollWidth > el.clientWidth + 1 : null;
-        });
-        record(
-          `[2D/${label}] 10文字までの名前（${spotName}）は帯で省略されない`,
-          nameTruncated === false,
-          `nameTruncated=${nameTruncated}`
-        );
-      }
-      record(
-        `[2D/${label}] 情報枠が2D/3D切替ボタンと重ならない`,
-        !rectsOverlap(panelBox, toggleBox),
-        JSON.stringify({ panelBox, toggleBox })
-      );
-      if (attribBox) {
-        record(
-          `[2D/${label}] 情報枠が出典ボタンと重ならない`,
-          !rectsOverlap(panelBox, attribBox),
-          JSON.stringify({ panelBox, attribBox })
-        );
-      }
-      // 【2026-10-13、12本目①、Minami決定：A＋C】情報枠は高さ48px以下の
-      // 細い帯であること。選んだピンは、この帯の上（帯のtopより上）に
-      // 描画されること（revealAboveBand()の効果を実機相当で検証）。
-      record(
-        `[2D/${label}] 情報枠は高さ48px以下の帯`,
-        !!panelBox && panelBox.height <= 48,
-        JSON.stringify(panelBox)
-      );
-      const selectedPinBoxAfterReveal = await page.locator('.map-pin-spot.map-pin-selected:visible').boundingBox();
-      // 【59本目】スマホの結果画面では名前の帯を見えている範囲の上の端（上の＋−カードのすぐ下）に出すようになったため、
-      // 「帯より上」ではなく、帯に隠れず（縦に重ならず）、下の一覧より上にあることを見る（PCは今までどおり帯より上）。
-      const sheetTop2d = await page.evaluate(() => { const el = document.querySelector('.results-sheet'); const b = el && el.getBoundingClientRect(); return b && b.height > 0 ? b.top : Infinity; });
-      record(
-        `[2D/${label}] 選んだピンが情報帯に隠れず、下の一覧より上に表示される`,
-        !!selectedPinBoxAfterReveal && !!panelBox
-          && ((selectedPinBoxAfterReveal.y + selectedPinBoxAfterReveal.height) < panelBox.y || selectedPinBoxAfterReveal.y > panelBox.y + panelBox.height)
-          && (selectedPinBoxAfterReveal.y + selectedPinBoxAfterReveal.height) < sheetTop2d,
-        JSON.stringify({ selectedPinBoxAfterReveal, panelBox, sheetTop2d })
-      );
-
-      const panelPath = path.join(screenshotDir, `spot-info-panel-2d-${label}.png`);
-      const mapAreaBox = await page.locator('#map-area').boundingBox();
-      await page.screenshot({ path: panelPath, clip: mapAreaBox });
-      savedPaths.push(panelPath);
-
-      const btnBox = await page.locator('.spot-info-detail-btn').boundingBox();
-      if (btnBox) await page.mouse.click(btnBox.x + btnBox.width / 2, btnBox.y + btnBox.height / 2);
-      const openedDetail = await page.waitForFunction(
-        () => document.getElementById('app-layout')?.getAttribute('data-view') === 'detail',
-        { timeout: 5000 }
-      ).then(() => true).catch(() => false);
-      const heading = openedDetail ? await page.locator('#detail-content h2').textContent() : null;
-      record(
-        `[2D/${label}] 枠の「詳細を見る」を実クリックすると、該当スポットの詳細画面が開く`,
-        openedDetail && !!heading && spotName.includes(heading),
-        `panel="${spotName}" / heading="${heading}"`
-      );
-      if (openedDetail) await page.click('.breadcrumb-list-link').catch(() => {});
-    }
-
-    if (pageErrors.length > 0) record(`[2D/${label}] 情報枠検証中にページエラーが発生していない`, false, pageErrors.join('; '));
-    await context.close();
-  }
-
-  // --- 3D ---
-  for (const [label, viewport] of Object.entries(VIEWPORTS)) {
-    const context = await browser.newContext({ viewport });
-    const page = await context.newPage();
-    const pageErrors = [];
-    page.on('pageerror', (e) => pageErrors.push(e.message));
-    await page.goto(baseUrl, { waitUntil: 'load' });
-    await page.waitForSelector('#departure-input');
-    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
-    await searchAt(page, '高松築港', 1000);
-    if (label === 'sp') {
-      await showMapTab(page);
-      await page.waitForTimeout(200);
-    }
-    await clickDimensionToggle(page);
-    const became3d = await page.waitForFunction(
-      () => document.getElementById('map-area').classList.contains('mode-3d'),
-      { timeout: 30000 }
-    ).then(() => true).catch(() => false);
-    if (!became3d) {
-      record(`[3D/${label}] 3D化（情報枠検証の前提）`, false);
-      await context.close();
-      continue;
-    }
-    await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
-
-    // 円（circle-layer）は実DOM要素を持たないため、project()で実際の画面座標を
-    // 求めてからmouse.click()で押す（このファイルの他のピン検証箇所と同じ方式）。
-    const pinScreenPos = await spotScreenPos3d(page, { maxFare: 1000 });
-    record(`[3D/${label}] 検証対象のピンが見つかる`, !!pinScreenPos);
-
-    if (pinScreenPos) {
-      const mapBox = await page.locator('#map-area').boundingBox();
-      // 【2026-10-13、20本目修正】クリック前にonTiltCompleteの待ち受けを
-      // 仕込んでおく（降りる→傾ける演出＋waitForSceneSettled()が終わるまで。
-      // スクリーンショットは演出完了後に撮る。以前はクリック300ms後にすぐ
-      // 撮っていたため、航空写真の読み込み途中でぼやけた画像になっていた）。
-      const tiltCompletePromise = page.evaluate(() => new Promise((resolve) => {
-        window.__terrainViewForDebug.onTiltComplete = () => resolve();
-        // 【2026-10-17、32本目A、不具合修正】10秒の保険は、タイル読み込みが
-        // 混雑時に遅いと短すぎ、本当はまだ演出が終わっていないのに先に進んで
-        // しまい「pitchが戻っていない」という誤検出を起こしていた（実機相当の
-        // 計測で確認：このタイムアウトが演出完了より先に発火していた）。
-        // flyToSpot()の「降りる→傾ける」は、降りるflyTo()固定2600ms＋
-        // waitForSceneSettled()上限15000ms＋傾けるeaseTo()固定2000ms＋
-        // waitForSceneSettled()上限15000msの直列で、理論上の最悪値は34600ms
-        // （一度20000msへ伸ばしたが、実機相当の計測でpitch=51度
-        // （まだ55度未満）で発火する近い外れ値が実際に発生し、20秒でも
-        // 足りないことがあると判明）。理論上の最悪値に余裕を見て36000msにする。
-        setTimeout(resolve, 36000); // 保険（演出が終わらない場合でも進める）
-      }));
-      await page.mouse.click(mapBox.x + pinScreenPos.x, mapBox.y + pinScreenPos.y);
-      // flyToSpot()の降りる演出が始まるため、情報枠はすぐ出るはず（Minami指示：
-      // 寄る演出と情報枠の表示は独立。枠はクリック直後に出す設計）。
-      await page.waitForTimeout(300);
-      const panelVisible = await page.locator('#spot-info-panel').isVisible().catch(() => false);
-      record(`[3D/${label}] ピンをクリックすると下の情報枠が出る`, panelVisible);
-      const popupCount = await page.locator('.maplibregl-popup').count();
-      record(`[3D/${label}] 吹き出し（ポップアップ）は出ない`, popupCount === 0, `.maplibregl-popup数=${popupCount}`);
-      // 【不具合修正】querySourceFeatures()はタイル境界をまたぐ点を複数タイルから
-      // 重複して返すことがあるMapLibreの既知の挙動で、実際に2件返ってきて
-      // 誤検出した。ソース自体が今持っているGeoJSONデータ（_data、setData()で
-      // 渡した値そのもの）を直接見れば、タイル分割の影響を受けず確実。
-      const selectedCount = await page.evaluate(() => {
+  };
+  // ピンを押し、押した場所のIDと名前を返す
+  const pressPin = async (page, dim) => {
+    if (dim === '3d') {
+      const pos = await spotScreenPos3d(page, { maxFare: 1000 });
+      if (!pos) return null;
+      const box = await page.locator('#map-area').boundingBox();
+      await page.mouse.click(box.x + pos.x, box.y + pos.y);
+      await page.waitForTimeout(100);
+      // 同じ位置に重なっている場所（例：富山市ガラス美術館とTOYAMAキラリ）では、押した位置で別の場所が選ばれることが
+      // あるため、実際に選ばれた場所を返す
+      return page.evaluate(() => {
         const tv = window.__terrainViewForDebug;
-        const source = window.__terrainMapForDebug.getSource('selected-spot');
-        const featureCount = source?._data?.features?.length ?? -1;
-        return { hasSelectedId: !!tv.selectedSpotId, featureCount };
+        return { id: tv.selectedSpotId, name: (tv._lastSpots || []).find((s) => s.id === tv.selectedSpotId)?.name ?? null };
       });
-      record(
-        `[3D/${label}] 選んだピンの強調（selected-spotソース）が1件だけ描かれる`,
-        selectedCount.hasSelectedId && selectedCount.featureCount === 1,
-        JSON.stringify(selectedCount)
-      );
-
-      if (panelVisible) {
-        const spotName = (await page.locator('#spot-info-content .spot-info-name').textContent()) || '';
-        const panelBox = await page.locator('#spot-info-panel').boundingBox();
-        const toggleBox = await page.locator('#map-dimension-toggle').boundingBox();
-        // 【23本目、不具合修正】方位磁針（.maplibregl-ctrl-top-right、
-        // MapLibreのNavigationControl）は回転ハンドルに置き換えて廃止した
-        // ため、代わりにハンドル（#map-rotate-handle）との重なりを見る。
-        const compassBox = await page.locator('#map-rotate-handle').boundingBox().catch(() => null);
-        // 【24本目③、不具合修正】2Dと同じく、PCでは10文字までの名前は
-        // 省略されないこと。
-        if (label === 'pc' && spotName.length <= 10) {
-          const nameTruncated = await page.evaluate(() => {
-            const el = document.querySelector('.spot-info-name');
-            return el ? el.scrollWidth > el.clientWidth + 1 : null;
+    }
+    const pin = await uncoveredPin(page);
+    const b = await pin.boundingBox().catch(() => null);
+    if (!b) return null;
+    await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
+    await page.waitForTimeout(100);
+    return page.evaluate(() => {
+      const id = window.__mapViewForDebug.selectedSpotId;
+      return { id, name: (window.__mapViewForDebug._lastSpots || []).find((s) => s.id === id)?.name ?? null };
+    });
+  };
+  const to3d = async (page) => {
+    await clickDimensionToggle(page);
+    const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+    if (ok) {
+      await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+      await waitForTerrainCameraIdle(page);
+    }
+    return ok;
+  };
+  // 地図の何もない（ピン・丸・部品の無い）ところを探す
+  const findEmptyMapPoint = (page, dim) => page.evaluate((dim) => {
+    const head = document.querySelector('.results-head').getBoundingClientRect();
+    const sheet = document.querySelector('.results-sheet').getBoundingClientRect();
+    const map = document.getElementById('map-area').getBoundingClientRect();
+    for (let y = head.bottom + 12; y < sheet.top - 12; y += 14) {
+      for (let x = map.left + 14; x < map.left + map.width * 0.6; x += 14) {
+        const el = document.elementFromPoint(x, y);
+        if (!el) continue;
+        if (dim === '3d') {
+          if (el.tagName !== 'CANVAS') continue;
+          const m = window.__terrainMapForDebug;
+          const box = m.getContainer().getBoundingClientRect();
+          const near = m.queryRenderedFeatures([[x - box.left - 10, y - box.top - 10], [x - box.left + 10, y - box.top + 10]], { layers: ['spots-circle', 'spots-plain-circle'] });
+          if (near.length === 0) return { x, y };
+        } else if (!el.closest('.leaflet-marker-icon, .leaflet-control, button, a') && el.closest('#spots-map')) {
+          const pins = [...document.querySelectorAll('#spots-map .map-pin-spot, #spots-map .map-cluster')].some((p) => {
+            const b = p.getBoundingClientRect();
+            return b.width > 0 && Math.abs(b.left + b.width / 2 - x) < 14 && Math.abs(b.top + b.height / 2 - y) < 14;
           });
-          record(
-            `[3D/${label}] 10文字までの名前（${spotName}）は帯で省略されない`,
-            nameTruncated === false,
-            `nameTruncated=${nameTruncated}`
-          );
+          if (!pins) return { x, y };
         }
-        record(
-          `[3D/${label}] 情報枠が2D/3D切替ボタンと重ならない`,
-          !rectsOverlap(panelBox, toggleBox),
-          JSON.stringify({ panelBox, toggleBox })
-        );
-        if (compassBox) {
-          record(
-            `[3D/${label}] 情報枠が回転ハンドルと重ならない`,
-            !rectsOverlap(panelBox, compassBox),
-            JSON.stringify({ panelBox, compassBox })
-          );
-        }
-        // 【2026-10-13、12本目①、Minami決定：A＋C】情報枠は高さ48px以下、
-        // 選んだピン（画面座標）は帯より上にあること（3D版のreveal確認）。
-        record(
-          `[3D/${label}] 情報枠は高さ48px以下の帯`,
-          !!panelBox && panelBox.height <= 48,
-          JSON.stringify(panelBox)
-        );
-        const selectedPinScreenY = await page.evaluate(() => {
-          const map = window.__terrainMapForDebug;
-          const source = map.getSource('selected-spot');
-          const feat = source?._data?.features?.[0];
-          if (!feat) return null;
-          return map.project(feat.geometry.coordinates).y;
-        });
-        // 【59本目】スマホは帯を見えている範囲の上の端に出すため、帯に隠れず、下の一覧より上にあることを見る
-        const sheetTop3d = await page.evaluate(() => { const el = document.querySelector('.results-sheet'); const b = el && el.getBoundingClientRect(); return b && b.height > 0 ? b.top : Infinity; });
-        const pinY3d = selectedPinScreenY === null ? null : mapBox.y + selectedPinScreenY;
-        record(
-          `[3D/${label}] 選んだピンが情報帯に隠れず、下の一覧より上に表示される`,
-          pinY3d !== null && !!panelBox && (pinY3d < panelBox.y || pinY3d > panelBox.y + panelBox.height) && pinY3d < sheetTop3d,
-          JSON.stringify({ selectedPinScreenY, mapBoxY: mapBox.y, panelBox, sheetTop3d })
-        );
-
-        // 降りる→傾ける演出が終わるまで待つ。
-        await tiltCompletePromise;
-        // 【2026-10-13、20本目修正②】onTiltComplete（isCenterTileReady()）は
-        // 中央タイル1枚の有無しか見ておらず、航空写真はそのあとも周辺・高詳細の
-        // タイルが数秒かけて差し替わり続けることが実機確認で判明した（固定
-        // 300ms待ちのままだと低解像度タイルの引き伸ばしでぼやけた状態のまま
-        // 撮っていた）。MapLibre公式の'idle'イベント（描画・タイル読み込みが
-        // 完全に落ち着いたことを示す）を追加で待つ（保険として最大8秒）。
-        await page.evaluate(() => new Promise((resolve) => {
-          const map = window.__terrainMapForDebug;
-          map.once('idle', resolve);
-          setTimeout(resolve, 8000);
-        }));
-        await page.waitForTimeout(300); // idle直後の最後の数フレームの余裕
-        const panelPath = path.join(screenshotDir, `spot-info-panel-3d-${label}.png`);
-        await page.screenshot({ path: panelPath, clip: mapBox });
-        savedPaths.push(panelPath);
-
-        const btnBox = await page.locator('.spot-info-detail-btn').boundingBox();
-        await page.mouse.click(btnBox.x + btnBox.width / 2, btnBox.y + btnBox.height / 2);
-        const openedDetail = await page.waitForFunction(
-          () => document.getElementById('app-layout')?.getAttribute('data-view') === 'detail',
-          { timeout: 5000 }
-        ).then(() => true).catch(() => false);
-        const heading = openedDetail ? await page.locator('#detail-content h2').textContent() : null;
-        record(
-          `[3D/${label}] 枠の「詳細を見る」を実クリックすると、該当スポットの詳細画面が開く`,
-          openedDetail && !!heading && spotName.includes(heading),
-          `panel="${spotName}" / heading="${heading}"`
-        );
-        if (openedDetail) await page.click('.breadcrumb-list-link').catch(() => {});
       }
     }
+    return null;
+  }, dim);
 
-    if (pageErrors.length > 0) record(`[3D/${label}] 情報枠検証中にページエラーが発生していない`, false, pageErrors.join('; '));
-    await context.close();
-  }
-
-  // --- 応援マーク対象のスポットは名前の横にハートが付く（2D） ---
-  {
+  // --- PC：左のパネルに詳細 ---
+  for (const dim of ['2d', '3d']) {
     const context = await browser.newContext({ viewport: VIEWPORTS.pc });
+    await context.addInitScript(() => { try { localStorage.setItem('reverse-travel-rotate-hint-seen', 'true'); } catch { /* 無視 */ } });
     const page = await context.newPage();
-    await page.goto(baseUrl, { waitUntil: 'load' });
-    await page.waitForSelector('#departure-input');
-    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
-    // 富山駅前→伏木万葉大橋（往復¥1600）は応援マーク対象（実データ確認済み、
-    // このファイルのcaptureSupportBadgeCardScreen()と同じ組み合わせ）。
-    await searchAt(page, '富山駅前', 1600);
-    const supportedSpotId = await page.locator('.spot-card.spot-card-supported').first().getAttribute('data-spot-id');
-    if (supportedSpotId) {
-      // 【43本目】まとめた丸に入っていれば、その場所へ寄ってから押す（pinScreenPos2d()）。
-      const pinScreenPos = await pinScreenPos2d(page, supportedSpotId);
-      if (pinScreenPos) await page.mouse.click(pinScreenPos.x, pinScreenPos.y);
-      await page.waitForTimeout(150);
-      const heartVisible = await page.locator('#spot-info-content .spot-info-heart').isVisible().catch(() => false);
-      record('[2D] 応援マーク対象のスポットは情報枠の名前の横にハートが付く', heartVisible);
-    } else {
-      record('[2D] 応援マーク対象の検証用スポットが見つかる', false);
-    }
-    await context.close();
-  }
-
-  // --- 選択の排他性：別のピンを選ぶと前のピンの強調が外れる（2D） ---
-  {
-    const context = await browser.newContext({ viewport: VIEWPORTS.pc });
-    const page = await context.newPage();
-    await page.goto(baseUrl, { waitUntil: 'load' });
-    await page.waitForSelector('#departure-input');
-    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+    await open(page);
     await searchAt(page, '高松築港', 1000);
-    const pins = page.locator('.map-pin-spot:visible');
-    const first = await pins.nth(0).boundingBox();
-    const second = await pins.nth(1).boundingBox();
-    if (first && second) {
-      await page.mouse.click(first.x + first.width / 2, first.y + first.height / 2);
-      await page.waitForTimeout(100);
-      await page.mouse.click(second.x + second.width / 2, second.y + second.height / 2);
-      await page.waitForTimeout(100);
-      const selectedCount = await page.locator('.map-pin-spot.map-pin-selected:visible').count();
-      record('[2D] 別のピンを選ぶと前のピンの強調が外れる（強調は常に1件）', selectedCount === 1, `強調中のピン数=${selectedCount}`);
-    } else {
-      record('[2D] 選択の排他性検証用のピンが2件見つかる', false);
+    await waitForAllSpotsPrefetchSettled(page);
+    if (dim === '3d' && !(await to3d(page))) { record(`[pc/${dim}] 3D化（ピンの検証の前提）`, false); await context.close(); continue; }
+    // パネルを閉じてから押す（閉じていたら開く）
+    await page.evaluate(() => document.getElementById('results-list-close-btn')?.click());
+    await page.waitForTimeout(600);
+    const pressed = await pressPin(page, dim);
+    if (!pressed) { record(`[pc/${dim}] 押せるピンがある（検証の前提）`, false); await context.close(); continue; }
+    await page.waitForFunction(() => document.getElementById('app-layout').getAttribute('data-view') === 'detail', { timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(dim === '3d' ? 2500 : 600);
+    const st = await cardState(page);
+    const panelOpen = await page.evaluate(() => !document.getElementById('app-layout').classList.contains('results-list-closed')
+      && document.getElementById('detail-container').getBoundingClientRect().width > 0);
+    record(`[pc/${dim}] ピンを押すと、左のパネルにその場所の詳細が出る（閉じていたパネルも開く）`, st.view === 'detail' && st.heading === pressed.name && panelOpen, JSON.stringify({ pressed, view: st.view, heading: st.heading, panelOpen }));
+    record(`[pc/${dim}] 名前の帯・吹き出しは出ない`, !st.band && st.popups === 0, JSON.stringify({ band: st.band, popups: st.popups }));
+    const sel = await selectedCount(page, dim);
+    record(`[pc/${dim}] 選んだピンだけが強調される`, sel === 1, `強調中のピン数=${sel}`);
+    const shotPath = path.join(screenshotDir, `round64-pin-pc-${dim}.png`);
+    await page.screenshot({ path: shotPath });
+    savedPaths.push(shotPath);
+    // 足あとの「一覧」で一覧へ戻る（今の足あとのまま）
+    await page.click('.breadcrumb-list-link').catch(() => {});
+    await page.waitForTimeout(400);
+    const back = await page.evaluate(() => document.getElementById('app-layout').getAttribute('data-view'));
+    record(`[pc/${dim}] 詳細の足あとの「一覧」で一覧に戻れる`, back === 'results', `data-view=${back}`);
+    if (pageErrors.length > 0) record(`[pc/${dim}] ピンの検証中にページエラーが発生していない`, false, pageErrors.join('; '));
+    await context.close();
+  }
+
+  // --- スマホ：下の一覧（小）を場所のカードに入れ替える ---
+  for (const [label, viewport] of Object.entries(MOBILE_FORM_COLLAPSE_VIEWPORTS)) {
+    for (const dim of ['2d', '3d']) {
+      const context = await browser.newContext({ viewport });
+      await context.addInitScript(() => { try { localStorage.setItem('reverse-travel-rotate-hint-seen', 'true'); } catch { /* 無視 */ } });
+      const page = await context.newPage();
+      const pageErrors = [];
+      page.on('pageerror', (e) => pageErrors.push(e.message));
+      await open(page);
+      await searchAt(page, '富山駅前', 1000);
+      await waitForAllSpotsPrefetchSettled(page);
+      if (dim === '3d' && !(await to3d(page))) { record(`[${label}/${dim}] 3D化（ピンの検証の前提）`, false); await context.close(); continue; }
+      await page.waitForTimeout(500);
+      const before = await cardState(page);
+      const pressed = await pressPin(page, dim);
+      if (!pressed) { record(`[${label}/${dim}] 押せるピンがある（検証の前提）`, false); await context.close(); continue; }
+      await page.waitForTimeout(dim === '3d' ? 2500 : 800);
+      const st = await cardState(page);
+      record(`[${label}/${dim}] ピンを押すと、下の一覧（小）がその場所のカード（名前・往復の金額・「詳細を見る」）に入れ替わる`,
+        st.shown && st.name === pressed.name && /^往復¥/.test(st.fare || '') && st.hasDetailBtn && st.view === 'results' && !st.large, JSON.stringify({ pressed, st }));
+      record(`[${label}/${dim}] 場所のカードを出しても、下の一覧の高さは変わらない（地図を狭くしない）`, st.shown && st.sheetH === before.sheetH, `before=${before.sheetH} after=${st.sheetH}`);
+      record(`[${label}/${dim}] 場所のカードの中身が下の一覧の中に収まる`, st.shown && st.outside.length === 0, JSON.stringify(st.outside));
+      record(`[${label}/${dim}] 名前の帯・吹き出しは出ない`, !st.band && st.popups === 0, JSON.stringify({ band: st.band, popups: st.popups }));
+      if ((dim === '2d' && label !== 'se') || (dim === '3d' && label === 'own')) {
+        const shotPath = path.join(screenshotDir, `round64-pin-${label}-${dim}.png`);
+        await page.screenshot({ path: shotPath });
+        savedPaths.push(shotPath);
+      }
+      // ×で元の小に戻る
+      await clickSelectorChecked(page, '.sheet-spot-close', `[${label}/${dim}] 場所のカードの×`);
+      await page.waitForTimeout(300);
+      const afterClose = await cardState(page);
+      const selAfterClose = await selectedCount(page, dim);
+      record(`[${label}/${dim}] ×を押すと元の小に戻り、ピンの強調も外れる`, !afterClose.shown && afterClose.sheetH === before.sheetH && selAfterClose === 0, JSON.stringify({ shown: afterClose.shown, sheetH: afterClose.sheetH, selAfterClose }));
+      // 地図の何もないところで元の小に戻る
+      const again = await pressPin(page, dim);
+      await page.waitForTimeout(dim === '3d' ? 2500 : 800);
+      if (again && (await cardState(page)).shown) {
+        const empty = await findEmptyMapPoint(page, dim);
+        if (empty) {
+          await page.mouse.click(empty.x, empty.y);
+          await page.waitForTimeout(400);
+          const afterBg = await cardState(page);
+          record(`[${label}/${dim}] 地図の何もないところを押すと、元の小に戻る`, !afterBg.shown && afterBg.sheetH === before.sheetH, JSON.stringify({ empty, shown: afterBg.shown, sheetH: afterBg.sheetH }));
+        } else {
+          record(`[${label}/${dim}] 地図の何もないところが見つかる（検証の前提）`, false);
+        }
+      } else {
+        record(`[${label}/${dim}] もう一度ピンを押すと場所のカードが出る`, false, JSON.stringify(again));
+      }
+      // 「詳細を見る」で大にして詳細を出す
+      const third = await pressPin(page, dim);
+      await page.waitForTimeout(dim === '3d' ? 2500 : 800);
+      if (third && (await cardState(page)).shown) {
+        await clickSelectorChecked(page, '.sheet-spot-detail-btn', `[${label}/${dim}] 場所のカードの「詳細を見る」`);
+        await page.waitForFunction(() => document.getElementById('app-layout').getAttribute('data-view') === 'detail', { timeout: 8000 }).catch(() => {});
+        await page.waitForTimeout(500);
+        const det = await cardState(page);
+        record(`[${label}/${dim}] 場所のカードの「詳細を見る」で、下の一覧が大になり、その場所の詳細が出る`, det.view === 'detail' && det.large && det.heading === third.name && !det.shown, JSON.stringify({ third, view: det.view, large: det.large, heading: det.heading }));
+      } else {
+        record(`[${label}/${dim}] 「詳細を見る」の検証用にもう一度ピンを押せる`, false);
+      }
+      if (pageErrors.length > 0) record(`[${label}/${dim}] ピンの検証中にページエラーが発生していない`, false, pageErrors.join('; '));
+      await context.close();
     }
+  }
 
-    // --- 枠を閉じる（×）・検索し直す・予算を触るで枠とピンの強調が消える ---
-    await page.click('#spot-info-close');
-    const afterClose = {
-      panelHidden: await page.locator('#spot-info-panel').isHidden(),
-      selectedCount: await page.locator('.map-pin-spot.map-pin-selected:visible').count(),
-    };
-    record(
-      '[2D] ×で枠を閉じると、枠が消えピンの強調も外れる',
-      afterClose.panelHidden && afterClose.selectedCount === 0,
-      JSON.stringify(afterClose)
-    );
-
-    const pinsAgain = page.locator('.map-pin-spot:visible');
-    const again = await pinsAgain.nth(0).boundingBox();
-    if (again) await page.mouse.click(again.x + again.width / 2, again.y + again.height / 2);
-    await page.waitForTimeout(100);
+  // --- 選択の排他性・予算操作・検索し直し（スマホ390×844の2D） ---
+  {
+    const context = await browser.newContext({ viewport: MOBILE_FORM_COLLAPSE_VIEWPORTS.std });
+    const page = await context.newPage();
+    await open(page);
+    await searchAt(page, '高松築港', 1000);
+    await waitForAllSpotsPrefetchSettled(page);
+    const firstPressed = await pressPin(page, '2d');
+    await page.waitForTimeout(500);
+    // 1つ目とは別の、隠れていないピンを押す
+    await page.evaluate((id) => {
+      document.querySelectorAll('[data-test-pick]').forEach((e) => e.removeAttribute('data-test-pick'));
+      for (const [sid, m] of window.__mapViewForDebug.markersBySpotId) {
+        if (sid === id) continue;
+        const el = m.getElement();
+        const b = el?.getBoundingClientRect();
+        if (!b || !(b.width > 0)) continue;
+        const t = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+        if (t && el.contains(t)) { el.setAttribute('data-test-pick', '1'); return; }
+      }
+    }, firstPressed?.id);
+    const secondBox = await page.locator('[data-test-pick="1"]').first().boundingBox().catch(() => null);
+    if (firstPressed && secondBox) {
+      await page.mouse.click(secondBox.x + secondBox.width / 2, secondBox.y + secondBox.height / 2);
+      await page.waitForTimeout(500);
+      const n = await selectedCount(page, '2d');
+      const st = await cardState(page);
+      const selName = await page.evaluate(() => { const id = window.__mapViewForDebug.selectedSpotId; return (window.__mapViewForDebug._lastSpots || []).find((s) => s.id === id)?.name ?? null; });
+      record('[std/2d] 別のピンを選ぶと前のピンの強調が外れ（強調は常に1件）、カードも選んだ場所に入れ替わる', n === 1 && st.shown && st.name === selName && selName !== firstPressed.name, JSON.stringify({ n, card: st.name, selName, first: firstPressed.name }));
+    } else {
+      record('[std/2d] 選択の排他性検証用のピンが2件見つかる', false);
+    }
     await clickBudgetStep(page, 1);
-    const afterBudget = {
-      panelHidden: await page.locator('#spot-info-panel').isHidden(),
-      selectedCount: await page.locator('.map-pin-spot.map-pin-selected:visible').count(),
-    };
-    record(
-      '[2D] 予算（±）を触ると、枠が消えピンの強調も外れる',
-      afterBudget.panelHidden && afterBudget.selectedCount === 0,
-      JSON.stringify(afterBudget)
-    );
-
-    const pinsForSearch = page.locator('.map-pin-spot:visible');
-    const forSearch = await pinsForSearch.nth(0).boundingBox();
-    if (forSearch) await page.mouse.click(forSearch.x + forSearch.width / 2, forSearch.y + forSearch.height / 2);
-    await page.waitForTimeout(100);
+    await page.waitForTimeout(300);
+    const afterBudget = { card: (await cardState(page)).shown, sel: await selectedCount(page, '2d') };
+    record('[std/2d] 予算（＋−）を触ると、場所のカードが閉じピンの強調も外れる', !afterBudget.card && afterBudget.sel === 0, JSON.stringify(afterBudget));
+    await pressPin(page, '2d');
+    await page.waitForTimeout(500);
     await searchAt(page, '高松築港', 2000);
-    const afterResearch = {
-      panelHidden: await page.locator('#spot-info-panel').isHidden(),
-      selectedCount: await page.locator('.map-pin-spot.map-pin-selected:visible').count(),
-    };
-    record(
-      '[2D] 検索し直すと、枠が消えピンの強調も外れる',
-      afterResearch.panelHidden && afterResearch.selectedCount === 0,
-      JSON.stringify(afterResearch)
-    );
-
+    const afterResearch = { card: (await cardState(page)).shown, sel: await selectedCount(page, '2d') };
+    record('[std/2d] 検索し直すと、場所のカードが閉じピンの強調も外れる', !afterResearch.card && afterResearch.sel === 0, JSON.stringify(afterResearch));
     await context.close();
   }
 }
@@ -2967,7 +2838,7 @@ async function checkMobileFormCollapseAndFooter(browser, baseUrl, savedPaths) {
       const pinSelectedPath = path.join(screenshotDir, `mobile-form-collapse-pin-selected-${label}.png`);
       await page.screenshot({ path: pinSelectedPath });
       savedPaths.push(pinSelectedPath);
-      await page.click('#spot-info-close').catch(() => {});
+      await page.click('.sheet-spot-close').catch(() => {}); // 【64本目】場所のカードの×
     }
 
     // 一覧タブ：残り高さいっぱいでスクロール可能
@@ -3134,9 +3005,9 @@ async function checkTapOutsideClosesForm(browser, baseUrl, savedPaths) {
     await showMapTab(page);
     await page.waitForTimeout(300);
 
-    // ピンを1つ選んでから明示的に閉じておく（#spot-info-panelがhiddenな
+    // ピンを1つ選んでから明示的に閉じておく（場所のカード#sheet-spot-card（64本目、旧#spot-info-panel）がhiddenな
     // 状態を作る）。これにより「タップで閉じる」操作のあと、もしその
-    // タップがピン選択へ横流れしていれば#spot-info-panelが再び開くはずで、
+    // タップがピン選択へ横流れしていれば場所のカードが再び開くはずで、
     // hiddenのままであることが「ピンが選ばれなかった」ことの検証になる。
     const pinLocator = (await uncoveredPin(page));
     const pinBox = await pinLocator.boundingBox().catch(() => null);
@@ -3148,7 +3019,7 @@ async function checkTapOutsideClosesForm(browser, baseUrl, savedPaths) {
       // 値」基準になって不安定になる（本件の不具合修正とは無関係なテスト側の
       // 雑音）。pan（0.4秒）が確実に終わるまで待つ。
       await page.waitForTimeout(500);
-      await page.click('#spot-info-close').catch(() => {});
+      await page.click('.sheet-spot-close').catch(() => {}); // 【64本目】場所のカードの×
       await page.waitForTimeout(150);
     }
     const mapCenterBefore = await page.evaluate(() => {
@@ -3221,7 +3092,7 @@ async function checkTapOutsideClosesForm(browser, baseUrl, savedPaths) {
       departureValue: document.getElementById('departure-input').value,
       budgetValue: document.getElementById('budget-input').value,
       summaryText: document.getElementById('search-summary-text')?.textContent || '',
-      spotInfoPanelHidden: document.getElementById('spot-info-panel')?.hidden !== false,
+      spotInfoPanelHidden: document.getElementById('sheet-spot-card')?.hidden !== false, // 【64本目】場所のカード
     }));
     record(
       `[${label}] 地図をタップするとフォームが閉じ、開く前の条件（出発駅・予算）に戻る`,
@@ -3268,41 +3139,35 @@ async function checkTapOutsideClosesForm(browser, baseUrl, savedPaths) {
 async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
   console.log('\n=== 22本目（59本目で書き直し）：スマホの結果画面の＋−の検証 ===');
 
-  // 名前の帯が、上の＋−カード・下の一覧・右下の部品の列・出典と重ならず、見えているピン（まとめた丸を含む）を隠さないか
-  const bandCheck = (page, dim) => page.evaluate((dim) => {
-    const r = (el) => { if (!el) return null; const cs = getComputedStyle(el); if (el.hidden || cs.display === 'none' || cs.visibility === 'hidden') return null; const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0 ? b : null; };
-    const band = r(document.getElementById('spot-info-panel'));
-    if (!band) return { shown: false };
-    const hit = (a, b) => a && b && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-    const others = {
-      head: r(document.querySelector('.results-head')), sheet: r(document.querySelector('.results-sheet')),
-      attrib: r(document.querySelector(dim === '3d' ? '#spots-map-3d .maplibregl-ctrl-attrib' : '#spots-map .leaflet-control-attribution')),
-    };
-    document.querySelectorAll('#map-controls-cluster > *').forEach((el, i) => { others[`cluster${i}`] = r(el); });
-    const overlaps = Object.entries(others).filter(([, b]) => hit(band, b)).map(([k]) => k);
-    // 隠しているピン：帯と重なるピン・まとめた丸（中心が帯の中）
-    let hidden = [];
+  // 【64本目】名前の帯はやめた。ピンを押すと、下の一覧（小）がその場所のカードに入れ替わる。カードが出ていて、
+  // 中身（写真・名前・金額・「詳細を見る」。右上の×は除く）が下の一覧の中に収まり、下の一覧の高さ（＝地図の
+  // 見えている範囲）が押す前と変わらず、選んだピンが上の＋−カードと下の一覧の間に見えているか。
+  const bandCheck = (page, dim, sheetHBefore) => page.evaluate(({ dim, sheetHBefore }) => {
+    const card = document.getElementById('sheet-spot-card');
+    if (!card || card.hidden) return { shown: false };
+    const sheet = document.querySelector('.results-sheet').getBoundingClientRect();
+    const head = document.querySelector('.results-head').getBoundingClientRect();
+    const outside = [...card.querySelectorAll('.sheet-spot-image, .sheet-spot-name, .sheet-spot-fare, .sheet-spot-detail-btn')]
+      .map((el) => ({ c: el.className, b: el.getBoundingClientRect() })).filter(({ b }) => b.width > 0)
+      .filter(({ b }) => b.top < sheet.top - 0.5 || b.bottom > sheet.bottom + 0.5 || b.left < sheet.left - 0.5 || b.right > sheet.right + 0.5)
+      .map(({ c }) => c);
+    let pin = null;
     if (dim === '3d') {
       const m = window.__terrainMapForDebug;
-      const box = m.getContainer().getBoundingClientRect();
-      const absorbed = window.__terrainViewForDebug._absorbedIds || new Set();
-      hidden = m.queryRenderedFeatures({ layers: ['spots-circle', 'spots-plain-circle'] })
-        .filter((f) => !absorbed.has(f.properties.id))
-        .map((f) => { const p = m.project(f.geometry.coordinates); return { id: f.properties.id, x: box.left + p.x, y: box.top + p.y }; })
-        .filter((p) => p.x > band.left && p.x < band.right && p.y > band.top && p.y < band.bottom);
-      document.querySelectorAll('#spots-map-3d .map-cluster-3d').forEach((el) => {
-        const b = el.getBoundingClientRect();
-        const cx = b.left + b.width / 2; const cy = b.top + b.height / 2;
-        if (cx > band.left && cx < band.right && cy > band.top && cy < band.bottom) hidden.push({ id: 'cluster', x: cx, y: cy });
-      });
+      const f = m.getSource('selected-spot')?._data?.features?.[0];
+      if (f) { const p = m.project(f.geometry.coordinates); const box = m.getContainer().getBoundingClientRect(); pin = { x: box.left + p.x, y: box.top + p.y }; }
     } else {
-      hidden = [...document.querySelectorAll('#spots-map .map-pin-spot, #spots-map .map-cluster')]
-        .map((n) => n.getBoundingClientRect()).filter((b) => b.width > 0)
-        .filter((b) => { const cx = b.left + b.width / 2; const cy = b.top + b.height / 2; return cx > band.left && cx < band.right && cy > band.top && cy < band.bottom; })
-        .map((b) => ({ x: Math.round(b.left), y: Math.round(b.top) }));
+      const el = document.querySelector('#spots-map .map-pin-selected');
+      const b = el?.getBoundingClientRect();
+      if (b && b.width > 0) pin = { x: b.left + b.width / 2, y: b.top + b.height / 2 };
     }
-    return { shown: true, band: { top: Math.round(band.top), bottom: Math.round(band.bottom), left: Math.round(band.left), right: Math.round(band.right) }, overlaps, hidden: hidden.slice(0, 5), hiddenCount: hidden.length };
-  }, dim);
+    return {
+      shown: true, name: card.querySelector('.sheet-spot-name')?.textContent, outside,
+      sheetH: Math.round(sheet.height), sheetHBefore, sameHeight: sheetHBefore == null || Math.abs(sheet.height - sheetHBefore) < 1,
+      pin, pinVisible: !!pin && pin.y > head.bottom && pin.y < sheet.top,
+    };
+  }, { dim, sheetHBefore });
+  const sheetHeight = (page) => page.evaluate(() => document.querySelector('.results-sheet').getBoundingClientRect().height);
   const listState = (page) => page.evaluate(() => ({
     heading: document.getElementById('results-band-heading').textContent,
     cards: [...document.querySelectorAll('.spot-card')].map((c) => c.getAttribute('data-spot-id')).join(','),
@@ -3364,18 +3229,20 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
     await page.screenshot({ path: midPath2d });
     savedPaths.push(midPath2d);
 
-    // 名前の帯
+    // 【64本目】場所のカード（名前の帯はやめた）
     const pinBox2d = await (await uncoveredPin(page)).boundingBox().catch(() => null);
     if (pinBox2d) {
+      const sheetHBefore2d = await sheetHeight(page);
       await page.mouse.click(pinBox2d.x + pinBox2d.width / 2, pinBox2d.y + pinBox2d.height / 2);
       await page.waitForTimeout(800);
-      const bc = await bandCheck(page, '2d');
-      record(`[${label}/2D] ピンを押すと名前の帯が出て、上の＋−カード・下の一覧・右下の部品の列・出典と重ならない`, bc.shown && bc.overlaps.length === 0, JSON.stringify(bc));
-      record(`[${label}/2D] 名前の帯が、見えているピン（まとめた丸を含む）を隠さない`, bc.shown && bc.hiddenCount === 0, JSON.stringify(bc));
+      const bc = await bandCheck(page, '2d', sheetHBefore2d);
+      record(`[${label}/2D] ピンを押すと、下の一覧（小）がその場所のカードに入れ替わり、一覧の高さは変わらない（地図を狭くしない）`, bc.shown && bc.sameHeight, JSON.stringify(bc));
+      record(`[${label}/2D] 場所のカードの中身（写真・名前・金額・「詳細を見る」）が下の一覧の中に収まる`, bc.shown && bc.outside.length === 0, JSON.stringify(bc));
+      record(`[${label}/2D] 選んだピンが、上の＋−カードと下の一覧の間に見えている`, bc.shown && bc.pinVisible, JSON.stringify(bc));
       const pinSelectedPath2d = path.join(screenshotDir, `mobile-budget-overlay-pin-selected-2d-${label}.png`);
       await page.screenshot({ path: pinSelectedPath2d });
       savedPaths.push(pinSelectedPath2d);
-      await page.click('#spot-info-close').catch(() => {});
+      await page.click('.sheet-spot-close').catch(() => {});
       await page.waitForTimeout(100);
     } else {
       record(`[${label}/2D] 押せるピンがある（検証の前提）`, false);
@@ -3421,6 +3288,7 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
       const pinScreenPos = await spotScreenPos3d(page, { maxFare: 1000 });
       if (pinScreenPos) {
         const mapBox3d = await page.locator('#map-area').boundingBox();
+        const sheetHBefore3d = await sheetHeight(page);
         const tiltCompletePromise3d = page.evaluate(() => new Promise((resolve) => {
           window.__terrainViewForDebug.onTiltComplete = () => resolve();
           setTimeout(resolve, 36000);
@@ -3435,12 +3303,14 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
           setTimeout(resolve, 8000);
         }));
         await page.waitForTimeout(300);
-        const bc3 = await bandCheck(page, '3d');
-        record(`[${label}/3D] ピンを押すと名前の帯が出て、上の＋−カード・下の一覧・右下の部品の列・出典と重ならない`, bc3.shown && bc3.overlaps.length === 0, JSON.stringify(bc3));
+        const bc3 = await bandCheck(page, '3d', sheetHBefore3d);
+        record(`[${label}/3D] ピンを押すと、下の一覧（小）がその場所のカードに入れ替わり、一覧の高さは変わらない（地図を狭くしない）`, bc3.shown && bc3.sameHeight, JSON.stringify(bc3));
+        record(`[${label}/3D] 場所のカードの中身（写真・名前・金額・「詳細を見る」）が下の一覧の中に収まる`, bc3.shown && bc3.outside.length === 0, JSON.stringify(bc3));
+        record(`[${label}/3D] 選んだピンが、上の＋−カードと下の一覧の間に見えている`, bc3.shown && bc3.pinVisible, JSON.stringify(bc3));
         const pinSelectedPath3d = path.join(screenshotDir, `mobile-budget-overlay-pin-selected-3d-${label}.png`);
         await page.screenshot({ path: pinSelectedPath3d });
         savedPaths.push(pinSelectedPath3d);
-        await page.click('#spot-info-close').catch(() => {});
+        await page.click('.sheet-spot-close').catch(() => {});
         await page.waitForTimeout(100);
 
         // 【26本目②、不具合修正の再発防止】真上から降り切った直後に同じピンをもう一度押しても、最終的にpitchが55度以上まで傾く。
@@ -3463,7 +3333,7 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
         await tiltCompleteRetryPromise;
         const pitchAfterSamePinRetry = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
         record(`[${label}/3D] 降下直後に同じピンを連打しても、最終的にpitchが55度以上に傾く`, pitchAfterSamePinRetry >= 55, `pitch=${pitchAfterSamePinRetry}`);
-        await page.click('#spot-info-close').catch(() => {});
+        await page.click('.sheet-spot-close').catch(() => {});
         await page.waitForTimeout(100);
       } else {
         record(`[${label}/3D] 押せるピンがある（検証の前提）`, false);
@@ -5904,7 +5774,8 @@ async function checkReturnToListMatchesSearchView(browser, baseUrl, savedPaths) 
           focused.zoom > baseline.zoom + 1,
           JSON.stringify({ spot: tapped.name, baselineZoom: baseline.zoom, focusedZoom: focused.zoom })
         );
-        await clickSelectorChecked(page, '.spot-info-detail-btn', `${label} 「詳細を見る」`);
+        // 【64本目】PCはピンを押すと左のパネルに詳細が出る。スマホは場所のカードの「詳細を見る」から開く。
+        if (isMobile) await clickSelectorChecked(page, '.sheet-spot-detail-btn', `${label} 「詳細を見る」`);
       } else {
         // 一覧タブのカードから詳細を開く（地図タブは隠れている）。
         await showListTab(page);
@@ -6376,8 +6247,6 @@ async function checkSelectedPinVisibleAfterFocus3d(browser, baseUrl, savedPaths)
               if (el.hidden || cs.display === 'none' || cs.display === 'contents' || cs.visibility === 'hidden') return;
               covers.push(el.getBoundingClientRect());
             });
-            const panel = document.getElementById('spot-info-panel');
-            if (panel && !panel.hidden && panel.offsetParent !== null) covers.push(panel.getBoundingClientRect());
             const coveredBy = covers.filter((b) => b.width > 0 && b.height > 0 && x > b.left - 4 && x < b.right + 4 && y > b.top - 4 && y < b.bottom + 4).length;
             const head = document.querySelector('.results-head')?.getBoundingClientRect();
             const sheet = document.querySelector('.results-sheet')?.getBoundingClientRect();
@@ -7370,7 +7239,7 @@ async function circleEdgeControlGaps(page, dim) {
       const rect = map.getContainer().getBoundingClientRect();
       for (let i = 0; i < 72; i++) { const p = dest(lat, lon, i * 5, km); const s = map.latLngToContainerPoint([p.lat, p.lon]); pts.push({ x: rect.left + s.x, y: rect.top + s.y }); }
     }
-    const sels = ['#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle', '#map-dimension-toggle', '#spot-info-panel', '#mobile-budget-overlay', '#map-zoom-controls'];
+    const sels = ['#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle', '#map-dimension-toggle', '#mobile-budget-overlay', '#map-zoom-controls'];
     const gaps = {};
     sels.forEach((sel) => {
       const el = document.querySelector(sel);
@@ -9150,7 +9019,7 @@ async function checkRound59(browser, baseUrl, savedPaths) {
     const items = {
       head: r(document.querySelector('.results-head')), sheet: r(document.querySelector('.results-sheet')),
       attrib: r(document.querySelector(dim === '3d' ? '#spots-map-3d .maplibregl-ctrl-attrib' : '#spots-map .leaflet-control-attribution')),
-      dataLine: r(document.getElementById('map-data-line')), band: r(document.getElementById('spot-info-panel')),
+      dataLine: r(document.getElementById('map-data-line')),
     };
     document.querySelectorAll('#map-controls-cluster > *').forEach((el) => { items[el.id || el.className] = r(el); });
     const keys = Object.keys(items).filter((k) => items[k]);
@@ -9334,7 +9203,7 @@ async function checkRound59(browser, baseUrl, savedPaths) {
         const form = await page.evaluate(() => ({ card: document.getElementById('layout-left').offsetParent !== null, head: document.querySelector('.results-head').offsetParent !== null }));
         record(`${label} 「条件を変える」で検索カードが開き、上の＋−カードは隠れる`, form.card && !form.head, JSON.stringify(form));
 
-        // ---- 名前の帯（390×844の2Dで撮る） ----
+        // ---- 【64本目】ピンを押したときの場所のカード（名前の帯はやめた。390×844の2Dで撮る） ----
         if (vLabel === 'std' && dim === '2d') {
           await page.evaluate(() => document.getElementById('form-close-btn')?.click());
           await page.waitForTimeout(400);
@@ -9345,8 +9214,8 @@ async function checkRound59(browser, baseUrl, savedPaths) {
             await page.mouse.click(pin.x + pin.width / 2, pin.y + pin.height / 2);
             await page.waitForTimeout(900);
             const ov3 = await overlapsOf(page, dim);
-            record(`${label} 名前の帯を出しても、上のカード・下の一覧・部品・出典と重ならない`, ov3.overlaps.length === 0, JSON.stringify(ov3));
-            await shot('round59-std-2d-band.png');
+            record(`${label} ピンを押して場所のカードを出しても、上のカード・下の一覧・部品・出典と重ならない`, ov3.overlaps.length === 0, JSON.stringify(ov3));
+            await shot('round59-std-2d-card.png');
           }
         }
         record(`${label} コンソールにエラーが出ない`, errors.length === 0, errors.join(' | '));
@@ -10373,9 +10242,10 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
       const mapBoxForClick = await page.locator('#map-area').boundingBox();
       await page.mouse.click(mapBoxForClick.x + pinPos.x, mapBoxForClick.y + pinPos.y);
       await page.waitForTimeout(2000); // 降りる→傾ける演出完了を待つ
-      const panelVisible = await page.locator('#spot-info-panel').isVisible().catch(() => false);
+      // 【64本目】名前の帯はやめた（PCは左のパネルに詳細、スマホは場所のカード）。ピンが選ばれたかは選んだピンの強調で見る。
+      const panelVisible = await page.evaluate(() => (window.__terrainMapForDebug.getSource('selected-spot')?._data?.features?.length ?? 0) === 1);
       if (panelVisible) {
-        const panelBox = await page.locator('#spot-info-panel').boundingBox();
+        const panelBox = null;
         const handleBoxNow = await page.locator('#map-rotate-handle').boundingBox();
         await dragRotateHandle(page, handleBoxNow, 90);
         await page.waitForTimeout(100);
@@ -10397,8 +10267,6 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
             if (el.hidden || cs.display === 'none' || cs.display === 'contents' || cs.visibility === 'hidden') return;
             covers.push(el.getBoundingClientRect());
           });
-          const panel = document.getElementById('spot-info-panel');
-          if (panel && !panel.hidden && panel.offsetParent !== null) covers.push(panel.getBoundingClientRect());
           const coveredBy = covers.filter((b) => b.width > 0 && b.height > 0 && x > b.left - 4 && x < b.right + 4 && y > b.top - 4 && y < b.bottom + 4).length;
           const inMap = x > rect.left + 4 && x < rect.right - 4 && y > rect.top + 4 && y < rect.bottom - 4;
           return { x: Math.round(p.x), y: Math.round(p.y), inMap, coveredBy, ok: inMap && coveredBy === 0 };
@@ -10407,7 +10275,7 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
         await releaseRotateHandle(page);
         await page.waitForTimeout(100);
         record(
-          `[${label}] 回したあとも、選んだピンが見えている（地図の中で、名前の帯・重ねた入れ物に隠れていない）`,
+          `[${label}] 回したあとも、選んだピンが見えている（地図の中で、重ねた入れ物に隠れていない）`,
           !!afterRotate?.ok,
           JSON.stringify({ afterRotate, panelBox })
         );
@@ -10418,11 +10286,11 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
         const afterPitch = await readSelectedPin();
         await releaseRotateHandle(page);
         record(
-          `[${label}] 傾けたあとも、選んだピンが見えている（地図の中で、名前の帯・重ねた入れ物に隠れていない）`,
+          `[${label}] 傾けたあとも、選んだピンが見えている（地図の中で、重ねた入れ物に隠れていない）`,
           !!afterPitch?.ok,
           JSON.stringify({ afterPitch, panelBox })
         );
-        await page.click('#spot-info-close').catch(() => {});
+        await page.click('.sheet-spot-close').catch(() => {});
       } else {
         record(`[${label}] pivot検証用のピン選択ができる`, false);
       }
@@ -10650,8 +10518,9 @@ async function checkRound62(browser, baseUrl, savedPaths) {
       record(`${label} 閉じるボタンが右上に見えていて（押せる大きさ44px以上）、ほかの部品に隠れていない`,
         isFullyVisible(s.close, viewport) && s.closeOnTop && s.close.width >= 44 && s.close.height >= 44 && s.close.right >= s.panel.right - 24,
         JSON.stringify({ close: s.close, onTop: s.closeOnTop }));
-      const must = ['この条件で探す', '往復', '円の中', 'みちどころ', 'NEW', '条件を変える', '一覧', '2D / 3D', '傾き', '見え方に戻ります', '「i」', 'データ出典・免責'];
-      const old = ['「検索」を押', 'タブ', 'スライダー', '再検索', '「出発駅を選択」', 'で探す」を押してください'];
+      // 【64本目】「条件を変える」は「出発地を変える」に、ピンを押したときの名前の帯はやめた（PCは詳細、スマホは場所のカード）
+      const must = ['この条件で探す', '往復', '円の中', 'みちどころ', 'NEW', '出発地を変える', '詳細を見る', '一覧', '2D / 3D', '傾き', '見え方に戻ります', '「i」', 'データ出典・免責'];
+      const old = ['「検索」を押', 'タブ', 'スライダー', '再検索', '「出発駅を選択」', 'で探す」を押してください', '条件を変える', '場所の名前が出て'];
       const missing = must.filter((w) => !s.text.includes(w));
       const stale = old.filter((w) => s.text.includes(w));
       record(`${label} 今の画面の説明が入っていて、古い説明（「検索」ボタン・タブ・スライダー・再検索）が無い`, missing.length === 0 && stale.length === 0, JSON.stringify({ missing, stale }));
@@ -10678,6 +10547,125 @@ async function checkRound62(browser, baseUrl, savedPaths) {
     } finally {
       await context.close();
     }
+  }
+}
+
+/**
+ * 【64本目、Minami決定】前半の画面の直し（ピンを押したときはcheckSpotInfoPanel()）。
+ * 1. 「条件を変える」は「出発地を変える」に（PCの一覧パネル）。スマホの上のカードでは、このボタンを駅名＋▾として
+ *    見せ、押すと検索カード（出発地を変えるカード）が開く。開いたカードでは予算のスライダーも使える。
+ * 2. 候補を選ばずにEnterを押して「候補から出発駅を選んでください」になったあと、入力欄を押すと候補がすぐ出る。
+ * 3. スマホの上のカードは1行（駅名▾・−・予算（往復）¥1,000・＋・「◯か所」、「NEW +N」は「◯か所」の下）。
+ *    390×844・375×667・400×464で、富山駅前なら「予算（往復）」を省かずに駅名が省略されずに入る。
+ *    スクリーンショット：390×844・400×464。
+ */
+async function checkRound64(browser, baseUrl, savedPaths) {
+  console.log('\n=== 64本目：出発地を変える・入力欄・上の1行のカード ===');
+  const open = async (page) => {
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+  };
+
+  // --- 2. Enterのあとの入力欄（PC・390×844） ---
+  for (const [vLabel, viewport] of [['pc', VIEWPORTS.pc], ['std', MOBILE_FORM_COLLAPSE_VIEWPORTS.std]]) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    await open(page);
+    await page.fill('#departure-input', '富山');
+    await page.waitForTimeout(400);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(400);
+    const afterEnter = await page.evaluate(() => ({
+      guidance: !document.getElementById('departure-guidance').hidden ? document.getElementById('departure-guidance').textContent : null,
+      items: document.querySelectorAll('.suggestion-item').length,
+      focused: document.activeElement?.id,
+    }));
+    await page.click('#departure-input');
+    await page.waitForTimeout(300);
+    const afterClick = await page.evaluate(() => document.querySelectorAll('.suggestion-item').length);
+    record(`[${vLabel}] 候補を選ばずにEnterを押したあと、入力欄を押すと、入っている文字の候補がすぐ出る（文字を消さなくてよい）`,
+      afterEnter.guidance === '候補から出発駅を選んでください' && afterEnter.items === 0 && afterClick > 0, JSON.stringify({ afterEnter, afterClick }));
+    // フォーカスが外れていたときも、押したら（フォーカスしたら）候補が出る
+    await page.evaluate(() => { document.getElementById('departure-suggestions').innerHTML = ''; document.activeElement?.blur(); });
+    await page.click('#departure-input');
+    await page.waitForTimeout(300);
+    const afterFocus = await page.evaluate(() => document.querySelectorAll('.suggestion-item').length);
+    record(`[${vLabel}] 文字が入った入力欄にフォーカスすると、候補がすぐ出る`, afterFocus > 0, `候補=${afterFocus}`);
+    await context.close();
+  }
+
+  // --- 1. PC：「出発地を変える」 ---
+  {
+    const context = await browser.newContext({ viewport: VIEWPORTS.pc });
+    const page = await context.newPage();
+    await open(page);
+    await searchAt(page, '富山駅前', 1000);
+    const pc = await page.evaluate(() => {
+      const t = document.getElementById('search-summary-toggle');
+      const b = t.getBoundingClientRect();
+      return { text: t.innerText.trim(), visible: b.width > 0 && t.offsetParent !== null };
+    });
+    record('[pc] 一覧パネルのボタンは「出発地を変える」（「条件を変える」ではない）', pc.visible && pc.text === '出発地を変える', JSON.stringify(pc));
+    await clickElementChecked(page, 'search-summary-toggle', '[pc] 「出発地を変える」');
+    await page.waitForTimeout(400);
+    const opened = await page.evaluate(() => ({
+      card: document.getElementById('layout-left').offsetParent !== null && document.getElementById('layout-left').getBoundingClientRect().height > 0,
+      slider: document.getElementById('budget-slider').getBoundingClientRect().width > 0,
+    }));
+    record('[pc] 「出発地を変える」で検索カードが開き、予算のスライダーも使える', opened.card && opened.slider, JSON.stringify(opened));
+    await context.close();
+  }
+
+  // --- 1・3. スマホ：上の1行のカード ---
+  for (const [vLabel, viewport] of Object.entries(MOBILE_FORM_COLLAPSE_VIEWPORTS)) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    await open(page);
+    await searchAt(page, '富山駅前', 900);
+    await waitForAllSpotsPrefetchSettled(page);
+    await clickElementChecked(page, 'mobile-budget-increment', `[${vLabel}] ＋`); // NEW +Nを出す
+    await page.waitForTimeout(800);
+    const head = await page.evaluate(() => {
+      const r = (q) => { const el = document.querySelector(q); if (!el) return null; const cs = getComputedStyle(el); if (cs.display === 'none' || cs.visibility === 'hidden') return null; const b = el.getBoundingClientRect(); return b.width > 0 ? { left: b.left, right: b.right, top: b.top, bottom: b.bottom, height: b.height } : null; };
+      const station = document.querySelector('.summary-toggle-station');
+      return {
+        head: r('.results-head'), toggle: r('#search-summary-toggle'), minus: r('#mobile-budget-decrement'), amount: r('#results-budget-value'),
+        label: r('.results-budget-label'), plus: r('#mobile-budget-increment'), count: r('#results-map-count'), newTag: r('#results-new-count'),
+        stationText: station?.textContent, stationTrunc: station ? station.scrollWidth > station.clientWidth + 1 : null,
+        toggleText: document.getElementById('search-summary-toggle').innerText.trim(),
+        amountText: document.getElementById('results-budget-value').textContent,
+        amountFont: parseFloat(getComputedStyle(document.getElementById('results-budget-value')).fontSize),
+        headScroll: document.querySelector('.results-head').scrollWidth > document.querySelector('.results-head').clientWidth + 1,
+      };
+    });
+    const parts = ['toggle', 'minus', 'amount', 'plus', 'count'].map((k) => head[k]);
+    // 1行：5つの部品の縦の範囲がすべて重なる（どれか1つの真ん中の高さが、ほかのすべての上下の間にある）
+    const oneRow = parts.every(Boolean) && parts.every((p) => parts.every((q) => (p.top + p.bottom) / 2 > q.top && (p.top + p.bottom) / 2 < q.bottom));
+    const leftToRight = parts.every(Boolean) && parts.every((p, i) => i === 0 || parts[i - 1].right <= p.left + 0.5);
+    record(`[${vLabel}] 上のカードは1行（駅名▾・−・金額・＋・「◯か所」が左から右に並ぶ）で、はみ出さない`, oneRow && leftToRight && !head.headScroll && head.head.right <= viewport.width,
+      JSON.stringify({ oneRow, leftToRight, headScroll: head.headScroll, head: head.head }));
+    record(`[${vLabel}] 駅名（富山駅前▾）が省略されず、「予算（往復）」の見出しも出ている`, head.stationText === '富山駅前' && head.stationTrunc === false && !!head.label && head.toggleText.startsWith('富山駅前'),
+      JSON.stringify({ stationText: head.stationText, stationTrunc: head.stationTrunc, label: !!head.label, toggleText: head.toggleText }));
+    record(`[${vLabel}] 金額の数字は大きいまま（24px以上）`, head.amountFont >= 24 && head.amountText === '¥1,000', JSON.stringify({ amountFont: head.amountFont, amountText: head.amountText }));
+    record(`[${vLabel}] 「NEW +N」は「◯か所」の下に小さく出る`, !!head.newTag && head.newTag.top >= head.count.bottom - 1 && head.newTag.height < head.count.height,
+      JSON.stringify({ newTag: head.newTag, count: head.count }));
+    record(`[${vLabel}] 上のカードの高さは60px以下（1行になって低くなった）`, !!head.head && head.head.height <= 60, `height=${head.head?.height}`);
+    if (vLabel !== 'se') {
+      const shotPath = path.join(screenshotDir, `round64-head-${vLabel}.png`);
+      await page.screenshot({ path: shotPath });
+      savedPaths.push(shotPath);
+    }
+    // 駅名▾を押すと、出発地を変えるカードが開く（予算のスライダーも使える）
+    await clickElementChecked(page, 'search-summary-toggle', `[${vLabel}] 駅名▾（出発地を変える）`);
+    await page.waitForTimeout(500);
+    const opened = await page.evaluate(() => ({
+      card: document.getElementById('layout-left').getBoundingClientRect().height > 0 && document.getElementById('layout-left').offsetParent !== null,
+      head: document.querySelector('.results-head').offsetParent !== null,
+      slider: document.getElementById('budget-slider').getBoundingClientRect().width > 0,
+    }));
+    record(`[${vLabel}] 上のカードの駅名▾を押すと、出発地を変えるカードが開き（上のカードは隠れる）、予算のスライダーも使える`, opened.card && !opened.head && opened.slider, JSON.stringify(opened));
+    await context.close();
   }
 }
 
@@ -10790,6 +10778,7 @@ async function main() {
     await runWithFreshBrowser(checkRound58, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound59, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound62, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkRound64, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBreadcrumbTrail, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBudgetSlider, baseUrl, savedPaths);
     await runWithFreshBrowser(checkWaveRevealAndCircleScreenshots, baseUrl, savedPaths);
