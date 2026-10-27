@@ -122,13 +122,6 @@
         <div id="map-rotate-hint" class="map-rotate-hint" hidden role="status">
           外側を回す→向き／真ん中を上下→傾き
         </div>
-        <!-- 【2026-10-15、11本目①】地図の吹き出し（ポップアップ）の代わりに、
-             地図の下中央に固定で出す情報枠（Minami決定：A）。2D・3D共通、
-             どちらのピンを押しても同じ枠を使い回す。 -->
-        <div id="spot-info-panel" class="spot-info-panel" hidden>
-          <button type="button" id="spot-info-close" class="spot-info-close" aria-label="閉じる">×</button>
-          <div id="spot-info-content" class="spot-info-content"></div>
-        </div>
         <!-- 【2026-10-24、51本目、Minami決定】ピンの色の説明。紺のピンは「みちどころ」、オレンジのピンは「NEW」。
              横の札（オレンジ地に白い文字）に、今オレンジで出ている場所の数を「NEW +8」の形で出す
              （0のときは出さない。main.jsのupdateNewSpotMarks()）。一度検索したら出す。 -->
@@ -142,7 +135,7 @@
       </div>
 
       <!-- 検索カード（トップ画面）。PCは地図の左上に浮かせ、スマホは地図の下に置く。
-           検索したあとは隠れ、結果の入れ物の「▼条件を変える」で戻ってくる（#app-layout.form-collapsedが
+           検索したあとは隠れ、結果の入れ物の「出発地を変える」で戻ってくる（#app-layout.form-collapsedが
            付いている間は隠れる。main.jsのsetFormCollapsed()）。 -->
       <div id="layout-left" class="layout-left search-card" data-map-overlay>
         <!-- スマホでは副題をヘッダーに出さず、検索カードの1行目に小さく出す -->
@@ -150,7 +143,7 @@
         <h2 class="search-card-title">いくらで、<br class="search-card-title-break">どこまで行ける？</h2>
         <p class="search-card-lead">予算を決めると、行ける場所が地図に出ます</p>
         <form id="search-form">
-          <!-- 【2026-10-17、32本目A】「条件を変える」で開いたときだけ出す閉じるボタン。押すと検索はせず、
+          <!-- 【2026-10-17、32本目A】「出発地を変える」（32〜63本目は「条件を変える」）で開いたときだけ出す閉じるボタン。押すと検索はせず、
                開く前の条件に戻してから結果の画面に戻る（main.jsのcloseFormDiscardingEdits()）。 -->
           <button type="button" id="form-close-btn" class="form-close-btn" hidden>▲閉じる</button>
           <div class="form-group form-group-departure">
@@ -223,13 +216,15 @@
         <!-- 【58本目】PCだけ：一覧を閉じているとき、細いバーのすぐ下に出す「☰ 一覧を開く」（バーと一緒に動くようパネルの中に置く） -->
         <button type="button" id="results-list-open-btn" class="results-list-open-btn">☰ 一覧を開く</button>
 
-        <!-- 上の部分：出発駅と「条件を変える」、＋−。スマホでは地図の上に浮かせたカード（見本⑤） -->
+        <!-- 上の部分：出発駅と「出発地を変える」、＋−。スマホでは地図の上に浮かせた1行のカード（64本目） -->
         <div class="results-head" data-map-overlay>
           <div id="search-summary" class="search-summary" hidden>
             <span id="search-summary-text"></span>
             <!-- 【58本目】開いているときは「出発：○○」、PCで閉じているとき・スマホは「○○から」（main.jsのupdateSearchSummaryText()） -->
             <span id="results-departure" class="results-departure"></span>
-            <button type="button" id="search-summary-toggle" aria-expanded="false"><span class="summary-toggle-arrow">▼</span>条件を変える</button>
+            <!-- 【64本目、Minami決定】予算は＋−で変えられるので、ここで変えるのは主に出発地（「条件を変える」から言い方を変えた）。
+                 スマホでは、このボタンを駅名＋▾として見せる（.summary-toggle-station、main.jsのupdateSearchSummaryText()） -->
+            <button type="button" id="search-summary-toggle" aria-expanded="false"><span class="summary-toggle-arrow">▼</span><span class="summary-toggle-station"></span><span class="summary-toggle-label">出発地を変える</span></button>
           </div>
 
           <!-- 結果の画面の＋−（PC・スマホ共通。26本目の予算操作帯）。スライダーは置かない。 -->
@@ -246,6 +241,9 @@
         <div class="results-sheet" data-map-overlay>
           <!-- 【59本目】スマホだけ：一覧の大きさを変えるつまみ（押す・上下にドラッグする） -->
           <button type="button" id="results-sheet-handle" class="results-sheet-handle" aria-label="一覧を大きくする" aria-expanded="false"></button>
+
+          <!-- 【64本目、Minami決定】スマホでピンを押したとき、小の一覧の代わりに出すその場所のカード（main.jsのshowSheetSpotCard()） -->
+          <div id="sheet-spot-card" class="sheet-spot-card" hidden></div>
 
           <!-- 【58本目】色の説明（結果画面では地図の上の中央の色の説明の代わりにここへ出す） -->
           <p class="results-legend" aria-hidden="true">
@@ -313,13 +311,13 @@
         <span class="howto-pin howto-pin-new" aria-hidden="true"></span>（オレンジの丸）が「NEW」です。
         「NEW」は、検索した金額（検索し直したときは前の検索の金額）より高く、今の金額で新しく行けるようになった場所です。
         近くにたくさんある場所は数字の丸にまとまり、押すと近づいて分かれます。
-        ピンを押すと場所の名前が出て、「詳細を見る」で行きかた・運賃などが見られます。
+        ピンを押すと、パソコンでは左の一覧にその場所の詳しい情報（行きかた・運賃など）が出ます。スマートフォンでは下にその場所のカードが出て、「詳細を見る」で詳しい情報が見られます（×か、地図の何もないところを押すと元に戻ります）。
       </p>
 
       <h3>金額を変える</h3>
       <p>
         結果の画面の <strong>－／＋</strong> で金額を変えると、地図と一覧が一緒に変わります。
-        出発駅を変えたいとき・金額を大きく変えたいときは「<strong>条件を変える</strong>」を押してください。
+        出発駅を変えたいときは「<strong>出発地を変える</strong>」（スマートフォンでは上の駅名）を押してください。開いた画面では金額も変えられます。
       </p>
 
       <h3>一覧</h3>

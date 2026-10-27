@@ -197,6 +197,13 @@ export class LayoutController {
     const mobile = !this.isDesktop();
     this.layoutEl.classList.toggle('sheet-compact', mobile && map.height < SHEET_COMPACT_MAX_MAP_HEIGHT);
     const head = document.querySelector('.results-head');
+    // 【64本目】上の1行のカードで駅名が入りきらない（…で省略される）ときは、「予算（往復）」の小さな見出しを省いて
+    // 幅を空ける（見出しは金額の上に重ねているため、金額より幅が広いときだけ効く）。いったん出してから測る。
+    this.layoutEl.classList.remove('results-head-no-label');
+    const station = mobile ? head?.querySelector('.summary-toggle-station') : null;
+    if (station && station.clientWidth > 0 && station.scrollWidth > station.clientWidth) {
+      this.layoutEl.classList.add('results-head-no-label');
+    }
     const hb = head?.getBoundingClientRect();
     const headBottom = mobile && hb && hb.height > 0 ? Math.round(hb.bottom - map.top) : 0;
     const setVar = (name, value) => {

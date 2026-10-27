@@ -328,6 +328,7 @@ export class MapView {
     this._clusterLayer = null; // 【43本目B-2】まとめた丸（数字入り）を置くレイヤー
     this._clusters = []; // 【43本目B-2】今出しているまとめた丸：{marker, members:[spotId], latlng, kind}（kindはまとめた色：orange／blue、47本目）（検証用にも使う）
 
+    this.onBackgroundClick = null; // 【64本目】地図の何もないところを押したとき（main.js）
     this.onSelectionChange = null; // (spotId) => void … ピン選択と一覧パネルの連動用
   }
 
@@ -371,6 +372,9 @@ export class MapView {
     this.map.on('zoomend', () => this._recluster());
     // 【45本目】大きさが変わったとき（画面の回転・一覧との幅の変化）も画面上の距離が変わるため、まとめ直す。
     this.map.on('resize viewreset', () => this._recluster());
+    // 【64本目】地図の何もないところを押したとき（main.jsが、スマホの場所のカードを閉じる）。ピン・まとめた丸は
+    // Leafletの印（L.marker）のため、押しても地図のclickにはならない。
+    this.map.on('click', () => this.onBackgroundClick?.());
 
     // 検証用の参照（terrain-map-view.jsのwindow.__terrainViewForDebugと同じ考え方）。
     // アプリ自体はこれを使わない。本番でも害はないため条件分岐は入れていない。
@@ -1401,34 +1405,6 @@ export class MapView {
     const a = this.map.latLngToContainerPoint(f.center);
     const b = this.map.latLngToContainerPoint(this.map.getCenter());
     return Math.hypot(a.x - b.x, a.y - b.y) < 2;
-  }
-
-  /**
-   * 【59本目】画面上の四角（clientの座標）の中に中心がある、描いているピン・まとめた丸の数（名前の帯の置き場所を
-   * 選ぶため。main.jsのplaceSpotInfoPanel()）。
-   */
-  countDrawnPinsInRect(rect, { afterRevealOf = null } = {}) {
-    if (!this.map || !this.isContainerVisible()) return 0;
-    // ピンを選んだ直後は、このあと選んだピンを見えている範囲の真ん中へずらす（revealAboveBand()）。その分だけ
-    // 動いたあとの位置で数える（帯を出すのは、ずらし始める前のため）。
-    let sx = 0;
-    let sy = 0;
-    const ll = afterRevealOf && this.spotsLatLngById.get(afterRevealOf);
-    if (ll) {
-      const t = this._revealTargetPoint(ll);
-      const p = this.map.latLngToContainerPoint(ll);
-      sx = t.x - p.x;
-      sy = t.y - p.y;
-    }
-    let n = 0;
-    this.map.getContainer().querySelectorAll('.map-pin-spot, .map-cluster').forEach((el) => {
-      const b = el.getBoundingClientRect();
-      if (!(b.width > 0)) return;
-      const cx = b.left + b.width / 2 + sx;
-      const cy = b.top + b.height / 2 + sy;
-      if (cx > rect.left && cx < rect.right && cy > rect.top && cy < rect.bottom) n++;
-    });
-    return n;
   }
 
   /** 【59本目】今の見えている範囲の真ん中（地図の入れ物の左上を基準にしたpx）。見えていないときはnull。 */

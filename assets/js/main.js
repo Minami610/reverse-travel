@@ -136,7 +136,7 @@ class ReverseTravel {
     this.mapView.onSelectionChange = (spotId) => {
       this.selectedSpotId = spotId;
       this.highlightCard(spotId);
-      this.showSpotInfoPanel(spotId);
+      this.onPinSelected(spotId);
     };
     // 3D地図のインスタンスは3D切替が実際に行われるまで作らない（4本目②：
     // terrain-map-view.jsはMapLibre本体と同じく遅延読込のため、クラス自体が
@@ -194,9 +194,7 @@ class ReverseTravel {
       searchForm: document.getElementById('search-form'),
       mapDimensionToggle: document.getElementById('map-dimension-toggle'),
       terrainLoadingIndicator: document.getElementById('terrain-loading-indicator'),
-      spotInfoPanel: document.getElementById('spot-info-panel'),
-      spotInfoContent: document.getElementById('spot-info-content'),
-      spotInfoClose: document.getElementById('spot-info-close'),
+      sheetSpotCard: document.getElementById('sheet-spot-card'), // 【64本目】スマホでピンを押したときのカード
       mapResetViewBtn: document.getElementById('map-reset-view-btn'),
       mapZoomIn: document.getElementById('map-zoom-in'),
       mapZoomOut: document.getElementById('map-zoom-out'),
@@ -356,8 +354,8 @@ class ReverseTravel {
     this.updateDimensionToggleLabel();
     this.setupMapStageControls();
     this.showInitialMapView();
-    // 【2026-10-15、11本目①】地図の下の固定情報枠の閉じるボタン（Minami決定：A）。
-    this.elements.spotInfoClose?.addEventListener('click', () => this.hideSpotInfoPanel());
+    // 【64本目】スマホで場所のカードを出しているとき、地図の何もないところを押したら元の小に戻す
+    this.mapView.onBackgroundClick = () => this.onMapBackgroundClick();
     // 【2026-10-21、41本目、Minami決定】最初の見え方に戻るボタン（地図の右上、方位磁針の
     // すぐ下。2Dは右上）。検索した直後と同じ見え方（円が短辺の0.85（47本目）、3Dは傾き45°・向きは
     // 変えない）へなめらかに戻す。以前の「全体を見る」（寄っているときだけ出る文字ボタン）の
@@ -390,6 +388,16 @@ class ReverseTravel {
       this.showDepartureSuggestions(e.target.value);
       this.updateSearchButtonState();
     });
+
+    // 【64本目、不具合修正】候補を選ばずにEnterを押すと「候補から出発駅を選んでください」になり候補一覧が閉じるが、
+    // 入力欄にはフォーカスが残るため、押しても何も起きず、一度文字を消さないと候補が出なかった。入力欄を押したとき
+    // （フォーカスしたとき、すでにフォーカスがあるときはクリック）に、入っている文字で候補をすぐ出す。
+    const reopenSuggestions = () => {
+      if (this.elements.departureSuggestions.innerHTML) return;
+      this.showDepartureSuggestions(this.elements.departureInput.value);
+    };
+    this.elements.departureInput.addEventListener('focus', reopenSuggestions);
+    this.elements.departureInput.addEventListener('click', reopenSuggestions);
 
     // 【56本目】候補一覧の外（入力欄・候補一覧以外）を押したら、候補一覧を閉じる。スマホでは候補一覧が入力欄の
     // 上に開き、検索カードの「▲閉じる」などに重なることがあるため、外を押せば閉じられるようにする。
@@ -800,7 +808,7 @@ class ReverseTravel {
    */
   updateMapBudgetLive(budget, { userTouch = true } = {}) {
     if (userTouch) {
-      this.hideSpotInfoPanel();
+      this.clearPinSelection();
     }
     // 【37本目、Minami決定：B2／41本目で変更】ユーザーが金額を上げたときだけ、出発駅
     // （円の中心）から新しい縁へ波を1本出す。41本目から、円が広がらなかった（半径が
@@ -1452,7 +1460,7 @@ class ReverseTravel {
     // 【2026-10-15、11本目①】検索し直したら情報枠を閉じる・ピンの強調も外す
     // （Minami指示）。render()自体も内部でピン選択をクリアするが、枠のDOMは
     // main.js側にあるため、ここで明示的に閉じる必要がある。
-    this.hideSpotInfoPanel();
+    this.clearPinSelection();
 
     // 【2026-10-13、12本目②A、Minami決定：A＋C】検索成功時に要約バーの文言を
     // 更新し、スマホではフォームをたたむ（PCはCSS側で要約バー自体を出さない
@@ -1575,12 +1583,13 @@ class ReverseTravel {
         // 【2026-10-11、6本目B】2Dと同じ動き：地図の点を押したら該当カードを
         // スクロール＋光らせる（highlightCardはスマホで一覧が非表示のときは
         // 自然に何もしない）。【2026-10-15、11本目①】吹き出しは廃止し、
-        // 同じ通知で情報枠も開く。
+        // 同じ通知で情報枠も開く。【64本目】情報枠（名前の帯）はやめ、PCは詳細・スマホは場所のカードを出す（onPinSelected()）。
         this.terrainMapView.onSelectionChange = (spotId) => {
           this.selectedSpotId = spotId;
           this.highlightCard(spotId);
-          this.showSpotInfoPanel(spotId);
+          this.onPinSelected(spotId);
         };
+        this.terrainMapView.onBackgroundClick = () => this.onMapBackgroundClick();
         this.layoutController.terrainMapView = this.terrainMapView; // 遅延生成のため後から差し替える
       }
       await this.terrainMapView.ensureMap({ lat: station.stop_lat, lon: station.stop_lon });
@@ -1813,13 +1822,13 @@ class ReverseTravel {
     if (this.mapMode === '3d') {
       // 3D側はsetSelectedSpot()自体がonSelectionChangeを呼ばない設計
       // （実際のクリック操作時はクリックハンドラ側で別途呼んでいる）ため、
-      // ここで一覧ハイライト・情報枠の表示も明示的に行う。
+      // ここで一覧ハイライトと、詳細・場所のカードの表示（onPinSelected()、出していれば何もしない）も明示的に行う。
       this.terrainMapView?.setSelectedSpot(spot);
       this.highlightCard(spot.id);
-      this.showSpotInfoPanel(spot.id);
+      this.onPinSelected(spot.id);
     } else {
       // 2D側のsetSelected()はonSelectionChange経由でhighlightCard・
-      // showSpotInfoPanelも行うため、ここでは呼ばなくてよい。
+      // onPinSelectedも行うため、ここでは呼ばなくてよい。
       this.mapView.setSelected(spot.id);
     }
   }
@@ -2501,146 +2510,95 @@ class ReverseTravel {
   }
 
   /**
-   * 【2026-10-13、12本目①、Minami決定：A】地図のピンを押したとき、下の固定
-   * 情報「帯」（高さ40px前後、1行）に名前・往復運賃・「詳細を見る」を出す
-   * （11本目の大きな枠から変更：選んだピンが枠に隠れるとのMinami指摘）。
-   * 名前が長いときは…で省略し、title属性で全文を確認できるようにする。
-   * 応援マーク対象なら名前の横に小さい塗りハートを添える（カードと同じ基準）。
+   * 【64本目、Minami決定】地図のピン（1つずつのピン）を押したとき。以前は地図の上に名前の帯（名前・往復運賃・
+   * 「詳細を見る」）を出していたが、文字が小さく気づきにくかったためやめた。
+   * - PC：左のパネルにその場所の詳細を出す（閉じていたら開く。showSpotDetail()）。一覧へ戻る道は今の足あとのまま。
+   * - スマホ：下の一覧（小）を、その場所の大きめのカード1枚に入れ替える（showSheetSpotCard()）。大のときは、
+   *   今までどおり一覧の中のカードを光らせるだけ（highlightCard()）。
+   * 2D・3Dの切り替えで選び直したとき（reapplySelectionAfterModeSwitch()）も通るため、すでにその場所を
+   * 出しているときは何もしない。
    */
-  showSpotInfoPanel(spotId) {
+  onPinSelected(spotId) {
+    if (!spotId) return;
     const spot = this.currentAllSpots?.find((s) => s.id === spotId);
-    if (!spot || !this.elements.spotInfoPanel) return;
-    const fare = spot.source_round_trip_fare;
-    const fareText = typeof fare === 'number' ? `往復¥${fare.toLocaleString('ja-JP')}` : '運賃不明';
-    const freqInfo = this.buildFrequencyDisplay(spot);
-    const heart = freqInfo?.isBadgeEligible ? `<span class="spot-info-heart">${HEART_FILLED_SVG}</span>` : '';
-    this.elements.spotInfoContent.innerHTML = `
-      <strong class="spot-info-name" title="${spot.name}">${heart}${spot.name}</strong>
-      <span class="spot-info-fare">${fareText}</span>
-      <button type="button" class="spot-info-detail-btn" data-spot-id="${spot.id}">詳細を見る</button>
-    `;
-    this.elements.spotInfoContent.querySelector('.spot-info-detail-btn')
-      ?.addEventListener('click', () => this.openSpotDetailById(spot.id));
-    this.elements.spotInfoPanel.hidden = false;
-    this.placeSpotInfoPanel();
+    if (!spot) return;
+    if (window.matchMedia('(min-width: 760px)').matches) {
+      if (this.elements.appLayout.getAttribute('data-view') === 'detail' && this._currentDetailSpot?.id === spotId) return;
+      this.detailHistory = []; // 地図から新しく開いたので「この先へ」の履歴はリセットする（一覧から開いたときと同じ）
+      // 詳細を出している間にほかのピンを押したときは、戻る操作の履歴を積み増さない（戻る1回で一覧に戻る）
+      if (this.elements.appLayout.getAttribute('data-view') !== 'detail') history.pushState({}, '');
+      this.showSpotDetail(spot);
+      return;
+    }
+    if (this.layoutController?.isSheetLarge()) return;
+    if (this.elements.sheetSpotCard && !this.elements.sheetSpotCard.hidden
+      && this.elements.sheetSpotCard.dataset.spotId === spotId) return;
+    this.showSheetSpotCard(spot);
   }
 
   /**
-   * 【2026-10-26、59本目】スマホの結果画面の名前の帯の置き場所：見えている範囲の上の端（上の＋−カードのすぐ下）の
-   * 左寄せ・右寄せ、下の端（下の一覧のすぐ上）の左寄せのうち、描いているピン・まとめた丸を隠す数が一番少ないところ
-   * （同じなら、上の左→上の右→下の順）。右下の部品の列・出典にかかる置き場所は選ばない。選ぶのは帯を出したとき
-   * だけ（地図が止まるたびに選び直すと、ピンを押したあとの地図の動きで帯が跳び、押そうとした「詳細を見る」が逃げるため）。
-   * そのあと帯の幅を、右下の部品の列・出典の手前までにする。
-   * PCは今までどおり（下の端、幅はupdateSpotInfoPanelMaxWidth()）。
+   * 【64本目、Minami決定】スマホでピンを押したときの、下の一覧（小）に入れ替えて出す大きめのカード（写真・名前・
+   * NEWの札・往復の金額・片道の時間・「詳細を見る」・×）。地図は狭くしない：入れ替える前の下の一覧の高さに
+   * 固定し、その中に収める（低い画面＝.sheet-compactでは写真を省いて1行にする。style.css）。
    */
-  placeSpotInfoPanel() {
-    const panel = this.elements.spotInfoPanel;
-    if (!panel || panel.hidden) return;
+  showSheetSpotCard(spot) {
+    const card = this.elements.sheetSpotCard;
+    const sheet = document.querySelector('.results-sheet');
     const layout = this.elements.appLayout;
-    const mobileResults = !window.matchMedia('(min-width: 760px)').matches
-      && layout.classList.contains('has-results') && layout.classList.contains('form-collapsed');
-    panel.classList.remove('spot-info-at-bottom', 'spot-info-at-right');
-    if (!mobileResults) {
-      this.updateSpotInfoPanelMaxWidth();
-      return;
+    if (!card || !sheet) return;
+    if (!layout.classList.contains('sheet-spot')) {
+      const h = sheet.getBoundingClientRect().height;
+      if (h > 0) sheet.style.height = `${Math.round(h)}px`;
     }
-    const mapArea = document.getElementById('map-area');
-    const map = mapArea.getBoundingClientRect();
-    const head = document.querySelector('.results-head')?.getBoundingClientRect();
-    const sheet = document.querySelector('.results-sheet')?.getBoundingClientRect();
-    const pb = panel.getBoundingClientRect();
-    const h = pb.height || 40;
-    const w = pb.width || map.width - 16;
-    const topY = (head && head.height > 0 ? head.bottom : map.top) + 6;
-    const bottomY = (sheet && sheet.height > 0 ? sheet.top : map.bottom) - 8 - h;
-    const view = this.mapMode === '3d' && mapArea.classList.contains('mode-3d') ? this.terrainMapView : this.mapView;
-    // 右側の部品（部品の列の中の部品・出典・「データ出典・免責」）
-    const rightParts = [...(document.getElementById('map-controls-cluster')?.children || []),
-      mapArea.querySelector('.leaflet-control-attribution, .maplibregl-ctrl-attrib'), document.getElementById('map-data-line')]
-      .filter((el) => el && el.offsetParent !== null && !el.hidden && getComputedStyle(el).visibility !== 'hidden')
-      .map((el) => el.getBoundingClientRect()).filter((b) => b.width > 0);
-    const hits = (r) => rightParts.some((b) => r.left < b.right && r.right > b.left && r.top < b.bottom && r.bottom > b.top);
-    const candidates = [
-      { cls: null, rect: { left: map.left + 8, right: map.left + 8 + w, top: topY, bottom: topY + h } },
-      { cls: 'spot-info-at-right', rect: { left: map.right - 8 - w, right: map.right - 8, top: topY, bottom: topY + h } },
-      { cls: 'spot-info-at-bottom', rect: { left: map.left + 8, right: map.left + 8 + w, top: bottomY, bottom: bottomY + h } },
-    ].filter((c, i) => i === 0 || (c.rect.top >= topY && !hits(c.rect)));
-    let best = candidates[0];
-    let bestCount = Infinity;
-    candidates.forEach((c) => {
-      const n = view?.countDrawnPinsInRect(c.rect, { afterRevealOf: this.selectedSpotId }) ?? 0;
-      if (n < bestCount) { best = c; bestCount = n; }
+    const fare = spot.source_round_trip_fare;
+    const fareText = typeof fare === 'number' ? `往復¥${formatThousands(fare)}` : '運賃不明';
+    const minutes = typeof spot.source_ride_duration_min === 'number' ? `片道 約${spot.source_ride_duration_min}分` : '';
+    const searched = this.currentBudget;
+    const isNew = pinCategory(fare, parseInt(this.elements.budgetInput.value, 10), searched, this._mapPrevSearchedBudget ?? searched) === 'orange';
+    card.dataset.spotId = spot.id;
+    card.innerHTML = `
+      ${renderSpotImageHtml(spot, 'sheet-spot-image')}
+      <div class="sheet-spot-body">
+        <p class="sheet-spot-title"><strong class="sheet-spot-name" title="${spot.name}">${spot.name}</strong>${isNew ? '<span class="new-tag sheet-spot-new">NEW</span>' : ''}</p>
+        <p class="sheet-spot-fare">${fareText}</p>
+        ${minutes ? `<p class="sheet-spot-meta">${minutes}</p>` : ''}
+        <button type="button" class="sheet-spot-detail-btn">詳細を見る</button>
+      </div>
+      <button type="button" class="sheet-spot-close" aria-label="閉じる">×</button>
+    `;
+    card.querySelector('.sheet-spot-detail-btn').addEventListener('click', () => {
+      this.openSpotDetailById(spot.id); // 大にして詳細を出す（showSpotDetail()がsetSheetLarge(true)を呼び、カードは閉じる）
     });
-    if (best.cls) panel.classList.add(best.cls);
-    this.updateSpotInfoPanelMaxWidth();
+    card.querySelector('.sheet-spot-close').addEventListener('click', () => this.clearPinSelection());
+    card.hidden = false;
+    layout.classList.add('sheet-spot');
+  }
+
+  /** 【64本目】スマホの場所のカードを閉じ、下の一覧（小）を元に戻す（ピンの選択はそのまま）。 */
+  hideSheetSpotCard() {
+    const card = this.elements.sheetSpotCard;
+    if (!card || card.hidden) return;
+    card.hidden = true;
+    card.innerHTML = '';
+    delete card.dataset.spotId;
+    this.elements.appLayout.classList.remove('sheet-spot');
+    const sheet = document.querySelector('.results-sheet');
+    if (sheet) sheet.style.height = '';
+  }
+
+  /** 【64本目】地図の何もないところを押したとき：スマホで場所のカードを出していたら、元の小に戻す。 */
+  onMapBackgroundClick() {
+    if (window.matchMedia('(min-width: 760px)').matches) return;
+    if (!this.elements.sheetSpotCard || this.elements.sheetSpotCard.hidden) return;
+    this.clearPinSelection();
   }
 
   /**
-   * 【2026-10-14、24本目③、不具合修正】PCの名前の帯（.spot-info-panel）は
-   * CSSのmax-width: calc(100% - 90px - 150px)で「2D/3D切替ボタンと出典
-   * ボタンの間」を見積もっていたが、固定の150pxは出典ボタンの実際の表示幅
-   * （地図の横幅が狭い二段組の左カラムでは出典ボタンがもっと右寄り＝
-   * もっと余白がある）と食い違い、狭く見積もりすぎて「長崎鼻古墳」程度の
-   * 名前でも省略されることがあった（Cowork指摘）。固定値をやめ、実際に
-   * 今表示されている2D/3D切替ボタンの右端と出典ボタンの左端を測り、
-   * その間に収まるmax-widthをJSで都度設定する（3Dの帯の余白を動的に
-   * clampするgetRevealPadding()と同じ考え方）。スマホでは帯の横幅は
-   * CSS側（left:8px;right:8px）に任せるため、ここでは何もしない
-   * （インラインstyleを残さないようクリアする）。
+   * ピンの選択をやめる（カードの×・地図の何もないところ・検索し直し・予算操作のいずれからも呼ぶ）。
+   * スマホの場所のカードを閉じ、ピンの強調（2D・3D両方）も合わせて外す（Minami指示）。
    */
-  updateSpotInfoPanelMaxWidth() {
-    const panel = this.elements.spotInfoPanel;
-    if (!panel) return;
-    const isDesktop = window.matchMedia('(min-width: 760px)').matches;
-    if (!isDesktop) {
-      // 【59本目】スマホの結果画面では帯を見えている範囲の上の端に出す（style.css）。右下の部品の列が帯の高さまで
-      // 伸びているときは、その手前（すき間8px）までの幅にする（PCと同じやり方）。
-      panel.style.maxWidth = '';
-      const mapArea = document.getElementById('map-area');
-      const cluster = document.getElementById('map-controls-cluster');
-      if (!mapArea || !cluster) return;
-      const pr = panel.getBoundingClientRect();
-      if (pr.height === 0) return;
-      // 帯と縦に重なる右側の部品（部品の列の中の部品・出典・「データ出典・免責」）の左の端の手前まで
-      const parts = [...cluster.children, mapArea.querySelector('.leaflet-control-attribution, .maplibregl-ctrl-attrib'), document.getElementById('map-data-line')]
-        .filter((el) => el && el.offsetParent !== null && !el.hidden && getComputedStyle(el).visibility !== 'hidden')
-        .map((el) => el.getBoundingClientRect())
-        .filter((b) => b.width > 0 && b.top < pr.bottom + 4 && b.bottom > pr.top - 4);
-      if (parts.length > 0) {
-        const left = parseFloat(getComputedStyle(panel).left) || 8;
-        const right = Math.min(...parts.map((b) => b.left)) - mapArea.getBoundingClientRect().left;
-        panel.style.maxWidth = `${Math.max(100, right - left - 8)}px`;
-      }
-      return;
-    }
-    const mapArea = document.getElementById('map-area');
-    const toggle = this.elements.mapDimensionToggle;
-    if (!mapArea || !toggle) return;
-    // 【43本目、不具合修正】2Dの下地もMapLibreの層（maplibre-gl-leaflet）で描くようになり、
-    // #map-area全体から'.maplibregl-ctrl-bottom-right'を探すと、3D表示中に裏で隠れている2D側の
-    // 部品（幅0）を先に見つけて、情報枠の幅が最小（100px）まで縮んでいた。表示中の地図の中だけを探す。
-    const attrib = mapArea.querySelector(
-      mapArea.classList.contains('mode-3d') ? '#spots-map-3d .maplibregl-ctrl-bottom-right' : '#spots-map .leaflet-control-attribution'
-    );
-    const mapRect = mapArea.getBoundingClientRect();
-    const toggleRect = toggle.getBoundingClientRect();
-    const attribRect = attrib?.getBoundingClientRect();
-    const rightEdge = attribRect ? attribRect.left - mapRect.left : mapRect.width;
-    const safetyMargin = 16;
-    // 【56本目】帯の左の位置はCSSで決まる（検索前・検索カードを開いているときは90px、結果の入れ物を出している
-    // ときはその右の424px）。決め打ちの90pxではなく、実際の位置から測る。
-    const leftPx = parseFloat(getComputedStyle(panel).left) || 90;
-    const maxWidth = rightEdge - leftPx - safetyMargin;
-    panel.style.maxWidth = `${Math.max(100, maxWidth)}px`;
-  }
-
-  /**
-   * 情報枠を閉じる（×ボタン・検索し直し・予算操作のいずれからも呼ぶ）。
-   * ピンの強調（2D・3D両方）も合わせて外す（Minami指示）。
-   */
-  hideSpotInfoPanel() {
-    if (this.elements.spotInfoPanel) this.elements.spotInfoPanel.hidden = true;
-    if (this.elements.spotInfoContent) this.elements.spotInfoContent.innerHTML = '';
+  clearPinSelection() {
+    this.hideSheetSpotCard();
     this.mapView.clearSelected();
     this.terrainMapView?.clearSelected();
     this.selectedSpotId = null;
@@ -2669,6 +2627,10 @@ class ReverseTravel {
       closedText.textContent = `${name}から`;
       dep.replaceChildren(openText, closedText);
     }
+    // 【64本目】スマホの1行のカードでは、「出発地を変える」のボタンを駅名＋▾として見せる（style.css）
+    const station = this.elements.searchSummaryToggle?.querySelector('.summary-toggle-station');
+    if (station) station.textContent = name;
+    this.elements.searchSummaryToggle?.setAttribute('aria-label', `出発地を変える（今は${name}）`);
   }
 
   /**
@@ -2781,7 +2743,11 @@ class ReverseTravel {
    * @param {boolean} large
    */
   setSheetLarge(large) {
-    this.changeVisibleArea(() => this.layoutController?.setSheetLarge(large));
+    // 【64本目】大にするときは場所のカードを閉じる（大では一覧の中のカードで見せる。ピンの選択はそのまま）
+    this.changeVisibleArea(() => {
+      if (large) this.hideSheetSpotCard();
+      return this.layoutController?.setSheetLarge(large);
+    });
   }
 
   /**
@@ -2794,7 +2760,6 @@ class ReverseTravel {
     const before2d = this.mapView.captureVisibleCenter();
     const before3d = this.terrainMapView?.captureVisibleCenter() ?? null;
     if (!apply()) return;
-    this.updateSpotInfoPanelMaxWidth();
     requestAnimationFrame(() => {
       this.mapView.handleVisibleAreaChanged(before2d);
       this.terrainMapView?.handleVisibleAreaChanged(before3d);

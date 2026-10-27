@@ -570,6 +570,7 @@ export class TerrainMapView {
     this.containerId = containerId;
     this.map = null;
     this.departureMarker = null;
+    this.onBackgroundClick = null; // 【64本目】地図の何もないところを押したとき（main.js）
     this.onSelectionChange = null; // 【2026-10-11、6本目B】地図の点をタップしたとき、一覧のカードをスクロール＋光らせるため（2Dのmap-view.jsと同じ役割）
     this.onOverheadSettled = null; // 【2026-10-13、8本目】(spot) => void、真上から見た状態の読み込みが済んだ瞬間（計測・テスト用）
     this.onTiltComplete = null; // 同上。傾け終わった瞬間（計測・テスト用）
@@ -947,6 +948,14 @@ export class TerrainMapView {
     this.map.on('click', SPOTS_LAYER_ID, onSpotClick);
     this.map.on('click', SPOTS_PLAIN_LAYER_ID, onSpotClick);
     this.map.on('click', SPOTS_POP_LAYER_ID, onSpotClick); // 【48本目】
+    // 【64本目】地図の何もないところ（点の無いところ）を押したとき（main.jsが、スマホの場所のカードを閉じる）。
+    // まとめた丸・選んだピン・出発駅の印（HTMLの印）を押したときは、押した先が地図の絵（canvas）でないため数えない。
+    this.map.on('click', (e) => {
+      if (e.originalEvent?.target !== this.map.getCanvas()) return;
+      const layers = [SPOTS_LAYER_ID, SPOTS_PLAIN_LAYER_ID, SPOTS_POP_LAYER_ID].filter((id) => this.map.getLayer(id));
+      const hits = this.map.queryRenderedFeatures(e.point, { layers }).filter((ft) => !this._absorbedIds?.has(ft.properties.id));
+      if (hits.length === 0) this.onBackgroundClick?.();
+    });
     // 【43本目B-2】まとめた丸（HTMLの印）は、地図が動いたとき・データが変わったときに作り直す
     // （間引きあり）。【不具合修正】当初は'render'のたびに作り直していたが、印の位置を設定し直す
     // と次の描画が呼ばれ、地図が止まっていても描画が毎秒約18回続いて'idle'にならない輪になった
@@ -2039,31 +2048,6 @@ export class TerrainMapView {
     const a = this.map.project(f.center);
     const b = this.map.project(this.map.getCenter());
     return Math.hypot(a.x - b.x, a.y - b.y) < 2;
-  }
-
-  /**
-   * 【59本目】画面上の四角（clientの座標）の中に中心がある、描いている点・まとめた丸の数（名前の帯の置き場所を
-   * 選ぶため。main.jsのplaceSpotInfoPanel()）。丸に入れて透明にした点は数えない。
-   */
-  countDrawnPinsInRect(rect) {
-    if (!this.map) return 0;
-    const container = this.map.getContainer();
-    if (container.clientWidth === 0 || container.clientHeight === 0) return 0;
-    const box = container.getBoundingClientRect();
-    const layers = [SPOTS_LAYER_ID, 'spots-plain-circle'].filter((id) => this.map.getLayer(id));
-    let n = 0;
-    try {
-      const absorbed = this._absorbedIds || new Set();
-      this.map.queryRenderedFeatures([[rect.left - box.left, rect.top - box.top], [rect.right - box.left, rect.bottom - box.top]], { layers })
-        .forEach((f) => { if (!absorbed.has(f.properties.id)) n++; });
-    } catch { /* 地図の準備前 */ }
-    container.querySelectorAll('.map-cluster-3d').forEach((el) => {
-      const b = el.getBoundingClientRect();
-      const cx = b.left + b.width / 2;
-      const cy = b.top + b.height / 2;
-      if (cx > rect.left && cx < rect.right && cy > rect.top && cy < rect.bottom) n++;
-    });
-    return n;
   }
 
   /** 【59本目】今の見えている範囲の真ん中（地図の入れ物の左上を基準にしたpx）。見えていないときはnull。 */

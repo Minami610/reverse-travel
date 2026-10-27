@@ -123,6 +123,11 @@ body {
   white-space: nowrap;
 }
 
+/* 【64本目】ボタンの中の駅名は、スマホの1行のカードだけで出す（.results-head .summary-toggle-station） */
+.summary-toggle-station {
+  display: none;
+}
+
 #search-summary-toggle {
   flex-shrink: 0;
   background: none;
@@ -490,60 +495,6 @@ body {
   font-size: 0.75rem;
   font-weight: 600;
 }
-
-
-/* 【2026-10-16、12本目①、Minami決定：A＋C】地図の下に固定で出す情報「帯」
-   （11本目の大きな枠から、高さ40px前後の細い1行に変更。選んだピンが隠れる
-   というMinami指摘による）。1行に名前（長ければ…で省略、title属性で全文）・
-   往復運賃・「詳細を見る」・閉じるを横並びで収める。
-   PC：#map-areaの一番下、左下の2D/3D切替ボタンと右下の出典ボタンの間に
-   収まる位置（左右の余白をボタン幅ぶん確保）。
-   スマホ：幅が足りないため地図の幅いっぱいで、ボタン類より上に出す。 */
-.spot-info-panel {
-  position: absolute;
-  z-index: 1200;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  background-color: rgba(255, 255, 255, 0.97);
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-  padding: 0 0.6rem;
-}
-
-@media (min-width: 760px) {
-  .spot-info-panel {
-    left: 90px;
-    /* 【2026-10-14、24本目③、不具合修正】以前はleft:90px・right:150pxの
-       両方を指定して帯を「2D/3D切替ボタンと出典ボタンの間いっぱい」に
-       引き伸ばしていたが、これだと帯の実際の横幅は地図の幅に左右され、
-       名前（.spot-info-name、flex:1 1 autoで余りを取り合う）が長めの運賃・
-       ボタン類に押されて収まりきらず「長崎鼻古墳」程度（5文字）でも
-       省略されることがあった（Cowork指摘、地図が狭い左カラムのときに実測で
-       再現）。rightを指定せずmax-widthだけにすることで、帯は中身に合わせて
-       縮む・広がる（絶対配置はwidth未指定なら中身サイズになる）ようにしつつ、
-       2D/3D切替ボタンと出典ボタンの間（100% - 90px - 150px、出典側の見積もりは
-       直前のコメントのまま）を超えて広がらないようにした。収まらないときだけ
-       .spot-info-name側のtext-overflow:ellipsisで省略される。
-       （右150pxの余白分だけはみ出さないようにmax-widthで確保し続ける）。 */
-    width: fit-content;
-    max-width: calc(100% - 90px - 150px);
-    bottom: 6px;
-  }
-}
-
-@media (max-width: 759px) {
-  /* 【2026-10-16、26本目、不具合修正】予算操作帯（#mobile-budget-overlay）は
-     地図の外（タブパネルの下）へ移したため、地図内で避ける対象ではなくなった。
-     地図の一番下に戻す（PCのbottom:6pxに準じる）。 */
-  .spot-info-panel {
-    left: 8px;
-    right: 8px;
-    bottom: 8px;
-  }
-}
-
 /* 【2026-10-13、22本目、Minami決定：B】スマホの検索後に出す予算操作帯。
    「−」「スライダー」「＋」「¥800・16件（または「この金額で探す」）」を
    1行に収める。PCでは常に非表示にする（JS側は検索後にhidden属性を外す
@@ -650,86 +601,6 @@ body {
   border-color: transparent;
   color: white;
 }
-
-.spot-info-close {
-  flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  border: none;
-  background: none;
-  color: var(--color-text-sub);
-  font-size: 1.1rem;
-  line-height: 1;
-  cursor: pointer;
-  order: 4;
-}
-
-.spot-info-content {
-  /* 【2026-10-14、24本目③、不具合修正】flex:1（flex-basis:0%）は、
-     このコンテナを含む.spot-info-panel（中身の幅に合わせて縮むshrink-to-fit
-     配置、上記max-width参照）を常に目一杯（max-widthいっぱい）まで
-     広げてしまい、結果として中の.spot-info-name側に「余った」幅が
-     text-overflow:ellipsisの判定を誤らせ、実際には収まる文字数でも
-     省略されることがあった（flex-basis:0%の子を持つflexコンテナは、
-     中身に基づく本来の幅ではなくflex-grow分を使い切ろうとする挙動が
-     ブラウザのサイズ計算に出るため）。flex-basis:autoに変える
-     （flex:1 1 autoではなくflex:0 1 auto、伸びずに縮むだけ）ことで、
-     中身の実サイズどおりに縮むようにした。閉じるボタン（.spot-info-close、
-     order:4、flex-shrink:0）との間隔は.spot-info-panel自体のgapで保たれる。 */
-  flex: 0 1 auto;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.spot-info-name {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 0.85rem;
-  color: var(--color-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.spot-info-heart {
-  flex-shrink: 0;
-  width: 13px;
-  height: 13px;
-  color: var(--color-accent-deep); /* カード・この先へと同じ色に揃える */
-}
-
-.spot-info-heart svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
-.spot-info-fare {
-  flex-shrink: 0;
-  margin: 0;
-  font-size: 0.75rem;
-  color: var(--color-text-sub);
-  white-space: nowrap;
-}
-
-.spot-info-detail-btn {
-  flex-shrink: 0;
-  padding: 0.3rem 0.6rem;
-  border: none;
-  border-radius: 999px;
-  background-color: var(--color-main);
-  color: white;
-  font-size: 0.75rem;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
 /* 【2026-10-21、41本目、Minami決定】寄っているときだけ出していた「全体を見る」
    文字ボタン（11本目②、.view-all-btn）は、いつでも出ている「最初の見え方に戻るボタン」
    （.map-reset-view-btn、下の#map-controls-clusterの中）に置き換えた。 */
@@ -2697,26 +2568,6 @@ body {
 #map-area .maplibregl-ctrl-bottom-right {
   bottom: var(--map-inset-bottom, 0px);
 }
-
-/* ---- 名前の帯（ピンを押したとき） ---- */
-@media (min-width: 760px) {
-  .spot-info-panel {
-    left: 90px;
-    bottom: 8px;
-  }
-
-  /* 結果の入れ物（左、幅400px）の右に出す */
-  #app-layout.has-results.form-collapsed .spot-info-panel {
-    left: 424px;
-  }
-}
-
-@media (max-width: 759px) {
-  .spot-info-panel {
-    bottom: calc(var(--map-inset-bottom, 0px) + 8px);
-  }
-}
-
 /* ---- 検索カード（トップ画面） ---- */
 .search-card {
   position: absolute;
@@ -3454,11 +3305,6 @@ body {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
     font-size: 0.72rem;
   }
-
-  /* 名前の帯：閉じている間は、検索前と同じ位置 */
-  #app-layout.has-results.form-collapsed.results-list-closed .spot-info-panel {
-    left: 90px;
-  }
 }
 
 /* ========================================
@@ -3600,6 +3446,228 @@ body {
     font-weight: 800;
     color: var(--color-text);
     white-space: nowrap;
+  }
+
+  /* 【64本目、Minami決定】上のカードを1行に：「富山駅前▾　−　予算（往復）¥1,000　＋　97か所」。「NEW +33」は「◯か所」の
+     下に小さく（0のときは出さない）。駅名（▾つき）は「出発地を変える」のボタンで、押すと検索カードが開く。
+     カードの高さが半分ほどになり、地図の見えている範囲が広がる。入らない画面では「予算（往復）」の小さな見出しを省く
+     （#app-layout.results-head-no-label、layout-controller.jsのupdateSheetLayout()）。 */
+  #app-layout.has-results.form-collapsed .results-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+  }
+
+  .results-head .search-summary {
+    flex: 0 1 auto;
+    min-width: 0;
+    margin: 0;
+  }
+
+  .results-head .results-departure {
+    display: none;
+  }
+
+  .results-head #search-summary-toggle {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 100%;
+    padding: 6px 0;
+    color: var(--color-text);
+    font-size: 0.92rem;
+    font-weight: 800;
+    text-decoration: none;
+  }
+
+  .results-head #search-summary-toggle::after {
+    content: '▾';
+    flex: 0 0 auto;
+    margin-left: 2px;
+    color: var(--color-text-sub);
+  }
+
+  .results-head .summary-toggle-label {
+    display: none;
+  }
+
+  .results-head .summary-toggle-station {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .results-head .mobile-budget-overlay {
+    flex: 1 0 auto;
+  }
+
+  .results-head .results-counts #results-new-count {
+    padding: 0 4px;
+    font-size: 10px;
+    line-height: 14px;
+  }
+
+  #app-layout.results-head-no-label .results-head .results-budget-label {
+    display: none;
+  }
+
+  /* 【64本目、Minami決定】ピンを押したとき、下の一覧（小）の代わりに出すその場所のカード（main.jsのshowSheetSpotCard()）。
+     地図は狭くしない：下の一覧の高さは入れ替える前のまま（JSで固定）、その中に収める。左に写真、右に名前・NEW・往復の
+     金額・片道の時間・「詳細を見る」、右上に×。 */
+  #app-layout.sheet-spot:not(.sheet-large) .results-sheet .results-legend,
+  #app-layout.sheet-spot:not(.sheet-large) .results-sheet #results-container {
+    display: none;
+  }
+
+  #app-layout.sheet-spot:not(.sheet-large) .sheet-spot-card {
+    display: flex;
+    position: relative;
+    flex: 1 1 auto;
+    gap: 10px;
+    min-height: 0;
+    padding: 0 0 10px;
+    overflow: hidden;
+  }
+
+  .sheet-spot-image {
+    flex: 0 0 34%;
+    max-width: 150px;
+    height: 100%;
+    min-height: 0;
+    border-radius: 8px;
+    object-fit: cover;
+  }
+
+  .sheet-spot-image.spot-image-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.8rem;
+  }
+
+  .sheet-spot-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    gap: 3px;
+    min-width: 0;
+    padding-right: 30px;
+  }
+
+  .sheet-spot-body p {
+    margin: 0;
+  }
+
+  .sheet-spot-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .sheet-spot-name {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text);
+    font-size: 1.02rem;
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sheet-spot-new {
+    flex: 0 0 auto;
+  }
+
+  .sheet-spot-fare {
+    color: var(--color-text);
+    font-size: 1.15rem;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+
+  .sheet-spot-meta {
+    color: var(--color-text-sub);
+    font-size: 0.8rem;
+    white-space: nowrap;
+  }
+
+  .sheet-spot-detail-btn {
+    align-self: flex-start;
+    margin-top: auto;
+    padding: 7px 16px;
+    border: none;
+    border-radius: 999px;
+    background: var(--color-main);
+    color: white;
+    font-size: 0.85rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .sheet-spot-close {
+    position: absolute;
+    top: -6px;
+    right: -4px;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--color-text-sub);
+    font-size: 1.3rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  /* 低い画面（.sheet-compact、小が見出しの1行だけ）：写真を省き、名前・NEW・金額・片道の時間・「詳細を見る」・×を1行に */
+  #app-layout.sheet-compact.sheet-spot:not(.sheet-large) .sheet-spot-card {
+    align-items: center;
+    padding: 0 0 6px;
+  }
+
+  #app-layout.sheet-compact .sheet-spot-image {
+    display: none;
+  }
+
+  #app-layout.sheet-compact .sheet-spot-body {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding-right: 32px;
+  }
+
+  #app-layout.sheet-compact .sheet-spot-title {
+    flex: 0 1 auto;
+  }
+
+  #app-layout.sheet-compact .sheet-spot-name {
+    font-size: 0.88rem;
+  }
+
+  #app-layout.sheet-compact .sheet-spot-fare {
+    font-size: 0.9rem;
+  }
+
+  #app-layout.sheet-compact .sheet-spot-meta {
+    font-size: 0.72rem;
+  }
+
+  #app-layout.sheet-compact .sheet-spot-detail-btn {
+    flex: 0 0 auto;
+    margin: 0 0 0 auto;
+    padding: 5px 10px;
+    font-size: 0.78rem;
+  }
+
+  #app-layout.sheet-compact .sheet-spot-close {
+    top: 50%;
+    width: 32px;
+    height: 32px;
+    margin-top: -19px;
   }
 
   /* ---- 下から引き出す一覧 ---- */
@@ -3924,29 +3992,6 @@ body {
     border-radius: 999px;
     font-size: 0.75rem;
   }
-
-  /* ---- 名前の帯：見えている範囲の上の端（上の＋−カードのすぐ下）。下の方のピン・右下の部品の列・出典にかぶらない ---- */
-  #app-layout.has-results.form-collapsed .spot-info-panel {
-    top: calc(var(--results-head-bottom, 90px) + 6px);
-    bottom: auto;
-    /* 中身の幅だけ（PCと同じ）。隠すピンを少なくするため */
-    right: auto;
-    width: fit-content;
-    max-width: calc(100% - 16px);
-  }
-
-  /* 上の端だと描いているピンを多く隠すときは、下の端（下の一覧のすぐ上）に出す（main.jsのplaceSpotInfoPanel()） */
-  /* 上の端の左寄せだとピンを多く隠すときは、右寄せにする（main.jsのplaceSpotInfoPanel()） */
-  #app-layout.has-results.form-collapsed .spot-info-panel.spot-info-at-right {
-    left: auto;
-    right: 8px;
-  }
-
-  #app-layout.has-results.form-collapsed .spot-info-panel.spot-info-at-bottom {
-    top: auto;
-    bottom: calc(var(--map-inset-bottom, 0px) + 8px);
-  }
-
   /* ---- 右下の部品の列：上の＋−カードと下の一覧の間に入りきらないときは、ズーム＋−から隠す（layout-controller.js） ---- */
   .map-controls-cluster.cluster-no-zoom .map-zoom-controls {
     display: none;
