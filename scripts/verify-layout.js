@@ -3396,8 +3396,12 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
  * - 2D→3D切替：切り替えても同じピンの選択状態が保たれ、3Dで別のピンを選ぶと
  *   一覧がそちらへスクロールし直す
  */
+// 【64本目】PCではピンを押すと左のパネルにその場所の詳細を出すようになり（一覧の中のカードへはスクロールしない）、
+// 「一覧がそのカードまでスクロールして光る」は成り立たなくなった。2D・3Dで選択状態が1つだけ（アプリ全体で
+// 共通）であることの検証として、「選んだピンの場所の詳細が出る」「前に選んだピンの選択が外れる」を見る
+// （checkGlowImmediately()・checkCardScrolledAndGlowed()を書き換えた。記録の名前は以前のまま残している）。
 async function checkCrossDimensionSelectionScroll(browser, baseUrl, savedPaths) {
-  console.log('\n=== 22本目：2D/3D共通の選択状態・一覧スクロールの検証 ===');
+  console.log('\n=== 22本目：2D/3D共通の選択状態の検証（64本目からPCはピンで詳細） ===');
 
   const context = await browser.newContext({ viewport: VIEWPORTS.pc });
   const page = await context.newPage();
@@ -3408,6 +3412,7 @@ async function checkCrossDimensionSelectionScroll(browser, baseUrl, savedPaths) 
   await page.waitForSelector('#departure-input');
   await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
   await searchAt(page, '高松築港', 1000);
+  await waitForAllSpotsPrefetchSettled(page);
 
   // 一覧のDOM順で最後のカード＝PC画面（1920×1080）では初期状態で見えておらず、
   // 選ぶと実際にスクロールが起きるはずの対象（判定が「常に重なって見える」に
@@ -3423,32 +3428,31 @@ async function checkCrossDimensionSelectionScroll(browser, baseUrl, savedPaths) 
    * クリック直後・スクロールの安定待ちより前に読むことで、この揺らぎを避ける。
    */
   async function checkGlowImmediately(label, spotId) {
-    const glowing = await page.evaluate(
-      (id) => document.querySelector(`.spot-card[data-spot-id="${id}"]`)?.classList.contains('spot-card-glow'),
-      spotId
-    );
-    record(`${label} 選んだカードが一時的に光る（spot-card-glow）`, glowing === true);
+    // 【64本目】PCはピンで詳細を出す。詳細が開くのを待つ（光りの確認はやめた）。
+    await page.waitForFunction((id) => document.getElementById('app-layout').getAttribute('data-view') === 'detail'
+      && (window.__mapViewForDebug._lastSpots || []).find((s) => s.id === id)?.name === document.querySelector('#detail-content h2')?.textContent,
+    spotId, { timeout: 8000 }).catch(() => {});
+    void label;
   }
 
   /** 指定spotIdのカードが一覧の表示範囲内にあり、選択状態かを見る（光りは別途checkGlowImmediately参照） */
   async function checkCardScrolledAndGlowed(label, spotId) {
+    // 【64本目】選んだピンの場所の詳細が左のパネルに出て、その場所が選択状態（一覧のカードもspot-card-selected）になる
     const info = await page.evaluate((id) => {
-      const list = document.getElementById('results-list');
-      const card = list.querySelector(`.spot-card[data-spot-id="${id}"]`);
-      if (!card) return { found: false };
-      const listRect = list.getBoundingClientRect();
-      const cardRect = card.getBoundingClientRect();
+      const name = (window.__mapViewForDebug._lastSpots || []).find((s) => s.id === id)?.name ?? null;
+      const card = document.querySelector(`.spot-card[data-spot-id="${id}"]`);
       return {
-        found: true,
-        selected: card.classList.contains('spot-card-selected'),
-        scrollTop: list.scrollTop,
-        inView: cardRect.top < listRect.bottom && cardRect.bottom > listRect.top,
+        name,
+        view: document.getElementById('app-layout').getAttribute('data-view'),
+        heading: document.querySelector('#detail-content h2')?.textContent ?? null,
+        selected: !!card && card.classList.contains('spot-card-selected'),
       };
     }, spotId);
-    record(`${label} カードが見つかる`, info.found, JSON.stringify(info));
-    if (!info.found) return;
-    record(`${label} 選んだカードが一覧の表示範囲内にスクロールされている`, info.inView, JSON.stringify(info));
-    record(`${label} 選んだカードが選択状態（spot-card-selected）になる`, info.selected, JSON.stringify(info));
+    record(`${label} 選んだピンの場所の詳細が左のパネルに出る`, info.view === 'detail' && !!info.name && info.heading === info.name, JSON.stringify(info));
+    record(`${label} 選んだ場所が選択状態（一覧のカードもspot-card-selected）になる`, info.selected, JSON.stringify(info));
+    // 次のピンを押す前に、足あとの「一覧」で一覧へ戻しておく
+    await page.click('.breadcrumb-list-link').catch(() => {});
+    await page.waitForTimeout(400);
   }
 
   // --- PC・3D：最後のカードに対応するピンを選ぶ ---
@@ -3488,12 +3492,7 @@ async function checkCrossDimensionSelectionScroll(browser, baseUrl, savedPaths) 
       await checkGlowImmediately('[PC/3D]', lastCardSpotId);
       await waitForScrollSettled(page, '#results-list');
       await checkCardScrolledAndGlowed('[PC/3D]', lastCardSpotId);
-      const scrollTopAfter3d = await page.evaluate(() => document.getElementById('results-list').scrollTop);
-      record(
-        '[PC/3D] ピンを選ぶと一覧が実際にスクロールする（scrollTopが動く）',
-        scrollTopAfter3d !== scrollTopBefore3d,
-        `${scrollTopBefore3d} -> ${scrollTopAfter3d}`
-      );
+      void scrollTopBefore3d; // 【64本目】PCはピンで詳細を出すため、一覧のスクロールは見ない
 
       // 降りる→傾ける演出完了を待ってから、MapLibre公式の'idle'イベント
       // （航空写真の高詳細タイルまで含めて描画が完全に落ち着いたことを示す）
@@ -4094,9 +4093,16 @@ async function checkInitialSearchCircleFit(browser, baseUrl, savedPaths) {
             }, visShortForRatio);
 
         const atZoomFloor = dim === '3d' ? ratio.zoom <= 8.55 : ratio.zoom <= 8.55;
-        const ratioOk = dim === '3d'
+        // 【64本目】円の縁が地図の上の部品に4pxのすき間を残してかからない大きさまでだけ寄る（47本目の決まり）ため、
+        // 部品を避けて小さくなったとき（縁と部品のすき間が10px以下）も除く。スマホの上のカードが1行になって見えている
+        // 範囲の高さが増え、400×464の3Dで右の部品の列を避けて0.78前後になるようになった。
+        const gapsForFit = await circleEdgeControlGaps(page, dim);
+        const limitedByControl = Object.entries(gapsForFit).some(([sel, g]) => sel !== '#mobile-budget-overlay' && g <= 10);
+        ratio.limitedByControl = limitedByControl;
+        ratio.gaps = gapsForFit;
+        const ratioOk = limitedByControl || (dim === '3d'
           ? (ratio.horizRatio >= TEST_FIT_RATIO_MIN && ratio.horizRatio <= TEST_FIT_RATIO_MAX)
-          : ((ratio.vertRatio >= TEST_FIT_RATIO_MIN && ratio.vertRatio <= TEST_FIT_RATIO_MAX) && (ratio.horizRatio >= TEST_FIT_RATIO_MIN && ratio.horizRatio <= TEST_FIT_RATIO_MAX));
+          : ((ratio.vertRatio >= TEST_FIT_RATIO_MIN && ratio.vertRatio <= TEST_FIT_RATIO_MAX) && (ratio.horizRatio >= TEST_FIT_RATIO_MIN && ratio.horizRatio <= TEST_FIT_RATIO_MAX)));
         record(
           `[${vLabel}/${dim}/¥${budget}] 検索直後、円の直径が見えている範囲の短辺の0.85前後（47本目。3Dは横方向。最低ズーム8.5に当たっている場合を除く）`,
           ratioOk || atZoomFloor,
@@ -4802,6 +4808,21 @@ const GPU_LAUNCH_ARGS = ['--use-angle=d3d11', '--enable-gpu', '--ignore-gpu-bloc
  * あわせて、地図の中心・ズーム・傾き・向き・円の半径も返す。
  */
 async function measureCircleState(page, dim) {
+  const st = await measureCircleStateRaw(page, dim);
+  // 【64本目】円の縁が地図の上の部品に4pxのすき間を残してかからない大きさまでだけ寄る（47本目の決まり）ため、部品を
+  // 避けて0.85より小さくなったか（縁と部品のすき間が10px以下）も返す（fitRatioInRange()）。スマホの上のカードが1行に
+  // なって見えている範囲の高さが増え、400×464の3Dで右の部品の列を避けて0.78前後になるようになった。
+  const gaps = await circleEdgeControlGaps(page, dim).catch(() => ({}));
+  st.limitedByControl = Object.entries(gaps).some(([sel, g]) => sel !== '#mobile-budget-overlay' && g <= 10);
+  return st;
+}
+
+/** 【64本目】円の直径が見えている範囲の短辺の0.85前後か（部品を避けて小さくなったときを除く）。 */
+function fitRatioInRange(st) {
+  return (st.ratio >= TEST_FIT_RATIO_MIN && st.ratio <= TEST_FIT_RATIO_MAX) || (!!st.limitedByControl && st.ratio < TEST_FIT_RATIO_MAX);
+}
+
+async function measureCircleStateRaw(page, dim) {
   return page.evaluate((dim) => {
     const toRad = (d) => (d * Math.PI) / 180;
     const toDeg = (r) => (r * 180) / Math.PI;
@@ -5170,7 +5191,7 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
             noMoveCases.push(entry);
           } else {
             const atFloor = after.zoom <= 8.55;
-            entry.ok = (after.ratio >= TEST_FIT_RATIO_MIN && after.ratio <= TEST_FIT_RATIO_MAX) || atFloor;
+            entry.ok = fitRatioInRange(after) || atFloor;
             refitCases.push(entry);
           }
         }
@@ -5226,7 +5247,7 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
         const atMax = after.zoom >= 15.95;
         record(
           `${label} 円が3.5割より小さくなったときだけ地図が寄り、円の直径が短辺の0.85になる`,
-          (after.ratio >= TEST_FIT_RATIO_MIN && after.ratio <= TEST_FIT_RATIO_MAX) || atMax,
+          fitRatioInRange(after) || atMax,
           JSON.stringify({ budget: shrinkBudget.b, predicted: +predictOf2(shrinkBudget.r).toFixed(3), ratioAfter: after.ratio, zoomBefore: base2000.zoom, zoomAfter: after.zoom })
         );
       } else {
@@ -6161,7 +6182,7 @@ async function checkSelectedPinVisibleAfterFocus3d(browser, baseUrl, savedPaths)
         const first = await measureCircleState(page, '3d');
         record(
           `${label} 検索したあとに初めて3Dへ切り替えると、円0.85・傾き45°・北向き（A-2）`,
-          first.ratio >= TEST_FIT_RATIO_MIN && first.ratio <= TEST_FIT_RATIO_MAX && Math.abs(first.pitch - TEST_OVERVIEW_PITCH) < 0.5 && Math.abs(first.bearing) < 0.5,
+          fitRatioInRange(first) && Math.abs(first.pitch - TEST_OVERVIEW_PITCH) < 0.5 && Math.abs(first.bearing) < 0.5,
           JSON.stringify({ ratio: first.ratio, pitch: first.pitch, bearing: first.bearing, zoom: first.zoom })
         );
 
@@ -6886,7 +6907,7 @@ async function checkRound45(browser, baseUrl, savedPaths) {
       const s = await measureCircleState(page, '3d');
       record(
         `${label}：検索した直後の円が短辺の0.85前後・傾き45°（半径${s.radiusKm.toFixed(1)}kmでも最大ズームにかからず寄る）`,
-        s.ratio >= TEST_FIT_RATIO_MIN && s.ratio <= TEST_FIT_RATIO_MAX && Math.abs(s.pitch - TEST_OVERVIEW_PITCH) < 0.5 && s.zoom < 20,
+        fitRatioInRange(s) && Math.abs(s.pitch - TEST_OVERVIEW_PITCH) < 0.5 && s.zoom < 20,
         JSON.stringify({ ratio: +s.ratio.toFixed(3), zoom: +s.zoom.toFixed(2), pitch: s.pitch, radiusKm: +s.radiusKm.toFixed(2) })
       );
       if (name === '3Dのまま検索') {
@@ -7298,7 +7319,7 @@ async function waitForBaseMapLoaded(page, dim) {
 async function checkRound47(browser, baseUrl, savedPaths) {
   console.log('\n=== 47本目：オレンジの場所をまとめて主役にする・検索した直後にもっと寄る ===');
   const viewports = { pc: VIEWPORTS.pc, own: { width: 400, height: 464 }, sp375: { width: 375, height: 667 }, sp390: { width: 390, height: 844 } };
-  const ratioOk = (s) => s.ratio >= TEST_FIT_RATIO_MIN && s.ratio <= TEST_FIT_RATIO_MAX;
+  const ratioOk = (s) => fitRatioInRange(s); // 【64本目】部品を避けて小さくなったときを除く
   for (const [vLabel, viewport] of Object.entries(viewports)) {
     const isMobile = vLabel !== 'pc';
     const full = vLabel === 'pc' || vLabel === 'own'; // まとめ方・円の大きさ・スクリーンショットはPCと400×464
@@ -8876,8 +8897,8 @@ async function checkRound58(browser, baseUrl, savedPaths) {
             legend: t('.results-legend'), mapLegendShown: getComputedStyle(document.getElementById('map-legend')).display !== 'none',
           };
         });
-        record(`${label} 開いているとき：「出発：富山駅前」「条件を変える」・「予算（往復）」¥800・「◯か所」・色の説明・見出し「¥601〜¥800 の場所」が出て、地図の上の中央の色の説明は出ない`,
-          top.departure === '出発：富山駅前' && /条件を変える/.test(top.toggle) && top.amount === '¥800' && top.label === '予算（往復）'
+        record(`${label} 開いているとき：「出発：富山駅前」「出発地を変える」（64本目）・「予算（往復）」¥800・「◯か所」・色の説明・見出し「¥601〜¥800 の場所」が出て、地図の上の中央の色の説明は出ない`,
+          top.departure === '出発：富山駅前' && /出発地を変える/.test(top.toggle) && top.amount === '¥800' && top.label === '予算（往復）'
             && /^\d+か所$/.test(top.count) && /みちどころ/.test(top.legend) && /NEW/.test(top.legend)
             && /^¥601〜¥800 の場所\s*\d+か所$/.test(top.heading) && !top.mapLegendShown, JSON.stringify(top));
         const ov1 = await overlaps(['.results-panel', '#results-list-close-btn']);
@@ -9087,13 +9108,13 @@ async function checkRound59(browser, baseUrl, savedPaths) {
           const t = (sel) => document.querySelector(sel)?.textContent.replace(/\s+/g, ' ').trim();
           const vis = (sel) => { const el = document.querySelector(sel); return !!el && el.offsetParent !== null && el.getBoundingClientRect().width > 0; };
           return {
-            departure: t('.results-departure-closed'), toggle: t('#search-summary-toggle'), amount: t('#results-budget-value'),
+            departure: t('.results-departure-closed'), toggle: document.getElementById('search-summary-toggle').innerText.trim(), amount: t('#results-budget-value'),
             label: t('.results-budget-label'), count: t('#results-map-count'), heading: t('#results-band-heading'), legend: t('.results-sheet .results-legend'),
             cardsShown: vis('.spot-card'), compact: document.getElementById('app-layout').classList.contains('sheet-compact'),
           };
         });
-        record(`${label} 小：上のカードに「富山駅前から」「条件を変える」・「予算（往復）」¥800・「◯か所」、下の一覧に見出し「¥601〜¥800 の場所」と色の説明`,
-          top.departure === '富山駅前から' && /条件を変える/.test(top.toggle) && top.amount === '¥800' && top.label === '予算（往復）' && /^\d+か所$/.test(top.count)
+        record(`${label} 小：上のカードに駅名「富山駅前▾」（64本目、「出発地を変える」のボタン）・「予算（往復）」¥800・「◯か所」、下の一覧に見出し「¥601〜¥800 の場所」と色の説明`,
+          top.toggle === '富山駅前' && top.amount === '¥800' && top.label === '予算（往復）' && /^\d+か所$/.test(top.count)
             && /^¥601〜¥800 の場所/.test(top.heading) && /みちどころ/.test(top.legend) && /NEW/.test(top.legend), JSON.stringify(top));
         record(`${label} 小：横のカードは、高さが足りない画面（地図の高さ560px未満）では出さず、それ以外では出す`,
           top.compact === (vLabel === 'own') && top.cardsShown === !top.compact, JSON.stringify({ compact: top.compact, cardsShown: top.cardsShown }));
