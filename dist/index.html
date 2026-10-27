@@ -10793,14 +10793,20 @@ class ReverseTravel {
     if (this.mapMode === '3d') {
       // 3D側はsetSelectedSpot()自体がonSelectionChangeを呼ばない設計
       // （実際のクリック操作時はクリックハンドラ側で別途呼んでいる）ため、
-      // ここで一覧ハイライトと、詳細・場所のカードの表示（onPinSelected()、出していれば何もしない）も明示的に行う。
+      // ここで一覧ハイライトも明示的に行う。
+      // 【64本目】詳細・場所のカードは出し直さない（onPinSelected()は呼ばない）：PCで詳細から一覧に戻ったあとも
+      // 選択は残るため、切り替えるたびに詳細が開き直ってしまう。スマホの場所のカードは地図と別のDOMのため、
+      // 切り替えても出たまま。
       this.terrainMapView?.setSelectedSpot(spot);
       this.highlightCard(spot.id);
-      this.onPinSelected(spot.id);
     } else {
-      // 2D側のsetSelected()はonSelectionChange経由でhighlightCard・
-      // onPinSelectedも行うため、ここでは呼ばなくてよい。
-      this.mapView.setSelected(spot.id);
+      // 2D側のsetSelected()はonSelectionChange経由でhighlightCardを行う（onPinSelectedは上と同じ理由で止める）。
+      this._reapplyingSelection = true;
+      try {
+        this.mapView.setSelected(spot.id);
+      } finally {
+        this._reapplyingSelection = false;
+      }
     }
   }
 
@@ -11486,11 +11492,11 @@ class ReverseTravel {
    * - PC：左のパネルにその場所の詳細を出す（閉じていたら開く。showSpotDetail()）。一覧へ戻る道は今の足あとのまま。
    * - スマホ：下の一覧（小）を、その場所の大きめのカード1枚に入れ替える（showSheetSpotCard()）。大のときは、
    *   今までどおり一覧の中のカードを光らせるだけ（highlightCard()）。
-   * 2D・3Dの切り替えで選び直したとき（reapplySelectionAfterModeSwitch()）も通るため、すでにその場所を
-   * 出しているときは何もしない。
+   * 2D・3Dの切り替えで選び直したとき（reapplySelectionAfterModeSwitch()）は呼ばない（_reapplyingSelection）。
+   * すでにその場所を出しているときは何もしない。
    */
   onPinSelected(spotId) {
-    if (!spotId) return;
+    if (!spotId || this._reapplyingSelection) return;
     const spot = this.currentAllSpots?.find((s) => s.id === spotId);
     if (!spot) return;
     if (window.matchMedia('(min-width: 760px)').matches) {
@@ -12014,6 +12020,10 @@ class ReverseTravel {
       // 戻してから地図タブを有効にする。
       this.elements.appLayout.setAttribute('data-view', 'results');
       this.layoutController.activateTab('map');
+      // 【64本目】スマホでは、詳細を出すときに大にした下の一覧を小に戻す（地図を見るための操作のため。大のままだと
+      // 地図の6割が隠れ、ピンを押しても場所のカードが出ない）。このあと寄る（flyToSpot()）ため、開け閉めのときの
+      // 地図の合わせ直し（changeVisibleArea()）は通さず、小に戻した見えている範囲で寄る。
+      this.layoutController?.setSheetLarge(false);
       if (this.terrainMapView?.map) {
         const departureStation = this.data?.stations?.[this.currentDepartureStationId];
         this.terrainMapView.flyToSpot(spot, departureStation);
