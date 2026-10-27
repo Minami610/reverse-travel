@@ -1953,14 +1953,16 @@ async function checkTerrain3DCameraAndInteraction(browser, baseUrl, savedPaths) 
         // 平面投影上の中心（flyToの中心）とピンの実際の描画位置がずれて
         // タップが外れることがあった。ここではピンの正確な画面座標を
         // 得るためにMapLibreのproject()で位置を計算してからクリックする。
+        // 【64本目】「地図で見る」で寄っている最中にピンの位置を測ると、押す位置がずれることがある（通しでだけ落ちた）。
+        // カメラが止まってから測る。
+        await waitForTerrainCameraIdle(page);
         const pinScreenPos = await spotScreenPos3d(page, { name: '城生城' });
         let detailBtnVisible = false;
         if (pinScreenPos) {
           const box = await page.locator('#map-area').boundingBox();
           await page.mouse.click(box.x + pinScreenPos.x, box.y + pinScreenPos.y);
           // 【64本目】名前の帯はやめ、スマホではピンを押すと下の一覧（小）がその場所のカードに入れ替わる
-          await page.waitForTimeout(200);
-          detailBtnVisible = await page.locator('.sheet-spot-detail-btn').first().isVisible().catch(() => false);
+          detailBtnVisible = await page.locator('.sheet-spot-detail-btn').first().waitFor({ state: 'visible', timeout: 1500 }).then(() => true).catch(() => false);
         }
         record(`[${label}] 地図でピンをタップすると下にその場所のカードが出る`, detailBtnVisible);
         if (detailBtnVisible) {
