@@ -3802,13 +3802,20 @@ async function checkReturnToOverview(browser, baseUrl, savedPaths) {
  * ことが実機相当の検証で見つかった。既に動いていなければ即resolve、
  * 動いていればmoveendを1回だけ待つ（固定時間に頼らない）。
  */
-async function waitForTerrainCameraIdle(page, { timeoutMs = 20000 } = {}) {
-  await page.evaluate((timeoutMs) => new Promise((resolve) => {
+async function waitForTerrainCameraIdle(page, { timeoutMs = 20000, waitFillRefine = true } = {}) {
+  // 【64本目】moveendを待つのではなく、止まるまで見る（動き終わりと待ち始めが重なるとmoveendを取り逃がし、
+  // 止まっているのに10秒待つことがあった）。
+  await page.waitForFunction(() => {
     const map = window.__terrainMapForDebug;
-    if (!map || !map.isMoving()) { resolve(); return; }
-    map.once('moveend', resolve);
-    setTimeout(resolve, timeoutMs);
-  }), timeoutMs);
+    return !map || !map.isMoving();
+  }, null, { timeout: timeoutMs, polling: 50 }).catch(() => {});
+  // 【64本目】地形が読み込めたあとの「いっぱい」の合わせ直し（_scheduleFillRefine()、最長4秒）が終わるまで待つ。
+  if (!waitFillRefine) return;
+  await page.waitForFunction(() => {
+    const tv = window.__terrainViewForDebug;
+    const map = window.__terrainMapForDebug;
+    return !tv || !tv._fillRefinePending && !(map && map.isMoving());
+  }, null, { timeout: 6000 }).catch(() => {});
 }
 
 /**
@@ -3940,8 +3947,7 @@ async function circleFullyWithinFrame(page, mode) {
 // CIRCLE_RADIUS_ANIM_MS・CIRCLE_FIT_DEBOUNCE_MS・CIRCLE_FIT_DURATION_MSと
 // 同じ値。テスト側はimportできない実行形態のためここでも定義する。
 const TEST_CIRCLE_RADIUS_ANIM_MS = 200;
-const TEST_CIRCLE_FIT_DEBOUNCE_MS = 150;
-const TEST_CIRCLE_FIT_DURATION_MS = 450;
+const TEST_CIRCLE_FIT_DURATION_MS = 450; // 【64本目】0.15秒の待ち（TEST_CIRCLE_FIT_DEBOUNCE_MS）はやめた
 
 /**
  * 【2026-10-20、36本目、Minami指示】検索した直後（初回の「この条件で検索」・
@@ -4030,85 +4036,13 @@ async function checkInitialSearchCircleFit(browser, baseUrl, savedPaths) {
         }
         await page.waitForTimeout(800);
 
-        // 【57本目】見えている範囲（重ねた入れ物を除く）の短辺で測る（measureCircleState()と同じ決め方）
-        const visShortForRatio = (await measureCircleState(page, dim)).visShort;
-        const ratio = dim === '3d'
-          ? await page.evaluate((visShort) => {
-              const tv = window.__terrainViewForDebug;
-              const map = window.__terrainMapForDebug;
-              const dep = tv._lastDepartureStation;
-              const radiusKm = tv._reachCircleRadiusKm;
-              const toRad = (d) => (d * Math.PI) / 180;
-              const toDeg = (r) => (r * 180) / Math.PI;
-              const R = 6371;
-              const dest = (lat, lon, bearingDeg, distanceKm) => {
-                const delta = distanceKm / R;
-                const theta = toRad(bearingDeg);
-                const phi1 = toRad(lat);
-                const lambda1 = toRad(lon);
-                const phi2 = Math.asin(Math.sin(phi1) * Math.cos(delta) + Math.cos(phi1) * Math.sin(delta) * Math.cos(theta));
-                const lambda2 = lambda1 + Math.atan2(Math.sin(theta) * Math.sin(delta) * Math.cos(phi1), Math.cos(delta) - Math.sin(phi1) * Math.sin(phi2));
-                return { lat: toDeg(phi2), lon: toDeg(lambda2) };
-              };
-              const n = dest(dep.stop_lat, dep.stop_lon, 0, radiusKm);
-              const s = dest(dep.stop_lat, dep.stop_lon, 180, radiusKm);
-              const e = dest(dep.stop_lat, dep.stop_lon, 90, radiusKm);
-              const w = dest(dep.stop_lat, dep.stop_lon, 270, radiusKm);
-              const pn = map.project([n.lon, n.lat]);
-              const ps = map.project([s.lon, s.lat]);
-              const pe = map.project([e.lon, e.lat]);
-              const pw = map.project([w.lon, w.lat]);
-              const vertDiameterPx = Math.hypot(pn.x - ps.x, pn.y - ps.y);
-              const horizDiameterPx = Math.hypot(pe.x - pw.x, pe.y - pw.y);
-              const shortSide = visShort;
-              return { vertRatio: vertDiameterPx / shortSide, horizRatio: horizDiameterPx / shortSide, zoom: map.getZoom() };
-            }, visShortForRatio)
-          : await page.evaluate((visShort) => {
-              const mv = window.__mapViewForDebug;
-              const map = mv.map;
-              const [lat, lon] = mv.departureLatLng;
-              const radiusKm = mv._reachCircleRadiusKm;
-              const toRad = (d) => (d * Math.PI) / 180;
-              const toDeg = (r) => (r * 180) / Math.PI;
-              const R = 6371;
-              const dest = (latA, lonA, bearingDeg, distanceKm) => {
-                const delta = distanceKm / R;
-                const theta = toRad(bearingDeg);
-                const phi1 = toRad(latA);
-                const lambda1 = toRad(lonA);
-                const phi2 = Math.asin(Math.sin(phi1) * Math.cos(delta) + Math.cos(phi1) * Math.sin(delta) * Math.cos(theta));
-                const lambda2 = lambda1 + Math.atan2(Math.sin(theta) * Math.sin(delta) * Math.cos(phi1), Math.cos(delta) - Math.sin(phi1) * Math.sin(phi2));
-                return [toDeg(phi2), toDeg(lambda2)];
-              };
-              const n = dest(lat, lon, 0, radiusKm);
-              const s = dest(lat, lon, 180, radiusKm);
-              const e = dest(lat, lon, 90, radiusKm);
-              const w = dest(lat, lon, 270, radiusKm);
-              const pn = map.latLngToContainerPoint(n);
-              const ps = map.latLngToContainerPoint(s);
-              const pe = map.latLngToContainerPoint(e);
-              const pw = map.latLngToContainerPoint(w);
-              const vertDiameterPx = Math.hypot(pn.x - ps.x, pn.y - ps.y);
-              const horizDiameterPx = Math.hypot(pe.x - pw.x, pe.y - pw.y);
-              const shortSide = visShort;
-              return { vertRatio: vertDiameterPx / shortSide, horizRatio: horizDiameterPx / shortSide, zoom: map.getZoom() };
-            }, visShortForRatio);
-
-        const atZoomFloor = dim === '3d' ? ratio.zoom <= 8.55 : ratio.zoom <= 8.55;
-        // 【64本目】円の縁が地図の上の部品に4pxのすき間を残してかからない大きさまでだけ寄る（47本目の決まり）ため、
-        // 部品を避けて小さくなったとき（縁と部品のすき間が10px以下）も除く。スマホの上のカードが1行になって見えている
-        // 範囲の高さが増え、400×464の3Dで右の部品の列を避けて0.78前後になるようになった。
-        const gapsForFit = await circleEdgeControlGaps(page, dim);
-        const limitedByControl = Object.entries(gapsForFit).some(([sel, g]) => sel !== '#mobile-budget-overlay' && g <= 10);
-        ratio.limitedByControl = limitedByControl;
-        ratio.gaps = gapsForFit;
-        const ratioOk = limitedByControl || (dim === '3d'
-          ? (ratio.horizRatio >= TEST_FIT_RATIO_MIN && ratio.horizRatio <= TEST_FIT_RATIO_MAX)
-          : ((ratio.vertRatio >= TEST_FIT_RATIO_MIN && ratio.vertRatio <= TEST_FIT_RATIO_MAX) && (ratio.horizRatio >= TEST_FIT_RATIO_MIN && ratio.horizRatio <= TEST_FIT_RATIO_MAX)));
+        // 【64本目、Minami決定】円が見えている範囲いっぱい（円の見た目の外枠が見えている範囲の端から8px前後。3Dは楕円の
+        // 見た目の幅と高さで測る。部品で止まったとき・最低ズーム8.5に当たっているときを除く）。
+        const st = await measureCircleState(page, dim);
         record(
-          `[${vLabel}/${dim}/¥${budget}] 検索直後、円の直径が見えている範囲の短辺の0.85前後（47本目。3Dは横方向。最低ズーム8.5に当たっている場合を除く）`,
-          ratioOk || atZoomFloor,
-          JSON.stringify({ ...ratio, atZoomFloor })
+          `[${vLabel}/${dim}/¥${budget}] 検索直後、円が見えている範囲いっぱい（64本目）`,
+          isCircleFilled(st),
+          fillDetail(st)
         );
         await checkNoHorizontalOverflow(page, `[${vLabel}/${dim}/¥${budget}] 検索直後`);
 
@@ -4140,7 +4074,7 @@ async function checkInitialSearchCircleFit(browser, baseUrl, savedPaths) {
  * あと」の8枚）を撮る。
  */
 async function checkCircleThenFit(browser, baseUrl, savedPaths) {
-  console.log('\n=== 予算操作：円が広がってから地図を合わせる検証（32本目B／35本目） ===');
+  console.log('\n=== 予算操作：＋−を押したらすぐ円と地図が「いっぱい」に合う検証（32本目B／35本目、64本目で書き換え） ===');
 
   // --- 1) 3D：順序（円→あとから地図）・円が画面に収まる・最低ズーム8.5・
   //     直径比率7〜8割・1秒以内・横スクロール無し ---
@@ -4187,10 +4121,7 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       // _lastSpots.lengthが安定するまでポーリングで待つ。
       await waitForAllSpotsPrefetchSettled(page);
       await waitForTerrainCameraIdle(page);
-      // 【37本目】金額操作のあとに地図が動くのは、円が短辺の9割をこえた／3.5割を下回ったときだけに
-      // なった。ここは「地図が動くとき」の動き方の検証なので、円をわざと短辺の1.2倍（はみ出しそう）にしておく。
-      await setCircleRatio(page, '3d', 1.2);
-
+      // 【64本目】＋−ではいつも地図を合わせる（0.95／0.35の決まりはやめた）ため、前準備（円を1.2倍にしておく）は要らない。
       const zoomBefore = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
       const radiusBefore = await page.evaluate(() => window.__terrainViewForDebug._reachCircleRadiusKm);
 
@@ -4206,38 +4137,36 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       // はず）を見る。半径アニメーション（0.2秒）はまだ途中だが、既に
       // radiusBeforeより増えているはず。
       await page.waitForTimeout(100);
-      const radiusRightAfter = await page.evaluate(() => window.__terrainViewForDebug._reachCircleRadiusKm);
-      const zoomRightAfter = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
+      // 【64本目】0.1秒の時点では半径の動きの最初のコマがまだ来ていないことがある（57本目の既知の揺れ）ため、押した時点で
+      // 決まる行き先の半径（_reachCircleTargetKm）と今の半径の大きい方で見る（2Dと同じ）。
+      const radiusRightAfter = await page.evaluate(() => Math.max(window.__terrainViewForDebug._reachCircleRadiusKm, window.__terrainViewForDebug._reachCircleTargetKm));
+      const fitStartedRightAfter = await page.evaluate((z0) => {
+        const tv = window.__terrainViewForDebug; const map = window.__terrainMapForDebug;
+        return !!tv._circleFitAnim || map.isMoving() || Math.abs(map.getZoom() - z0) > 0.005;
+      }, zoomBefore);
       record(
-        '[circle-fit/3D] ＋を押すと、まず円の半径が変わる',
+        '[circle-fit/3D] ＋を押すと、円の半径が変わる',
         radiusRightAfter > radiusBefore,
         `前=${radiusBefore} / 直後=${radiusRightAfter}`
       );
       record(
-        '[circle-fit/3D] ＋を押した直後（デバウンスの0.15秒経つ前）は、地図のズームはまだ変わらない',
-        Math.abs(zoomRightAfter - zoomBefore) < 0.05,
-        `前=${zoomBefore} / 直後=${zoomRightAfter}`
+        '[circle-fit/3D] ＋を押したらすぐ（0.15秒待たずに）地図合わせが始まっている（64本目）',
+        fitStartedRightAfter,
+        `前=${zoomBefore}`
       );
 
-      // デバウンス（0.15秒）が終わり、easeTo()が動き出すのを待ってから、
-      // 実際に止まる（moveend）まで固定時間に頼らず待つ（waitForTerrainCameraIdle()
-      // 参照：GPU負荷が高いとeaseTo()の実時間が0.45秒を大きく超えることがある）。
-      // 【52本目】3Dで＋の波が出ているときは、地図合わせは波が終わってから（押してから約0.5秒後）始まる。
-      // 決まった時間だけ待つと、まだ始まっていない地図合わせを「終わった」と見誤るため、保留中の
-      // 地図合わせ・半径の動き・地図の動きが全部止まるまで待つ。
-      await waitForCircleSettled(page, '3d');
+      // 実際に止まる（moveend）まで固定時間に頼らず待つ（GPU負荷が高いとeaseTo()の実時間が0.45秒を大きく超えることがある）。
       await waitForTerrainCameraIdle(page);
       let fitElapsedMs = Date.now() - t0;
+      await waitForCircleSettled(page, '3d');
       const zoomAfterFit = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
       record(
         '[circle-fit/3D] 止まってしばらくすると、地図のズームが変わる（円全体を収めるため）',
         Math.abs(zoomAfterFit - zoomBefore) > 0.05,
         `前=${zoomBefore} / 合わせ後=${zoomAfterFit}`
       );
-      // 【2026-10-20、35本目、Minami指示】＋を1回押してから、地図が合わせ
-      // 終わるまでが1秒以内であること（円0.2秒＋デバウンス0.15秒＋地図0.45秒＝
-      // 理論値0.8秒に、実行環境の揺らぎを見込んだ猶予を足しても1秒には収まる
-      // べき、という検証）。
+      // 【2026-10-20、35本目、Minami指示】＋を1回押してから、地図が合わせ終わるまでが1秒以内であること
+      // （【64本目】待ちをやめたため、理論値は地図0.45秒）。
       // 【不具合修正】単独のnodeプロセス・他に何も動いていない状態（一時調査
       // スクリプトで3回計測）では常に600〜700ms程度で安定して速いが、この
       // verify-layout.js自身のフルスイートの一部として実行すると、直前の
@@ -4266,9 +4195,8 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
         JSON.stringify({ ...withinFrame, zoom: zoomAfterFit, atZoomFloor })
       );
       record('[circle-fit/3D] 最低ズーム8.5を下回らない', zoomAfterFit >= 8.45, `zoom=${zoomAfterFit}`);
-      // 【2026-10-20、35本目、Minami決定：A】円の直径が見えている範囲の短辺の
-      // 7〜8割になっていること（最低ズーム8.5に当たっている場合は除く。
-      // 8.5でも収まりきらない＝直径がそのぶん大きく見えるのは想定どおりのため）。
+      // 【64本目、Minami決定】円が見えている範囲いっぱい（楕円の見た目の幅と高さで測る。最低ズーム8.5・部品で止まったときを除く）。
+      const fill3d = await measureCircleState(page, '3d');
       const diameterRatio3d = await page.evaluate(() => {
         const tv = window.__terrainViewForDebug;
         const map = window.__terrainMapForDebug;
@@ -4300,12 +4228,10 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
         const shortSide = Math.min(rect.width, rect.height);
         return { vertRatio: vertDiameterPx / shortSide, horizRatio: horizDiameterPx / shortSide, shortSide };
       });
-      // 【41本目】目標は0.75→0.6、3Dは35本目の決まりどおり横方向で見る。
-      const ratioOk3d = (diameterRatio3d.horizRatio >= TEST_FIT_RATIO_MIN && diameterRatio3d.horizRatio <= TEST_FIT_RATIO_MAX);
       record(
-        '[circle-fit/3D] 円の直径が見えている範囲の短辺の0.85前後（47本目。横方向。最低ズーム8.5に当たっている場合を除く）',
-        ratioOk3d || atZoomFloor,
-        JSON.stringify({ ...diameterRatio3d, atZoomFloor })
+        '[circle-fit/3D] ＋のあと、円が見えている範囲いっぱい（64本目。楕円の見た目の幅と高さで測る）',
+        isCircleFilled(fill3d),
+        JSON.stringify({ fill: fillDetail(fill3d), ...diameterRatio3d })
       );
       await checkNoHorizontalOverflow(page, '[circle-fit/3D] ＋を押したあと');
 
@@ -4318,12 +4244,15 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       // ボタンの位置は3回の連打の間に動かないため、隠れチェックは1回目だけ
       // 行い、2・3回目はpage.evaluate経由の素のclick()（evaluate往復1回）に
       // して、意図どおりの「連打」に近い間隔を保つ。
-      // 【37本目】金額操作のあとに地図が動くのは、円が短辺の9割をこえた／3.5割を下回ったときだけに
-      // なった。ここは「地図が動くとき」の動き方の検証なので、円をわざと短辺の1.2倍（はみ出しそう）にしておく。
-      await setCircleRatio(page, '3d', 1.2);
+      // 【64本目】押すたびにすぐ新しい地図合わせに移る（前の動きは途中で止まり、MapLibreはそのときもmoveendを出す）ため、
+      // 「地図の移動は最後の1回だけ」はやめ、波が最後の1回だけ・最後に「いっぱい」になることを見る。
       await page.evaluate(() => {
-        window.__moveEndCount = 0;
-        window.__terrainMapForDebug.on('moveend', () => { window.__moveEndCount += 1; });
+        window.__burstWaves = 0;
+        let had = false;
+        const tv = window.__terrainViewForDebug;
+        const t0 = performance.now();
+        const tick = () => { if (tv._circleWave) { if (!had) window.__burstWaves += 1; had = true; } else had = false; if (performance.now() - t0 < 3000) requestAnimationFrame(tick); };
+        requestAnimationFrame(tick);
       });
       await clickElementChecked(page, 'budget-increment', '[circle-fit/3D] 連打1回目：＋');
       await page.waitForTimeout(80);
@@ -4335,8 +4264,10 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       // 地図合わせ・半径の動き・地図の動きが全部止まるまで待つ。
       await waitForCircleSettled(page, '3d');
       await waitForTerrainCameraIdle(page);
-      const moveEndCount = await page.evaluate(() => window.__moveEndCount);
-      record('[circle-fit/3D] ＋を連打（3回）しても、地図の移動は最後の1回だけ起きる', moveEndCount === 1, `moveend回数=${moveEndCount}`);
+      await page.waitForTimeout(500);
+      const burstWaves = await page.evaluate(() => window.__burstWaves);
+      const afterBurst3d = await measureCircleState(page, '3d');
+      record('[circle-fit/3D] ＋を連打（3回）しても、波は最後の1回だけ出て、最後に円が見えている範囲いっぱい（64本目）', burstWaves === 1 && isCircleFilled(afterBurst3d), JSON.stringify({ burstWaves, fill: fillDetail(afterBurst3d) }));
 
       // --- 動いている途中でまた＋を押しても、なめらかに行き先を変える
       //     （止まったり戻ったりしない） ---
@@ -4357,9 +4288,8 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       // いれば「止まってから再度動き出した」、挟まっていなければ「止まらず
       // 続いた」と判定できる、GPU負荷によるタイミングのブレに左右されない
       // 基準）。
-      // 【37本目】金額操作のあとに地図が動くのは、円が短辺の9割をこえた／3.5割を下回ったときだけに
-      // なった。ここは「地図が動くとき」の動き方の検証なので、円をわざと短辺の1.2倍（はみ出しそう）にしておく。
-      await setCircleRatio(page, '3d', 1.2);
+      // 【64本目】前準備（円を1.2倍にしておく）は要らない（＋−ではいつも合わせる）。少し寄せて、＋で引く動きを作る。
+      await setCircleRatio(page, '3d', 0.6);
       const zoomBeforeMidFlight = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
       await page.evaluate(() => {
         window.__midFlightMoveEndedBeforeSecondPress = false;
@@ -4380,8 +4310,8 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       // 固定のデバウンス待ちは行わず、動き出した直後すぐに押すことで、
       // GPU負荷でタイミングがずれても「動いている途中」に収まりやすくする。
       await page.waitForTimeout(50);
-      await page.evaluate(() => document.getElementById('budget-increment').click());
-      await page.evaluate(() => { window.__midFlightSecondPressDone = true; });
+      // 【64本目】2回目を押すと、前の動きは止まり（MapLibreはそのときmoveendを出す）すぐ新しい行き先へ動くため、押す前に印を立てる。
+      await page.evaluate(() => { window.__midFlightSecondPressDone = true; document.getElementById('budget-increment').click(); });
       const isMovingRightAfterSecondPress = await page.evaluate(() => window.__terrainMapForDebug.isMoving());
       const moveEndedBeforeSecondPress = await page.evaluate(() => window.__midFlightMoveEndedBeforeSecondPress);
       await page.evaluate(() => window.__midFlightCleanup());
@@ -4419,9 +4349,6 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       // --- ハンドルで向き・傾きを変えたあと、＋を押しても変わらない ---
       await page.evaluate(() => { window.__terrainMapForDebug.setBearing(50); window.__terrainMapForDebug.setPitch(40); });
       await page.waitForTimeout(100);
-      // 【37本目】金額操作のあとに地図が動くのは、円が短辺の9割をこえた／3.5割を下回ったときだけに
-      // なった。ここは「地図が動くとき」の動き方の検証なので、円をわざと短辺の1.2倍（はみ出しそう）にしておく。
-      await setCircleRatio(page, '3d', 1.2);
       const bearingBeforePlus = await page.evaluate(() => window.__terrainMapForDebug.getBearing());
       const pitchBeforePlus = await page.evaluate(() => window.__terrainMapForDebug.getPitch());
       await clickElementChecked(page, 'budget-increment', '[circle-fit/3D] 向き・傾きを変えたあと：＋');
@@ -4543,8 +4470,6 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
     // 読むと、後から裏取得完了で半径が変わり「押した直後」の判定が崩れる）。
     await waitForAllSpotsPrefetchSettled(page);
 
-    // 【37本目】3D側と同じ理由で、円をわざと短辺の1.2倍（はみ出しそう）にしておく。
-    await setCircleRatio(page, '2d', 1.2);
     const zoomBefore2d = await page.evaluate(() => window.__mapViewForDebug.map.getZoom());
     const radiusBefore2d = await page.evaluate(() => window.__mapViewForDebug._reachCircleRadiusKm);
     await clickElementChecked(page, 'budget-increment', '[circle-fit/2D] 順序確認：＋');
@@ -4553,17 +4478,18 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
     // ことがある。押した時点で決まる行き先の半径（_reachCircleTargetKm）と、今の半径の大きい方で見る。
     const radiusRightAfter2d = await page.evaluate(() => Math.max(window.__mapViewForDebug._reachCircleRadiusKm, window.__mapViewForDebug._reachCircleTargetKm));
     const zoomRightAfter2d = await page.evaluate(() => window.__mapViewForDebug.map.getZoom());
+    const fitStarted2d = await page.evaluate(() => !!window.__mapViewForDebug._circleFitAnim) || Math.abs(zoomRightAfter2d - zoomBefore2d) > 0.005;
     record(
-      '[circle-fit/2D] ＋を押すと、まず円の半径が変わる',
+      '[circle-fit/2D] ＋を押すと、円の半径が変わる',
       radiusRightAfter2d > radiusBefore2d,
       `前=${radiusBefore2d} / 直後=${radiusRightAfter2d}`
     );
     record(
-      '[circle-fit/2D] ＋を押した直後（デバウンスの0.15秒経つ前）は、地図のズームはまだ変わらない',
-      Math.abs(zoomRightAfter2d - zoomBefore2d) < 0.05,
+      '[circle-fit/2D] ＋を押したらすぐ（0.15秒待たずに）地図合わせが始まっている（64本目）',
+      fitStarted2d,
       `前=${zoomBefore2d} / 直後=${zoomRightAfter2d}`
     );
-    await page.waitForTimeout(TEST_CIRCLE_FIT_DEBOUNCE_MS + TEST_CIRCLE_FIT_DURATION_MS + 300);
+    await waitForCircleSettled(page, '2d');
     const zoomAfterFit2d = await page.evaluate(() => window.__mapViewForDebug.map.getZoom());
     const withinFrame2d = await circleFullyWithinFrame(page, '2d');
     // 【不具合修正、32本目B／34本目】3D側と同じ理由（最低ズームは34本目で
@@ -4606,11 +4532,11 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       const shortSide = Math.min(rect.width, rect.height);
       return { vertRatio: vertDiameterPx / shortSide, horizRatio: horizDiameterPx / shortSide, shortSide };
     });
-    const ratioOk2d = (diameterRatio2d.vertRatio >= TEST_FIT_RATIO_MIN && diameterRatio2d.vertRatio <= TEST_FIT_RATIO_MAX) && (diameterRatio2d.horizRatio >= TEST_FIT_RATIO_MIN && diameterRatio2d.horizRatio <= TEST_FIT_RATIO_MAX);
+    const fill2d = await measureCircleState(page, '2d');
     record(
-      '[circle-fit/2D] 円の直径が見えている範囲の短辺の0.85前後（47本目。最低ズーム8.5に当たっている場合を除く）',
-      ratioOk2d || atZoomFloor2d,
-      JSON.stringify({ ...diameterRatio2d, atZoomFloor2d })
+      '[circle-fit/2D] ＋のあと、円が見えている範囲いっぱい（64本目。最低ズーム8.5・部品で止まったときを除く）',
+      isCircleFilled(fill2d),
+      JSON.stringify({ fill: fillDetail(fill2d), ...diameterRatio2d })
     );
     await checkNoHorizontalOverflow(page, '[circle-fit/2D] ＋を押したあと');
 
@@ -4619,7 +4545,7 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       el.value = 2000;
       el.dispatchEvent(new Event('input'));
     });
-    await page.waitForTimeout(TEST_CIRCLE_FIT_DEBOUNCE_MS + TEST_CIRCLE_FIT_DURATION_MS + 300);
+    await waitForCircleSettled(page, '2d');
     const zoomAt2000_2d = await page.evaluate(() => window.__mapViewForDebug.map.getZoom());
     record('[circle-fit/2D] ¥2000でも最低ズーム8.5を下回らない', zoomAt2000_2d >= 8.45, `zoom=${zoomAt2000_2d}`);
 
@@ -4670,17 +4596,15 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
       // 実際に画面に出ている予算操作帯のボタン（#mobile-budget-increment）
       // を押すようにする。
       const incrementId = label === 'pc' ? 'budget-increment' : 'mobile-budget-increment';
-      // 【37本目】「広がった直後」と「地図が収まったあと」の対比を撮るため、円をわざと
-      // 短辺の1.2倍（はみ出しそう）にしてから＋を押す（9割以下なら地図は動かない）。
-      await setCircleRatio(page, dim, 1.2);
+      // 【64本目】＋を押したらすぐ地図も合わせ始める。「動いている途中」（0.1秒後）と「合わせ終わったあと」を撮る。
       await clickElementChecked(page, incrementId, `[circle-fit/${label}/${dim}] スクリーンショット用：＋`);
-      await page.waitForTimeout(100); // 半径アニメーション(0.2秒)の途中、地図はまだ動いていない
+      await page.waitForTimeout(100);
       const overflowPath = path.join(screenshotDir, `circle-then-fit-${dim}-${label}-overflow.png`);
       await page.screenshot({ path: overflowPath, clip: await mapAreaBox() });
       savedPaths.push(overflowPath);
       console.log(`  保存: circle-then-fit-${dim}-${label}-overflow.png`);
 
-      await page.waitForTimeout(TEST_CIRCLE_FIT_DEBOUNCE_MS + TEST_CIRCLE_FIT_DURATION_MS + 300); // デバウンス＋合わせ＋余裕
+      await waitForCircleSettled(page, dim);
       if (dim === '3d') {
         await page.waitForFunction(() => !window.__terrainMapForDebug.isMoving(), { timeout: 10000 }).catch(() => {});
       }
@@ -4724,7 +4648,7 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
         el.value = 2000;
         el.dispatchEvent(new Event('input'));
       });
-      await page.waitForTimeout(TEST_CIRCLE_FIT_DEBOUNCE_MS + TEST_CIRCLE_FIT_DURATION_MS + 300);
+      await waitForCircleSettled(page, dim);
       await checkNoHorizontalOverflow(page, `[circle-fit/${label}/${dim}] ¥2000にしたあと`);
       await context.close();
     }
@@ -4762,7 +4686,7 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
         el.value = 2000;
         el.dispatchEvent(new Event('input'));
       });
-      await page.waitForTimeout(TEST_CIRCLE_FIT_DEBOUNCE_MS + 100);
+      await waitForCircleSettled(page, '3d');
       await waitForTerrainCameraIdle(page);
       const zoomAt2000 = await page.evaluate(() => window.__terrainMapForDebug.getZoom());
       record(`[circle-fit-2000/${label}] ¥2000にして地図を合わせたあと、最低ズーム8.5を下回らない`, zoomAt2000 >= 8.45, `zoom=${zoomAt2000}`);
@@ -4786,14 +4710,24 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
 
 // 【2026-10-20、37本目】本番コード（map-view.js/terrain-map-view.js）の
 // CIRCLE_REFIT_*・CIRCLE_WAVE_*と同じ値（テスト側はimportできない実行形態のため）。
-const TEST_REFIT_UPPER_RATIO = 0.95; // 【47本目】0.9→0.95
-const TEST_REFIT_LOWER_RATIO = 0.35;
-const TEST_CIRCLE_WAVE_DURATION_MS = 500;
+// 【64本目】0.95／0.35の決まりはやめた。波は0.5秒→0.3秒（地図合わせが終わってから出す）。
+const TEST_CIRCLE_WAVE_DURATION_MS = 300;
+const TEST_PIN_DROP_DURATION_MS = 300; // 【64本目】本番のMAP_PIN_DROP_DURATION_MS・PIN_DROP_DURATION_MS（ぽよん）
 // 【41本目、Minami決定：C／案1】地図を合わせたときの円の直径÷短辺（本番のCIRCLE_FIT_TARGET_DIAMETER_RATIO）と、
 // 全体の見え方（検索した直後・最初の見え方に戻るボタン・「← 一覧に戻る」）の3Dの傾き（本番のOVERVIEW_PITCH）。
 // 0.6の許容範囲は0.55〜0.65（35本目の0.75に対する0.65〜0.85より狭いのは、目標そのものが小さいため）。
-const TEST_FIT_RATIO_MIN = 0.80; // 【47本目】0.6→0.85に合わせて0.55→0.80
-const TEST_FIT_RATIO_MAX = 0.90; // 【47本目】0.65→0.90
+// 【64本目、Minami決定】0.85はやめ、「いっぱい」（円の見た目の外枠が見えている範囲の端から8px、部品から4px＋8px）にした。
+// 許容は端から3〜13px（ズームの丸め・地形の高さによる写り方の小さなずれを見込む）、部品から7〜16px。
+const TEST_FIT_EDGE_GAP_MIN = 3;
+const TEST_FIT_EDGE_GAP_MAX = 13;
+const TEST_FIT_CTRL_GAP_MIN = 7;
+const TEST_FIT_CTRL_GAP_MAX = 16;
+// 3Dは地形の高さで円の縁が上下するうえ、＋−で合わせる時点では行き先の標高タイルがまだ無いことがある（64本目）。
+// そのため3Dは端まで0〜16px・部品まで4〜20pxを「いっぱい」とする（はみ出しは不可）。
+const TEST_FIT_3D_EDGE_GAP_MIN = 0;
+const TEST_FIT_3D_EDGE_GAP_MAX = 16;
+const TEST_FIT_3D_CTRL_GAP_MIN = 4;
+const TEST_FIT_3D_CTRL_GAP_MAX = 20;
 const TEST_OVERVIEW_PITCH = 45;
 const TEST_SPOT_FOCUS_PITCH = 60; // 本番のSPOT_FOCUS_PITCH（場所に寄ったときの傾き、41本目でも変えない）
 // 【37本目】3Dの波（0.5秒）の途中経過を測るための、実GPU（Direct3D 11）を使うChromiumの
@@ -4811,17 +4745,39 @@ const GPU_LAUNCH_ARGS = ['--use-angle=d3d11', '--enable-gpu', '--ignore-gpu-bloc
  */
 async function measureCircleState(page, dim) {
   const st = await measureCircleStateRaw(page, dim);
-  // 【64本目】円の縁が地図の上の部品に4pxのすき間を残してかからない大きさまでだけ寄る（47本目の決まり）ため、部品を
-  // 避けて0.85より小さくなったか（縁と部品のすき間が10px以下）も返す（fitRatioInRange()）。スマホの上のカードが1行に
-  // なって見えている範囲の高さが増え、400×464の3Dで右の部品の列を避けて0.78前後になるようになった。
+  // 【64本目】円の縁は地図の上の部品から4px＋8pxのすき間を残してかからない大きさまでだけ寄るため、部品で止まったか
+  // （縁と部品の一番近いすき間ctrlGapがTEST_FIT_CTRL_GAP_MAX以下）も返す（isCircleFilled()）。
   const gaps = await circleEdgeControlGaps(page, dim).catch(() => ({}));
-  st.limitedByControl = Object.entries(gaps).some(([sel, g]) => sel !== '#mobile-budget-overlay' && g <= 10);
+  const ctrl = Object.entries(gaps).filter(([sel]) => sel !== '#mobile-budget-overlay').map(([, g]) => g);
+  st.ctrlGap = ctrl.length > 0 ? Math.min(...ctrl) : Infinity;
+  st.dim = dim;
+  st.limitedByControl = st.ctrlGap <= (dim === '3d' ? TEST_FIT_3D_CTRL_GAP_MAX : TEST_FIT_CTRL_GAP_MAX);
+  st.gaps = gaps;
   return st;
 }
 
-/** 【64本目】円の直径が見えている範囲の短辺の0.85前後か（部品を避けて小さくなったときを除く）。 */
-function fitRatioInRange(st) {
-  return (st.ratio >= TEST_FIT_RATIO_MIN && st.ratio <= TEST_FIT_RATIO_MAX) || (!!st.limitedByControl && st.ratio < TEST_FIT_RATIO_MAX);
+/**
+ * 【2026-10-27、64本目、Minami決定】円が見えている範囲「いっぱい」か：円の見た目（3Dは楕円）の外枠が、見えている範囲の
+ * 端から8px前後（TEST_FIT_EDGE_GAP_MIN〜MAX）のところに縦か横のどちらかで来ている。部品で止まったとき（縁と部品の
+ * すき間が4px＋8px前後）・最低ズーム8.5に当たっているときは、端まで届いていなくてよい（はみ出してはいけない）。
+ */
+function isCircleFilled(st) {
+  if (st.zoom <= 8.55) return true;
+  const is3d = st.dim === '3d';
+  const eMin = is3d ? TEST_FIT_3D_EDGE_GAP_MIN : TEST_FIT_EDGE_GAP_MIN;
+  const eMax = is3d ? TEST_FIT_3D_EDGE_GAP_MAX : TEST_FIT_EDGE_GAP_MAX;
+  const cMin = is3d ? TEST_FIT_3D_CTRL_GAP_MIN : TEST_FIT_CTRL_GAP_MIN;
+  if (st.edgeGap >= eMin && st.edgeGap <= eMax) return true;
+  return !!st.limitedByControl && st.ctrlGap >= cMin && st.edgeGap >= eMin;
+}
+
+/** isCircleFilled()の詳細（記録用）。 */
+function fillDetail(st) {
+  return JSON.stringify({
+    fillW: st.fillW && Math.round(st.fillW * 1000) / 1000, fillH: st.fillH && Math.round(st.fillH * 1000) / 1000,
+    edgeGap: st.edgeGap && Math.round(st.edgeGap * 10) / 10, ctrlGap: st.ctrlGap, zoom: st.zoom && Math.round(st.zoom * 1000) / 1000,
+    depOffsetPx: st.depOffsetPx && Math.round(st.depOffsetPx * 10) / 10,
+  });
 }
 
 async function measureCircleStateRaw(page, dim) {
@@ -4864,21 +4820,30 @@ async function measureCircleStateRaw(page, dim) {
     if (vis.right - vis.left < 80 || vis.bottom - vis.top < 80) vis = full;
     const visShort = Math.min(vis.right - vis.left, vis.bottom - vis.top);
     const visCenter = { x: (vis.left + vis.right) / 2, y: (vis.top + vis.bottom) / 2 };
+    // 【64本目】円の縁（5°ごとの72点）を画面に写した外枠で測る：fillW・fillH＝外枠の幅・高さ÷見えている範囲の幅・高さ、
+    // edgeGap＝外枠と見えている範囲の端の一番近いすき間（はみ出していれば負）。ratioはfillW・fillHの大きい方
+    // （2Dの円は丸いため、直径÷見えている範囲の短辺と同じ）。
+    const fill = (pts) => {
+      const xs = pts.map((p) => p.x);
+      const ys = pts.map((p) => p.y);
+      const bb = { left: Math.min(...xs), right: Math.max(...xs), top: Math.min(...ys), bottom: Math.max(...ys) };
+      const fillW = (bb.right - bb.left) / (vis.right - vis.left);
+      const fillH = (bb.bottom - bb.top) / (vis.bottom - vis.top);
+      const edgeGap = Math.min(bb.left - vis.left, vis.right - bb.right, bb.top - vis.top, vis.bottom - bb.bottom);
+      return { fillW, fillH, edgeGap, ratio: Math.max(fillW, fillH), bbox: bb };
+    };
     if (dim === '3d') {
       const tv = window.__terrainViewForDebug;
       const map = window.__terrainMapForDebug;
       const dep = tv._lastDepartureStation;
       const radiusKm = tv._reachCircleRadiusKm;
-      const shortSide = visShort;
       const bearing = map.getBearing();
-      const l = dest(dep.stop_lat, dep.stop_lon, bearing - 90, radiusKm);
-      const r = dest(dep.stop_lat, dep.stop_lon, bearing + 90, radiusKm);
-      const pl = map.project([l.lon, l.lat]);
-      const pr = map.project([r.lon, r.lat]);
+      const pts = [];
+      for (let i = 0; i < 72; i++) { const p = dest(dep.stop_lat, dep.stop_lon, i * 5, radiusKm); pts.push(map.project([p.lon, p.lat])); }
       const c = map.getCenter();
       const pd = map.project([dep.stop_lon, dep.stop_lat]);
       return {
-        ratio: Math.hypot(pr.x - pl.x, pr.y - pl.y) / shortSide,
+        ...fill(pts),
         zoom: map.getZoom(), center: { lat: c.lat, lng: c.lng }, pitch: map.getPitch(), bearing,
         radiusKm, dep: { lat: dep.stop_lat, lon: dep.stop_lon }, frame: { w: rect.width, h: rect.height },
         vis, visShort, depOffsetPx: Math.hypot(pd.x - visCenter.x, pd.y - visCenter.y),
@@ -4888,15 +4853,12 @@ async function measureCircleStateRaw(page, dim) {
     const map = mv.map;
     const [lat, lon] = mv.departureLatLng;
     const radiusKm = mv._reachCircleRadiusKm;
-    const shortSide = visShort;
-    const e = dest(lat, lon, 90, radiusKm);
-    const w = dest(lat, lon, 270, radiusKm);
-    const pe = map.latLngToContainerPoint([e.lat, e.lon]);
-    const pw = map.latLngToContainerPoint([w.lat, w.lon]);
+    const pts = [];
+    for (let i = 0; i < 72; i++) { const p = dest(lat, lon, i * 5, radiusKm); pts.push(map.latLngToContainerPoint([p.lat, p.lon])); }
     const c = map.getCenter();
     const pd = map.latLngToContainerPoint([lat, lon]);
     return {
-      ratio: Math.hypot(pe.x - pw.x, pe.y - pw.y) / shortSide,
+      ...fill(pts),
       zoom: map.getZoom(), center: { lat: c.lat, lng: c.lng }, pitch: 0, bearing: 0,
       radiusKm, dep: { lat, lon }, frame: { w: rect.width, h: rect.height },
       vis, visShort, depOffsetPx: Math.hypot(pd.x - visCenter.x, pd.y - visCenter.y),
@@ -4924,17 +4886,17 @@ async function centerShiftPx(page, dim, center) {
 /** 【37本目】金額操作のあとの動き（円の半径アニメーション・デバウンス・地図合わせ）が
  * 終わるまで待つ。3DはGPU負荷で実時間が延びることがあるためmoveendも待つ。 */
 async function waitForCircleSettled(page, dim) {
-  await page.waitForTimeout(TEST_CIRCLE_RADIUS_ANIM_MS + TEST_CIRCLE_FIT_DEBOUNCE_MS + 150);
+  await page.waitForTimeout(TEST_CIRCLE_RADIUS_ANIM_MS + 150);
   // 固定時間だけでは、3DのGPU負荷でデバウンスのタイマー自体の発火が遅れたとき
   // （35本目で既知）、地図合わせが「まだ始まっていない」のを「終わった」と
   // 見誤る。保留中のタイマー・半径アニメーション・地図の動きが全部止まるまで待つ。
   await page.waitForFunction((dim) => {
     if (dim === '3d') {
       const tv = window.__terrainViewForDebug;
-      return tv._circleFitTimer == null && tv._circleAnimFrame == null && !window.__terrainMapForDebug.isMoving();
+      return tv._budgetFitWait == null && tv._circleAnimFrame == null && !tv._circleWave && !tv._pinPop && !window.__terrainMapForDebug.isMoving();
     }
     const mv = window.__mapViewForDebug;
-    return mv._circleFitTimer == null && mv._circleAnimFrame == null && !mv.map._flyToFrame;
+    return mv._budgetFitWait == null && mv._circleAnimFrame == null && !mv._circleWave && !mv._pinPop && !mv._circleFitAnim;
   }, dim, { timeout: 20000 }).catch(() => {});
   await page.waitForTimeout(150);
 }
@@ -5022,7 +4984,7 @@ async function searchKeepingMapVisible(page, stationText, budget, isMobile) {
  * 【37本目】ボタンを押し、その直後からrequestAnimationFrameごとに波（_circleWave）の
  * 状態を記録する（押すこと自体もページ内で行い、押した瞬間からの経過時間を正確に測る）。
  */
-async function clickAndSampleWave(page, dim, buttonId, durationMs = 1200) {
+async function clickAndSampleWave(page, dim, buttonId, durationMs = 1800) {
   return page.evaluate(({ dim, buttonId, durationMs }) => new Promise((resolve) => {
     const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
     const radiusBefore = view._reachCircleRadiusKm;
@@ -5033,7 +4995,8 @@ async function clickAndSampleWave(page, dim, buttonId, durationMs = 1200) {
       const w = view._circleWave;
       const t = performance.now() - t0;
       if (w) {
-        const sample = { t, radiusKm: w.radiusKm, opacity: w.opacity, fromKm: w.fromKm, toKm: w.toKm };
+        const sample = { t, radiusKm: w.radiusKm, opacity: w.opacity, fromKm: w.fromKm, toKm: w.toKm,
+          moving: dim === '3d' ? window.__terrainMapForDebug.isMoving() : !!view._circleFitAnim };
         if (dim === '3d') {
           const map = window.__terrainMapForDebug;
           sample.lineOpacity = map.getPaintProperty('reach-wave-line', 'line-opacity');
@@ -5169,51 +5132,29 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
       }
       await waitForCircleSettled(page, dim);
 
-      // ＋を押すたびに、「押す前の比率×半径の伸び」（＝地図を動かさなかった場合の比率）
-      // が9割以下なら「動かない」、9割をこえるなら「0.75へ引く」を確かめる。
-      const noMoveCases = [];
-      const refitCases = [];
+      // 【2026-10-27、64本目、Minami決定】0.95／0.35で動かす・動かさないを分ける決まりはやめた。＋を押すたびに（円が
+      // 広がったときも広がらなかったときも）地図を「いっぱい」へ合わせ、出発駅を見えている範囲の真ん中に置く。
+      const plusCases = [];
       await assertNotObscured(page, 'budget-increment', `${label} ＋`);
-      for (let i = 0; i < 12; i++) {
-        const before = await measureCircleState(page, dim);
+      for (let i = 0; i < 6; i++) {
         await page.evaluate(() => document.getElementById('budget-increment').click());
         await waitForCircleSettled(page, dim);
+        if (dim === '3d') await waitForTerrainCameraIdle(page);
         const after = await measureCircleState(page, dim);
         const budgetNow = Number(await page.evaluate(() => document.getElementById('budget-input').value));
-        if (after.radiusKm > before.radiusKm + 0.01) {
-          const predicted = before.ratio * (after.radiusKm / before.radiusKm);
-          const shift = await centerShiftPx(page, dim, before.center);
-          const entry = {
-            budget: budgetNow, predicted: +predicted.toFixed(3), ratioAfter: +after.ratio.toFixed(3),
-            zoomBefore: +before.zoom.toFixed(3), zoomAfter: +after.zoom.toFixed(3), shiftPx: +shift.toFixed(2),
-            radius: `${before.radiusKm.toFixed(2)}→${after.radiusKm.toFixed(2)}`,
-          };
-          if (predicted <= TEST_REFIT_UPPER_RATIO) {
-            entry.ok = Math.abs(after.zoom - before.zoom) < 0.01 && shift < 1;
-            noMoveCases.push(entry);
-          } else {
-            const atFloor = after.zoom <= 8.55;
-            entry.ok = fitRatioInRange(after) || atFloor;
-            refitCases.push(entry);
-          }
-        }
-        if ((noMoveCases.length >= 2 && refitCases.length >= 1) || budgetNow >= 2000) break;
+        plusCases.push({ budget: budgetNow, ok: isCircleFilled(after) && after.depOffsetPx <= 2, fill: fillDetail(after) });
+        if (budgetNow >= 2000) break;
       }
       record(
-        `${label} ＋で円が0.95をこえないときは、地図の中心とズームが変わらず、円の半径だけが大きくなる`,
-        noMoveCases.length > 0 && noMoveCases.every((c) => c.ok),
-        JSON.stringify(noMoveCases)
-      );
-      record(
-        `${label} ＋で円が0.95をこえたときだけ地図が引き、円の直径が短辺の0.85になる（47本目）`,
-        refitCases.length > 0 && refitCases.every((c) => c.ok),
-        JSON.stringify(refitCases)
+        `${label} ＋を押すたびに、地図が円「いっぱい」に合わせ直され、出発駅が見えている範囲の真ん中に来る（64本目）`,
+        plusCases.length > 0 && plusCases.every((c) => c.ok),
+        JSON.stringify(plusCases)
       );
 
-      // 下げる側：¥2000の状態から、「動かさなかった場合の比率」が3.5割を下回る金額と、
-      // 3.5割〜9割に収まる金額をそれぞれ選んで試す。
+      // 下げる側：¥2000の状態から金額を下げて円が縮んだら、地図は寄って「いっぱい」になる（以前の「3.5割以上なら動かない」はやめた）。
       await setBudgetSlider(page, 2000);
       await waitForCircleSettled(page, dim);
+      if (dim === '3d') await waitForTerrainCameraIdle(page);
       const at2000 = await measureCircleState(page, dim);
       const candidates = await page.evaluate((dim) => {
         const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
@@ -5221,39 +5162,20 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
         for (let b = 200; b <= 2000; b += 100) out.push({ b, r: view.computeReachRadiusKm(b) });
         return out;
       }, dim);
-      const predictOf = (r) => at2000.ratio * (r / at2000.radiusKm);
-      const keepBudget = candidates.slice().reverse().find((c) => c.r > 0 && c.r < at2000.radiusKm - 0.01
-        && predictOf(c.r) >= TEST_REFIT_LOWER_RATIO + 0.03 && predictOf(c.r) <= TEST_REFIT_UPPER_RATIO - 0.03);
-      if (keepBudget) {
-        await setBudgetSlider(page, keepBudget.b);
-        await waitForCircleSettled(page, dim);
-        const after = await measureCircleState(page, dim);
-        const shift = await centerShiftPx(page, dim, at2000.center);
-        record(
-          `${label} 金額を下げて円が縮んでも3.5割以上なら、地図の中心とズームは変わらない`,
-          Math.abs(after.zoom - at2000.zoom) < 0.01 && shift < 1,
-          JSON.stringify({ budget: keepBudget.b, predicted: +predictOf(keepBudget.r).toFixed(3), zoomBefore: at2000.zoom, zoomAfter: after.zoom, shiftPx: shift })
-        );
-        await setBudgetSlider(page, 2000);
-        await waitForCircleSettled(page, dim);
-      } else {
-        record(`${label} 「縮んでも3.5割以上」の金額が見つかる（検証の前提）`, false, JSON.stringify({ at2000, candidates }));
-      }
-      const base2000 = await measureCircleState(page, dim);
-      const predictOf2 = (r) => base2000.ratio * (r / base2000.radiusKm);
-      const shrinkBudget = candidates.slice().reverse().find((c) => c.r > 0 && predictOf2(c.r) < TEST_REFIT_LOWER_RATIO - 0.03);
+      const shrinkBudget = candidates.slice().reverse().find((c) => c.r > 0 && c.r < at2000.radiusKm * 0.8);
       if (shrinkBudget) {
         await setBudgetSlider(page, shrinkBudget.b);
         await waitForCircleSettled(page, dim);
+        if (dim === '3d') await waitForTerrainCameraIdle(page);
         const after = await measureCircleState(page, dim);
         const atMax = after.zoom >= 15.95;
         record(
-          `${label} 円が3.5割より小さくなったときだけ地図が寄り、円の直径が短辺の0.85になる`,
-          fitRatioInRange(after) || atMax,
-          JSON.stringify({ budget: shrinkBudget.b, predicted: +predictOf2(shrinkBudget.r).toFixed(3), ratioAfter: after.ratio, zoomBefore: base2000.zoom, zoomAfter: after.zoom })
+          `${label} 金額を下げて円が縮むと、地図が寄って円「いっぱい」になる（64本目）`,
+          (after.zoom > at2000.zoom + 0.05 && isCircleFilled(after)) || atMax,
+          JSON.stringify({ budget: shrinkBudget.b, zoomBefore: at2000.zoom, zoomAfter: after.zoom, fill: fillDetail(after) })
         );
       } else {
-        record(`${label} 「3.5割を下回る」金額が見つかる（検証の前提）`, false, JSON.stringify({ base2000, candidates }));
+        record(`${label} 円が縮む金額が見つかる（検証の前提）`, false, JSON.stringify({ at2000, candidates }));
       }
       await checkNoHorizontalOverflow(page, `${label} 金額操作のあと`);
       record(`${label} コンソールにエラーが出ていない（標高タイルの404を除く）`, errors.length === 0, errors.join(' / '));
@@ -5286,7 +5208,7 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
       await waitForCircleSettled(page, dim);
       if (dim === '3d') await waitForTerrainTilesLoaded(page);
 
-      // ＋：波が1本出て、前の縁→新しい縁へ広がりながらうすくなり、0.5秒前後で消える。
+      // ＋：地図合わせが終わってから波が1本出て、出発駅→新しい縁へ広がりながらうすくなり、0.3秒前後で消える（64本目）。
       await assertNotObscured(page, 'budget-increment', `${label} ＋`);
       const plus = await clickAndSampleWave(page, dim, 'budget-increment');
       const seen = plus.samples.filter((s) => s.radiusKm !== undefined);
@@ -5294,10 +5216,9 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
       const last = seen[seen.length - 1];
       const firstAbsent = plus.samples.find((s) => first && s.t > first.t && s.radiusKm === undefined);
       record(
-        // 【43本目】3Dは描画1コマの遅れ（フルスイートの中で実測118ms）を見込んで0.2秒以内にする。
-        `${label} ＋を押すと波が1本出る（押してから${dim === '3d' ? '0.2' : '0.1'}秒以内）`,
-        !!first && first.t <= (dim === '3d' ? 200 : 100),
-        JSON.stringify({ firstT: first?.t, radiusBefore: plus.radiusBefore, radiusTarget: plus.radiusTarget })
+        `${label} ＋を押すと、地図合わせが終わってから波が1本出る（波が出たとき地図は止まっている、64本目）`,
+        !!first && !first.moving && seen.every((s) => !s.moving),
+        JSON.stringify({ firstT: first?.t, radiusBefore: plus.radiusBefore, radiusTarget: plus.radiusTarget, movingFrames: seen.filter((s) => s.moving).length })
       );
       if (first) {
         record(
@@ -5329,11 +5250,11 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
           );
         }
         // 3DはGPU負荷で実時間が延びることがある（35本目と同じ環境要因）ためrecordWarn。
-        const durationOk = !!firstAbsent && firstAbsent.t >= 400 && firstAbsent.t <= 800;
+        const durationOk = !!firstAbsent && firstAbsent.t - first.t >= 230 && firstAbsent.t - first.t <= 600;
         (dim === '3d' ? recordWarn : record)(
-          `${label} 波は0.5秒前後（0.4〜0.8秒）で消える`,
+          `${label} 波は0.3秒前後（0.23〜0.6秒）で消える（64本目）`,
           durationOk,
-          JSON.stringify({ disappearedAt: firstAbsent?.t })
+          JSON.stringify({ appearedAt: first.t, disappearedAt: firstAbsent?.t })
         );
         record(
           `${label} 消えたあと、波の線が地図に残っていない`,
@@ -5342,89 +5263,43 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
         );
       }
 
-      // 地図が動いている途中でも、波は円の縁（出発駅中心・その時の半径）に出る：
-      // 円をわざと9割超にしてから＋を押し、地図合わせ（0.15秒後から0.45秒）と波
-      // （0.5秒）を重ねる。
+      // 【2026-10-27、64本目、Minami決定】波と地図合わせは同時に動かさない（52本目の「波が終わってから地図合わせ」は逆になり、
+      // 押したらすぐ地図を合わせ、合わせ終わってから波を出す）。動いている途中にもう一度押しても、波は地図が止まってから。
       await waitForCircleSettled(page, dim);
       if (dim === '3d') await waitForTerrainTilesLoaded(page);
-      await setCircleRatio(page, dim, 1.2);
+      await setCircleRatio(page, dim, 0.5);
       if (dim === '3d') await waitForTerrainTilesLoaded(page);
-      if (dim === '3d') {
-        // 【52本目】3Dは、止まっている地図で＋を押すと、地図合わせは波が終わってから始まる（下の検証）。
-        // 波と地図の動きが重なるのは、地図合わせが動いている途中にもう一度＋を押したとき。1回目を押して
-        // 地図が動き出すのを待ってから、下で2回目を押す。
-        await page.evaluate(() => document.getElementById('budget-increment').click());
-        await page.waitForFunction(() => window.__terrainMapForDebug.isMoving(), { timeout: 5000 }).catch(() => {});
-      }
-      const moving = await page.evaluate((dim) => new Promise((resolve) => {
+      const order = await page.evaluate((dim) => new Promise((resolve) => {
         const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
-        const out = [];
+        const map = dim === '3d' ? window.__terrainMapForDebug : view.map;
+        const isMoving = () => (dim === '3d' ? map.isMoving() : !!view._circleFitAnim);
+        const c0 = map.getCenter(); const z0 = map.getZoom();
         const t0 = performance.now();
+        let moveStartAt = null; let waveStartAt = null; let waveFramesWhileMoving = 0; let secondPressed = false;
         document.getElementById('budget-increment').click();
-        const toRad = (d) => (d * Math.PI) / 180;
-        const hav = (lat1, lon1, lat2, lon2) => {
-          const a = Math.sin(toRad(lat2 - lat1) / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(toRad(lon2 - lon1) / 2) ** 2;
-          return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(a)));
-        };
         const tick = () => {
           const t = performance.now() - t0;
-          const w = view._circleWave;
-          const isMoving = dim === '3d' ? window.__terrainMapForDebug.isMoving() : !!view.map._flyToFrame;
-          if (w && isMoving) {
-            if (dim === '3d') {
-              const dep = view._lastDepartureStation;
-              const ds = (w.ring || []).map(([lon, lat]) => hav(dep.stop_lat, dep.stop_lon, lat, lon));
-              const maxErr = ds.reduce((m, d) => Math.max(m, Math.abs(d - w.radiusKm)), 0);
-              out.push({ t, radiusKm: w.radiusKm, maxErrKm: maxErr, points: ds.length });
-            } else {
-              out.push({ t, radiusKm: w.radiusKm, maxErrKm: Math.abs(w.layer.getRadius() / 1000 - w.radiusKm), centerOffsetM: view.map.distance(w.layer.getLatLng(), view.departureLatLng) });
-            }
-          }
-          if (t < 1200) requestAnimationFrame(tick); else resolve(out);
+          const c = map.getCenter();
+          if (moveStartAt === null && (Math.abs(map.getZoom() - z0) > 1e-4 || Math.abs(c.lng - c0.lng) > 1e-7 || Math.abs(c.lat - c0.lat) > 1e-7)) moveStartAt = t;
+          // 動いている途中（動き出してから0.1秒）にもう一度押す
+          if (!secondPressed && moveStartAt !== null && t > moveStartAt + 100) { secondPressed = true; document.getElementById('budget-increment').click(); }
+          if (view._circleWave) { if (waveStartAt === null) waveStartAt = t; if (isMoving()) waveFramesWhileMoving++; }
+          if (t < 2500) requestAnimationFrame(tick); else resolve({ moveStartAt, waveStartAt, waveFramesWhileMoving, secondPressed });
         };
         requestAnimationFrame(tick);
       }), dim);
       record(
-        `${label} 地図が動いている途中でも、波は円の縁（出発駅中心・その時の半径）に沿って出る`,
-        moving.length > 0 && moving.every((m) => m.maxErrKm < Math.max(0.01, m.radiusKm * 0.002) && (m.centerOffsetM === undefined || m.centerOffsetM < 1)),
-        JSON.stringify({ samplesWhileMoving: moving.length, worst: moving.reduce((a, m) => (a && a.maxErrKm > m.maxErrKm ? a : m), null) })
+        `${label} ＋を押すとすぐ地図合わせが始まり、波は合わせ終わってから出る（動いている途中にもう一度押しても、波と地図合わせは重ならない、64本目）`,
+        order.moveStartAt !== null && order.waveStartAt !== null && order.waveStartAt > order.moveStartAt && order.waveFramesWhileMoving === 0 && order.secondPressed,
+        JSON.stringify(order)
+      );
+      (dim === '3d' ? recordWarn : record)(
+        `${label} ＋を押してから地図が動き出すまで0.1秒以内（64本目）`,
+        order.moveStartAt !== null && order.moveStartAt <= 100,
+        JSON.stringify(order)
       );
       await waitForCircleSettled(page, dim);
       if (dim === '3d') await waitForTerrainTilesLoaded(page);
-
-      // 【2026-10-24、52本目、Minami決定：①】3Dで止まっている地図で＋を押したとき、地図合わせ（円がはみ出し
-      // そうなとき）は波が終わってから始まる。地図合わせの動き出しの最初のコマで画面が止まることがあり、
-      // 波の終わりと重なると、波がうすくなりきらずに消えていたため。
-      if (dim === '3d') {
-        await setCircleRatio(page, dim, 1.2);
-        await waitForTerrainTilesLoaded(page);
-        const order = await page.evaluate(() => new Promise((resolve) => {
-          const tv = window.__terrainViewForDebug;
-          const map = window.__terrainMapForDebug;
-          const t0 = performance.now();
-          let waveEndAt = null;
-          let moveStartAt = null;
-          let waveFramesWhileMoving = 0;
-          const onStart = () => { if (moveStartAt === null) moveStartAt = performance.now() - t0; };
-          map.on('movestart', onStart);
-          document.getElementById('budget-increment').click();
-          const tick = () => {
-            const t = performance.now() - t0;
-            if (tv._circleWave && map.isMoving()) waveFramesWhileMoving++;
-            if (!tv._circleWave && waveEndAt === null && t > 50) waveEndAt = t;
-            if (t < 2500) requestAnimationFrame(tick);
-            else { map.off('movestart', onStart); resolve({ waveEndAt, moveStartAt, waveFramesWhileMoving }); }
-          };
-          requestAnimationFrame(tick);
-        }));
-        record(
-          `${label} 止まっている地図で＋を押すと、地図合わせは波が終わってから始まる（52本目）`,
-          order.moveStartAt !== null && order.waveEndAt !== null && order.waveFramesWhileMoving === 0 && order.moveStartAt >= 450,
-          JSON.stringify(order)
-        );
-        await waitForCircleSettled(page, dim);
-        await waitForTerrainTilesLoaded(page);
-      }
 
       // 3D：向き・傾きを変えたあと（90度の倍数以外）でも、波が円の縁に沿って出る。
       if (dim === '3d') {
@@ -5480,7 +5355,8 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
         await waitForCircleSettled(page, dim);
         if (dim === '3d') await waitForTerrainTilesLoaded(page);
         await page.evaluate(() => document.getElementById('budget-increment').click());
-        await page.waitForTimeout(220);
+        // 【64本目】波は地図合わせが終わってから出るため、波が半分ほど広がるのを待って撮る
+        await page.waitForFunction(() => { const w = window.__mapViewForDebug._circleWave; return !!w && w.radiusKm > w.toKm * 0.5; }, { timeout: 3000 }).catch(() => {});
         const mapAreaBox = await page.locator('#map-area').boundingBox();
         const shotPath = path.join(screenshotDir, 'round37-wave-2d-pc.png');
         await page.screenshot({ path: shotPath, clip: mapAreaBox });
@@ -5526,34 +5402,27 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
         JSON.stringify({ radiusBefore: minus.radiusBefore, radiusTarget: minus.radiusTarget })
       );
 
-      // ＋を続けて押すと、押すたびにその時の縁から新しい波が1本出る（前の波は置き換え）。
+      // 【64本目】＋を続けて押すと、走っている波は消して新しい地図合わせに移り、波は最後に合わせ終わってから1本だけ出る。
       await setBudgetSlider(page, 500);
       await waitForCircleSettled(page, dim);
       if (dim === '3d') await waitForTerrainTilesLoaded(page);
       const rapid = await page.evaluate((dim) => new Promise((resolve) => {
         const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
-        const waves = [];
-        const press = () => {
-          document.getElementById('budget-increment').click();
+        let waves = 0; let had = false; let maxPaths = 0; let lastWave = null;
+        document.getElementById('budget-increment').click();
+        setTimeout(() => document.getElementById('budget-increment').click(), 120);
+        const t0 = performance.now();
+        const tick = () => {
           const w = view._circleWave;
-          waves.push(w ? { fromKm: w.fromKm, toKm: w.toKm, drawnAtPress: null } : null);
+          if (w) { if (!had) waves++; had = true; lastWave = { fromKm: w.fromKm, toKm: w.toKm }; } else had = false;
+          if (dim !== '3d') maxPaths = Math.max(maxPaths, document.querySelectorAll('#spots-map .leaflet-overlay-pane path[stroke-width="3"]').length);
+          if (performance.now() - t0 < 2500) requestAnimationFrame(tick); else resolve({ waves, maxPaths, lastWave, target: view._reachCircleTargetKm });
         };
-        press();
-        setTimeout(() => {
-          const drawn = view._reachCircleRadiusKm;
-          press();
-          waves[1] && (waves[1].drawnAtPress = drawn);
-          setTimeout(() => {
-            const overlays = dim === '3d' ? null : document.querySelectorAll('#spots-map .leaflet-overlay-pane path[stroke-width="3"]').length;
-            resolve({ waves, overlays });
-          }, 50);
-        }, 120);
+        requestAnimationFrame(tick);
       }), dim);
-      const w0 = rapid.waves[0];
-      const w1 = rapid.waves[1];
       record(
-        `${label} ＋を続けて押すと、押すたびに出発駅から新しい波が1本出る（前の波と入れ替わり、同時に出ている波は1本だけ）`,
-        !!w0 && !!w1 && w0.fromKm === 0 && w1.fromKm === 0 && w1.toKm >= w0.toKm && (rapid.overlays === null || rapid.overlays === 1),
+        `${label} ＋を続けて押すと、波は最後の地図合わせのあとに出発駅から新しい縁へ1本だけ出る（同時に出ている波は1本だけ、64本目）`,
+        rapid.waves === 1 && !!rapid.lastWave && rapid.lastWave.fromKm === 0 && Math.abs(rapid.lastWave.toKm - rapid.target) < 0.01 && (dim === '3d' || rapid.maxPaths <= 1),
         JSON.stringify(rapid)
       );
       await waitForCircleSettled(page, dim);
@@ -5899,13 +5768,14 @@ async function checkTwoDSearchViewAfterModeSwitch(browser, baseUrl, savedPaths) 
     await page.waitForTimeout(400);
     await page.waitForFunction(() => {
       const mv = window.__mapViewForDebug;
-      return mv._circleAnimFrame == null && !mv.map._flyToFrame;
+      return mv._circleAnimFrame == null && !mv._circleFitAnim;
     }, { timeout: 10000 }).catch(() => {});
     const s = await state2d(page);
+    const f = await measureCircleState(page, '2d');
     record(
-      `${label} 円の直径が短辺の0.6前後（0.80〜0.90、47本目）・描かれている円が今の半径・¥500を超えるピンが出ていない`,
-      (s.ratio >= TEST_FIT_RATIO_MIN && s.ratio <= TEST_FIT_RATIO_MAX) && s.drawnKm !== null && Math.abs(s.drawnKm - s.radiusKm) < 0.01 && s.shownOverBudget === 0,
-      JSON.stringify(s)
+      `${label} 円が見えている範囲いっぱい（64本目）・描かれている円が今の半径・¥500を超えるピンが出ていない`,
+      isCircleFilled(f) && s.drawnKm !== null && Math.abs(s.drawnKm - s.radiusKm) < 0.01 && s.shownOverBudget === 0,
+      JSON.stringify({ ...s, fill: fillDetail(f) })
     );
   };
   const to3d = async (page, label) => {
@@ -6183,9 +6053,9 @@ async function checkSelectedPinVisibleAfterFocus3d(browser, baseUrl, savedPaths)
         // A-2：検索したあとに初めて3Dへ切り替えたときの見え方
         const first = await measureCircleState(page, '3d');
         record(
-          `${label} 検索したあとに初めて3Dへ切り替えると、円0.85・傾き45°・北向き（A-2）`,
-          fitRatioInRange(first) && Math.abs(first.pitch - TEST_OVERVIEW_PITCH) < 0.5 && Math.abs(first.bearing) < 0.5,
-          JSON.stringify({ ratio: first.ratio, pitch: first.pitch, bearing: first.bearing, zoom: first.zoom })
+          `${label} 検索したあとに初めて3Dへ切り替えると、円が見えている範囲いっぱい・傾き45°・北向き（A-2、64本目）`,
+          isCircleFilled(first) && Math.abs(first.pitch - TEST_OVERVIEW_PITCH) < 0.5 && Math.abs(first.bearing) < 0.5,
+          `${JSON.stringify({ ratio: first.ratio, pitch: first.pitch, bearing: first.bearing, zoom: first.zoom })} ${fillDetail(first)}`
         );
 
         // 3つのピンを選ぶ（予算内・地図の上で押せる位置にあるもの）。
@@ -6527,7 +6397,9 @@ async function checkPinColorsAndClusters(browser, baseUrl, savedPaths) {
               }, { dim, before });
               record(
                 `${label} まとめた丸を押すと、その場所に寄って分かれる`,
-                after.zoom > before.zoom + 0.5 && !after.sameClusterStill && (dim === '3d' || after.visibleMembers > 0),
+                // 【64本目】検索した直後が「いっぱい」になり、PCの3Dは最初からズーム13（まとめる上限）近くにいることがある。
+                // そのときは13.1まで寄れば分かれる（_zoomIntoMergedCluster()の1段＝上限まで）ので、+0.5に届かなくてよい。
+                (after.zoom > before.zoom + 0.5 || (dim === '3d' && after.zoom >= 13.05 && after.zoom > before.zoom + 0.05)) && !after.sameClusterStill && (dim === '3d' || after.visibleMembers > 0),
                 JSON.stringify({ beforeZoom: before.zoom, count: before.count, ...after })
               );
             } else {
@@ -6908,9 +6780,9 @@ async function checkRound45(browser, baseUrl, savedPaths) {
       await page.waitForTimeout(300);
       const s = await measureCircleState(page, '3d');
       record(
-        `${label}：検索した直後の円が短辺の0.85前後・傾き45°（半径${s.radiusKm.toFixed(1)}kmでも最大ズームにかからず寄る）`,
-        fitRatioInRange(s) && Math.abs(s.pitch - TEST_OVERVIEW_PITCH) < 0.5 && s.zoom < 20,
-        JSON.stringify({ ratio: +s.ratio.toFixed(3), zoom: +s.zoom.toFixed(2), pitch: s.pitch, radiusKm: +s.radiusKm.toFixed(2) })
+        `${label}：検索した直後の円が見えている範囲いっぱい・傾き45°（半径${s.radiusKm.toFixed(1)}kmでも最大ズームにかからず寄る）`,
+        isCircleFilled(s) && Math.abs(s.pitch - TEST_OVERVIEW_PITCH) < 0.5 && s.zoom < 20,
+        `${JSON.stringify({ ratio: +s.ratio.toFixed(3), zoom: +s.zoom.toFixed(2), pitch: s.pitch, radiusKm: +s.radiusKm.toFixed(2) })} ${fillDetail(s)}`
       );
       if (name === '3Dのまま検索') {
         await waitForTerrainTilesLoaded(page);
@@ -7262,7 +7134,8 @@ async function circleEdgeControlGaps(page, dim) {
       const rect = map.getContainer().getBoundingClientRect();
       for (let i = 0; i < 72; i++) { const p = dest(lat, lon, i * 5, km); const s = map.latLngToContainerPoint([p.lat, p.lon]); pts.push({ x: rect.left + s.x, y: rect.top + s.y }); }
     }
-    const sels = ['#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle', '#map-dimension-toggle', '#mobile-budget-overlay', '#map-zoom-controls'];
+    const sels = ['#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle', '#map-dimension-toggle', '#mobile-budget-overlay', '#map-zoom-controls',
+      '[data-map-overlay="bar"]', '#results-list-open-btn', '#results-list-close-btn'];
     const gaps = {};
     sels.forEach((sel) => {
       const el = document.querySelector(sel);
@@ -7321,7 +7194,7 @@ async function waitForBaseMapLoaded(page, dim) {
 async function checkRound47(browser, baseUrl, savedPaths) {
   console.log('\n=== 47本目：オレンジの場所をまとめて主役にする・検索した直後にもっと寄る ===');
   const viewports = { pc: VIEWPORTS.pc, own: { width: 400, height: 464 }, sp375: { width: 375, height: 667 }, sp390: { width: 390, height: 844 } };
-  const ratioOk = (s) => fitRatioInRange(s); // 【64本目】部品を避けて小さくなったときを除く
+  const ratioOk = (s) => isCircleFilled(s); // 【64本目】「いっぱい」（部品で止まったとき・最低ズームを除く）
   for (const [vLabel, viewport] of Object.entries(viewports)) {
     const isMobile = vLabel !== 'pc';
     const full = vLabel === 'pc' || vLabel === 'own'; // まとめ方・円の大きさ・スクリーンショットはPCと400×464
@@ -7377,7 +7250,7 @@ async function checkRound47(browser, baseUrl, savedPaths) {
         }
 
         // --- 1. 検索した直後：紺だけをまとめる・灰色は丸に入らない・円は0.85前後 ---
-        record(`${label} 検索した直後、円の直径が短辺の0.85前後（0.80〜0.90、3Dは横方向）`, ratioOk(s0) || s0.zoom <= 8.55, JSON.stringify({ ratio: s0.ratio, zoom: s0.zoom }));
+        record(`${label} 検索した直後、円が見えている範囲いっぱい（64本目）`, ratioOk(s0), fillDetail(s0));
         const c0 = await readPinCategories(page, dim);
         record(
           `${label} 検索した直後（オレンジなし）は、紺だけが紺の丸にまとまる（灰色の点は無い）`,
@@ -7535,7 +7408,7 @@ async function checkRound47(browser, baseUrl, savedPaths) {
           JSON.stringify({ searched: c2.searched, counts: c2.counts, clusters: c2.clusterCount, kind: c2.clusterKindMismatch, foreign: c2.foreignInCluster, color: c2.colorMismatch })
         );
         const s2 = await measureCircleState(page, dim);
-        record(`${label} 検索し直した直後も、円の直径が短辺の0.85前後`, ratioOk(s2) || s2.zoom <= 8.55, JSON.stringify({ ratio: s2.ratio, zoom: s2.zoom }));
+        record(`${label} 検索し直した直後も、円が見えている範囲いっぱい`, ratioOk(s2), fillDetail(s2));
 
         // 寄ってから最初の見え方に戻るボタン → 0.85前後
         await page.evaluate((dim) => {
@@ -7548,7 +7421,7 @@ async function checkRound47(browser, baseUrl, savedPaths) {
         if (dim === '3d') await waitForTerrainCameraIdle(page);
         await page.waitForTimeout(300);
         const s3 = await measureCircleState(page, dim);
-        record(`${label} 最初の見え方に戻るボタンで、円の直径が短辺の0.85前後に戻る`, ratioOk(s3) || s3.zoom <= 8.55, JSON.stringify({ ratio: s3.ratio, zoom: s3.zoom }));
+        record(`${label} 最初の見え方に戻るボタンで、円が見えている範囲いっぱいに戻る`, ratioOk(s3), fillDetail(s3));
 
         // 【49本目】−を4回（¥1,000＝直前の検索の金額）でオレンジがなくなると、紺をまとめる形に戻る
         const decId = isMobile ? 'mobile-budget-decrement' : 'budget-decrement';
@@ -8258,6 +8131,7 @@ async function checkRound56(browser, baseUrl, savedPaths) {
           const res = { found: true, open: el.classList.contains('is-open'), source: /交通データ/.test(text) && /国土地理院ベクトルタイル提供実験/.test(text),
             disclaimer: /正確性・完全性は保証されません/.test(text), contact: /お問い合わせは開発者へ/.test(text),
             link: !!el.querySelector('.open-about-data'), inView: b.left >= 0 && b.right <= innerWidth + 1 && b.top >= 0 && b.bottom <= innerHeight + 1 };
+          if (!res.source) res.text = text.slice(0, 300);
           el.click();
           return res;
         });
@@ -8674,7 +8548,7 @@ async function checkRound57(browser, baseUrl, savedPaths) {
         const desc = (s) => JSON.stringify({ ratio: +s.ratio.toFixed(3), visShort: Math.round(s.visShort), depOffsetPx: +s.depOffsetPx.toFixed(1), vis: s.vis });
         console.log(`  ${label} 検索した直後：円の直径÷見えている範囲の短辺=${st.ratio.toFixed(3)}（短辺${Math.round(st.visShort)}px）、出発駅と見えている範囲の真ん中のずれ=${st.depOffsetPx.toFixed(1)}px`);
         record(`${label} 検索した直後：出発駅が見えている範囲（重ねた入れ物を除く）の真ん中にある（3px以内）`, st.depOffsetPx <= 3, desc(st));
-        record(`${label} 検索した直後：円の直径は見えている範囲の短辺の0.5〜0.86`, st.ratio >= 0.5 && st.ratio <= 0.86, desc(st));
+        record(`${label} 検索した直後：円が見えている範囲いっぱい（64本目）`, isCircleFilled(st), `${desc(st)} ${fillDetail(st)}`);
         await waitForBaseMapLoaded(page, dim);
         await shot(page, `round57-result-${dim}-${vLabel}.png`);
         // 地図を動かしてから、最初の見え方に戻るボタン
@@ -8774,7 +8648,7 @@ async function checkRound57(browser, baseUrl, savedPaths) {
  * 一番小さい幅（760×720）の、2Dと3D。富山駅前・¥800。
  * 1. パネル・「◀」・バー・「☰ 一覧を開く」が、地図の上の部品（ズーム・方位磁針・戻るボタン・ハンドル）・出典と重ならない。
  * 2. 「◀」と「☰ 一覧を開く」で開け閉めできる（clickElementChecked）。
- * 3. 開いても閉じても、出発駅が見えている範囲の真ん中（3px以内）、円の直径が見えている範囲の短辺の0.5〜0.86
+ * 3. 開いても閉じても、出発駅が見えている範囲の真ん中（3px以内）、円が見えている範囲いっぱい（64本目）
  *    （部品を避けて小さくなることはある）。閉じているとき、円の縁がバー・「☰ 一覧を開く」から3px以上離れている。
  * 4. 開いても閉じても「データ出典・免責」が見えていて、隠れていない。
  * 5. パネルの中の一覧がスクロールでき、上の部分（出発〜見出し）は動かない（開いているとき）。
@@ -8907,7 +8781,7 @@ async function checkRound58(browser, baseUrl, savedPaths) {
         record(`${label} 開いているとき：パネル・「◀」が地図の上の部品・出典と重ならない`, ov1.length === 0, ov1.join(', '));
         const st1 = await measureCircleState(page, dim);
         console.log(`  ${label} 開いているとき：円の直径÷見えている範囲の短辺=${st1.ratio.toFixed(3)}（短辺${Math.round(st1.visShort)}px）、出発駅と真ん中のずれ=${st1.depOffsetPx.toFixed(1)}px`);
-        record(`${label} 開いているとき：出発駅が見えている範囲の真ん中（3px以内）、円は短辺の0.5〜0.86`, st1.depOffsetPx <= 3 && st1.ratio >= 0.5 && st1.ratio <= 0.86, desc(st1));
+        record(`${label} 開いているとき：出発駅が見えている範囲の真ん中（3px以内）、円は見えている範囲いっぱい（64本目）`, st1.depOffsetPx <= 3 && isCircleFilled(st1), `${desc(st1)} ${fillDetail(st1)}`);
         const dl1 = await shown('.results-sheet > .data-line .data-line-btn');
         record(`${label} 開いているとき：「データ出典・免責」が見えていて隠れていない`, dl1.ok, JSON.stringify(dl1));
         // 一覧のスクロール
@@ -8947,7 +8821,7 @@ async function checkRound58(browser, baseUrl, savedPaths) {
         record(`${label} 閉じたとき：バー・「☰ 一覧を開く」が地図の上の部品・出典と重ならない`, ov2.length === 0, ov2.join(', '));
         const st2 = await measureCircleState(page, dim);
         console.log(`  ${label} 閉じたとき：円の直径÷見えている範囲の短辺=${st2.ratio.toFixed(3)}（短辺${Math.round(st2.visShort)}px）、出発駅と真ん中のずれ=${st2.depOffsetPx.toFixed(1)}px`);
-        record(`${label} 閉じたとき：出発駅が地図全体の真ん中（3px以内）、円は短辺の0.5〜0.86`, st2.depOffsetPx <= 3 && st2.ratio >= 0.5 && st2.ratio <= 0.86, desc(st2));
+        record(`${label} 閉じたとき：出発駅が地図全体の真ん中（3px以内）、円は見えている範囲いっぱい（64本目）`, st2.depOffsetPx <= 3 && isCircleFilled(st2), `${desc(st2)} ${fillDetail(st2)}`);
         const gap = await circleGapToBar();
         record(`${label} 閉じたとき：円の縁がバー・「☰ 一覧を開く」から3px以上離れている`, gap >= 3, `最小のすき間=${gap}px`);
         const dl2 = await shown('#map-data-line .data-line-btn');
@@ -9015,7 +8889,7 @@ async function checkRound58(browser, baseUrl, savedPaths) {
  * 富山駅前・¥800。
  * 1. 上の＋−カード・下の一覧・右下の部品の列・出典が重ならない（ピンを押したときの名前の帯も）。
  * 2. つまみで小⇔大を切り替えられる（押す：clickElementChecked、上下にドラッグ）。
- * 3. 小でも大でも、出発駅が見えている範囲の真ん中（3px以内）、円は見えている範囲の短辺の0.5〜0.86（部品を避けて
+ * 3. 小でも大でも、出発駅が見えている範囲の真ん中（3px以内）、円は見えている範囲いっぱい（64本目）（部品を避けて
  *    小さくなるのは可）。
  * 4. 小でも大でも「データ出典・免責」が見えていて隠れていない（小は地図の右下、大は一覧の一番下）。
  * 5. ＋−で一覧の見出し・カード・「◯か所」が一緒に変わる。「¥◯で探す」が無い（PC 1920×1080でも確かめる）。
@@ -9124,7 +8998,7 @@ async function checkRound59(browser, baseUrl, savedPaths) {
         record(`${label} 小：上のカード・下の一覧・部品・出典・「データ出典・免責」が重ならず、部品は地図の中`, ov1.overlaps.length === 0 && ov1.outside.length === 0, JSON.stringify(ov1));
         const st1 = await measureCircleState(page, dim);
         console.log(`  ${label} 小：円の直径÷見えている範囲の短辺=${st1.ratio.toFixed(3)}（短辺${Math.round(st1.visShort)}px）、出発駅と真ん中のずれ=${st1.depOffsetPx.toFixed(1)}px`);
-        record(`${label} 小：出発駅が見えている範囲の真ん中（3px以内）、円は短辺の0.5〜0.86`, st1.depOffsetPx <= 3 && st1.ratio >= 0.5 && st1.ratio <= 0.86, desc(st1));
+        record(`${label} 小：出発駅が見えている範囲の真ん中（3px以内）、円は見えている範囲いっぱい（64本目）`, st1.depOffsetPx <= 3 && isCircleFilled(st1), `${desc(st1)} ${fillDetail(st1)}`);
         const dl1 = await shown(page, '#map-data-line .data-line-btn');
         record(`${label} 小：「データ出典・免責」が地図の右下に見えていて隠れていない`, dl1.ok, JSON.stringify(dl1));
         await shot(`round59-${vLabel}-${dim}-small.png`);
@@ -9151,7 +9025,7 @@ async function checkRound59(browser, baseUrl, savedPaths) {
         record(`${label} 大：上のカード・下の一覧・部品・出典が重ならず、部品は地図の中`, ov2.overlaps.length === 0 && ov2.outside.length === 0, JSON.stringify(ov2));
         const st2 = await measureCircleState(page, dim);
         console.log(`  ${label} 大：円の直径÷見えている範囲の短辺=${st2.ratio.toFixed(3)}（短辺${Math.round(st2.visShort)}px）、出発駅と真ん中のずれ=${st2.depOffsetPx.toFixed(1)}px`);
-        record(`${label} 大：出発駅が見えている範囲の真ん中（3px以内）、円は短辺の0.5〜0.86`, st2.depOffsetPx <= 3 && st2.ratio >= 0.5 && st2.ratio <= 0.86, desc(st2));
+        record(`${label} 大：出発駅が見えている範囲の真ん中（3px以内）、円は見えている範囲いっぱい（64本目）`, st2.depOffsetPx <= 3 && isCircleFilled(st2), `${desc(st2)} ${fillDetail(st2)}`);
         const large = await page.evaluate(() => {
           const t = (sel) => document.querySelector(sel)?.textContent.replace(/\s+/g, ' ').trim();
           const vis = (sel) => { const el = document.querySelector(sel); return !!el && el.offsetParent !== null; };
@@ -9402,20 +9276,23 @@ async function checkRound48(browser, baseUrl, savedPaths) {
           };
           const t0 = performance.now();
           const at = (ms) => new Promise((r) => { const tick = () => (performance.now() - t0 >= ms ? r() : requestAnimationFrame(tick)); tick(); });
+          // 【64本目】波は地図合わせ（0.45秒）が終わってから出る（0.3秒）。波が出て消えたあとに見る（地図合わせの途中＝0.1秒では出ていない）。
           (async () => {
             await at(100);
             const at100 = far.map((x) => shown(x.id));
-            await at(550);
-            const at550 = far.map((x) => shown(x.id));
-            resolve({ prev, live, far: far.length, totalKm, hiddenAt100: at100.filter((v) => !v).length, shownAt550: at550.filter(Boolean).length });
+            let sawWave = false;
+            await new Promise((r) => { const tick = () => { if (view._circleWave) sawWave = true; if ((sawWave && !view._circleWave) || performance.now() - t0 > 2500) r(); else requestAnimationFrame(tick); }; tick(); });
+            const afterWaveT = performance.now() - t0;
+            const afterWave = far.map((x) => shown(x.id));
+            resolve({ prev, live, far: far.length, totalKm, hiddenAt100: at100.filter((v) => !v).length, shownAfterWave: afterWave.filter(Boolean).length, sawWave, afterWaveT: Math.round(afterWaveT) });
           })();
         }), { dim, incId });
         if (timing.far > 0) break;
         await page.waitForTimeout(900);
         }
         record(
-          `${label} ＋を押した直後の0.1秒にはまだ出ていない遠い場所のオレンジが、0.55秒後には出ている（波に合わせて出る）`,
-          timing.far > 0 && timing.hiddenAt100 === timing.far && timing.shownAt550 === timing.far,
+          `${label} ＋を押した直後の0.1秒（地図合わせの途中）にはまだ出ていない遠い場所のオレンジが、地図合わせのあとの波が通ると出ている（64本目）`,
+          timing.far > 0 && timing.hiddenAt100 === timing.far && timing.sawWave && timing.shownAfterWave === timing.far,
           JSON.stringify(timing)
         );
 
@@ -9427,7 +9304,7 @@ async function checkRound48(browser, baseUrl, savedPaths) {
         }
         await waitForCircleSettled(page, dim);
         if (dim === '3d') await waitForTerrainCameraIdle(page);
-        await page.waitForTimeout(900); // 波（0.5秒）と「ぽん」（0.2秒）が終わり、まとめ直されるまで
+        await page.waitForTimeout(900); // 波（0.3秒）と「ぽよん」（0.3秒）が終わり、まとめ直されるまで（64本目）
         const live = await page.evaluate((dim) => (dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug)._liveBudget, dim);
         const sum = await readClusterSummary(page, dim);
         console.log(`  ${label} ¥${live}：数字の丸${sum.clusters}個（中の場所${sum.inClusters}か所）・1つずつのオレンジ${sum.orangeSingles}か所`);
@@ -10413,7 +10290,7 @@ async function checkRotateHandle(browser, baseUrl, savedPaths) {
 /**
  * 【2026-10-27、62本目】
  * 1. 検索の直後（¥2,000分の裏取得が終わる前）に利用者が地図を拡大したら、裏取得の描き直しのあとも拡大したまま
- *    （2D・3D、PC・390×844）。動かさなければ、裏取得のあとも円に合わせた見え方（0.5〜0.86）。
+ *    （2D・3D、PC・390×844）。動かさなければ、裏取得のあとも円に合わせた見え方（いっぱい、64本目）。
  * 2. 使い方の画面が、PC・390×844・375×667・400×464で見切れず（横にはみ出さない・閉じるボタンが見えて押せる）、
  *    古い説明（「検索」ボタン・タブ・スライダー・再検索）が残っていない。スクリーンショット：PCと390×844。
  */
@@ -10452,9 +10329,11 @@ async function checkRound62(browser, baseUrl, savedPaths) {
             await waitForTerrainCameraIdle(page);
           }
           const before = await page.evaluate(() => window.__maxBudgetPrefetchAppliedCount || 0);
+          const tSearch = Date.now();
           await searchAt(page, '富山駅前', 800);
           await page.mouse.move(5, 5);
-          if (dim === '3d') await waitForTerrainCameraIdle(page);
+          // 裏取得が終わる前に拡大したいので、地形のあとの合わせ直し（最長4秒）は待たない（拡大すれば合わせ直しはしない）
+          if (dim === '3d') await waitForTerrainCameraIdle(page, { waitFillRefine: !touch });
           const zSearch = await readZoom(page, dim);
           if (touch) {
             // 見えている範囲の真ん中あたり（地図の上の入れ物が無い場所）でホイールを回して拡大する
@@ -10473,7 +10352,7 @@ async function checkRound62(browser, baseUrl, savedPaths) {
               return { x, y, onMap: !!t && !!t.closest('#map-area') && !t.closest('[data-map-overlay]') };
             });
             const pending = await page.evaluate((n) => (window.__maxBudgetPrefetchAppliedCount || 0) === n, before);
-            record(`${label} 拡大する場所が地図の上で、まだ裏取得が終わっていない（検証の前提）`, pt.onMap && pending, JSON.stringify({ pt, pending }));
+            record(`${label} 拡大する場所が地図の上で、まだ裏取得が終わっていない（検証の前提）`, pt.onMap && pending, JSON.stringify({ pt, pending, sinceSearchMs: Date.now() - tSearch }));
             await page.mouse.move(pt.x, pt.y);
             await page.mouse.wheel(0, -400);
             await page.waitForTimeout(700);
@@ -10493,8 +10372,8 @@ async function checkRound62(browser, baseUrl, savedPaths) {
           } else {
             const st = await measureCircleState(page, dim);
             record(
-              `${label} 動かさなければ、裏取得のあとも円に合わせた見え方（直径が見えている範囲の短辺の0.5〜0.86）`,
-              applied && st.ratio >= 0.5 && st.ratio <= 0.86,
+              `${label} 動かさなければ、裏取得のあとも円に合わせた見え方（円が見えている範囲いっぱい、64本目）`,
+              applied && isCircleFilled(st),
               JSON.stringify({ applied, zSearch, zAfter, ratio: st.ratio })
             );
           }
@@ -10582,6 +10461,238 @@ async function checkRound62(browser, baseUrl, savedPaths) {
  *    390×844・375×667・400×464で、富山駅前なら「予算（往復）」を省かずに駅名が省略されずに入る。
  *    スクリーンショット：390×844・400×464。
  */
+/**
+ * 【2026-10-27、64本目（後半）、Minami決定】地図の動き。
+ * 5. 検索した直後・初めて3Dにしたとき・最初の見え方に戻るボタン・開け閉めで、円が見えている範囲「いっぱい」
+ *    （円の見た目の外枠が見えている範囲の端から8px、部品から4px＋8px。3Dは楕円の見た目の幅と高さで測る）。
+ *    出発駅は見えている範囲の真ん中。1920×1080・390×844・375×667・400×464、2D・3D（富山駅前・¥800）。
+ * 6. ＋−：押したらすぐ地図を合わせる（押してから動き出すまでを測る。目標0.1秒以内）。＋のときだけ、合わせ終わって
+ *    から短い波（0.3秒）、波が通り過ぎた新しいオレンジが「ぽよん」（0.3秒）。波と地図合わせは同時に動かない。
+ *    −のときは寄り、波もぽよんも出ない。利用者が地図を動かしたあとでも＋−で合わせる。続けて押しても波と地図合わせは
+ *    重ならず、最後に「いっぱい」。動きを減らす設定では波もぽよんも出ない。
+ * スクリーンショット：検索した直後の2D・3D（4つの大きさ）。
+ */
+async function clickAndSampleMotion(page, dim, buttonId, durationMs = 2500) {
+  return page.evaluate(({ dim, buttonId, durationMs }) => new Promise((resolve) => {
+    const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
+    const map = dim === '3d' ? window.__terrainMapForDebug : view.map;
+    const cam = () => { const c = map.getCenter(); return [map.getZoom(), c.lng, c.lat]; };
+    const moving = () => (dim === '3d' ? map.isMoving() : !!view._circleFitAnim);
+    const dropping = () => (dim === '3d'
+      ? document.querySelectorAll('#spots-map-3d .map-pin-drop-3d').length
+      : document.querySelectorAll('#spots-map .map-pin-drop').length);
+    const c0 = cam();
+    const ev = { overlapFrames: 0, maxDropping: 0, waveOpacities: [] };
+    const t0 = performance.now();
+    document.getElementById(buttonId).click();
+    ev.pendingNew = view._pinPop ? view._pinPop.pending.size : 0;
+    const tick = () => {
+      const t = performance.now() - t0;
+      const c = cam();
+      if (ev.moveStart === undefined && (Math.abs(c[0] - c0[0]) > 1e-4 || Math.abs(c[1] - c0[1]) > 1e-7 || Math.abs(c[2] - c0[2]) > 1e-7)) ev.moveStart = t;
+      const isMoving = moving();
+      if (ev.moveStart !== undefined && ev.fitEnd === undefined && !isMoving && !view._circleFitAnim) ev.fitEnd = t;
+      const w = view._circleWave;
+      if (w) {
+        if (ev.waveStart === undefined) ev.waveStart = t;
+        ev.waveOpacities.push(Math.round(w.opacity * 100) / 100);
+        if (isMoving) ev.overlapFrames += 1;
+      } else if (ev.waveStart !== undefined && ev.waveEnd === undefined) ev.waveEnd = t;
+      const d = dropping();
+      ev.maxDropping = Math.max(ev.maxDropping, d);
+      if (d > 0 && ev.dropStart === undefined) ev.dropStart = t;
+      if (ev.dropStart !== undefined && ev.dropEnd === undefined && !view._pinPop) ev.dropEnd = t;
+      if (d > 0 && isMoving) ev.overlapFrames += 1;
+      if (t < durationMs) requestAnimationFrame(tick);
+      else resolve(ev);
+    };
+    requestAnimationFrame(tick);
+  }), { dim, buttonId, durationMs });
+}
+
+async function checkRound64Motion(browser, baseUrl, savedPaths) {
+  console.log('\n=== 64本目（後半）：地図の動き（いっぱい・＋−はすぐ・波とぽよんは合わせたあと） ===');
+  const sizes = [['pc', VIEWPORTS.pc], ['std', { width: 390, height: 844 }], ['se', { width: 375, height: 667 }], ['own', { width: 400, height: 464 }]];
+  const settle = async (page, dim) => {
+    await waitForCircleSettled(page, dim);
+    if (dim === '3d') { await waitForTerrainCameraIdle(page); await page.waitForTimeout(200); }
+  };
+  const fitRows = [];
+  const timingRows = [];
+  for (const [vLabel, viewport] of sizes) {
+    for (const dim of ['2d', '3d']) {
+      const context = await browser.newContext({ viewport });
+      const page = await context.newPage();
+      const pageErrors = [];
+      page.on('pageerror', (e) => pageErrors.push(e.message));
+      const L = `[64後半/${vLabel}/${dim}]`;
+      try {
+        await page.goto(baseUrl, { waitUntil: 'load' });
+        await page.waitForSelector('#departure-input');
+        await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+        await searchAt(page, '富山駅前', 800);
+        await waitForAllSpotsPrefetchSettled(page);
+        if (dim === '3d') {
+          await clickDimensionToggle(page);
+          const became3d = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+          record(`${L} 3D化（検証の前提）`, became3d);
+          if (!became3d) continue;
+          await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+          await waitForTerrainCameraIdle(page);
+          await page.waitForTimeout(500);
+          const first3d = await measureCircleState(page, dim);
+          record(`${L} 検索したあと初めて3Dにしたとき、円が見えている範囲いっぱい`, isCircleFilled(first3d), fillDetail(first3d));
+        }
+        // 検索した直後（地図が見えている状態で検索し直す）
+        const prefetchBefore = await page.evaluate(() => window.__maxBudgetPrefetchAppliedCount || 0);
+        await searchKeepingMapVisible(page, '富山駅前', 800, vLabel !== 'pc');
+        await page.waitForFunction((n) => (window.__maxBudgetPrefetchAppliedCount || 0) > n, prefetchBefore, { timeout: 20000 }).catch(() => {});
+        await settle(page, dim);
+        await waitForBaseMapLoaded(page, dim);
+        const st = await measureCircleState(page, dim);
+        fitRows.push({ size: `${viewport.width}×${viewport.height}`, dim, fillW: Math.round(st.fillW * 1000) / 1000, fillH: Math.round(st.fillH * 1000) / 1000, edgeGap: Math.round(st.edgeGap * 10) / 10, ctrlGap: st.ctrlGap, depOffsetPx: Math.round(st.depOffsetPx * 10) / 10, zoom: Math.round(st.zoom * 100) / 100 });
+        record(`${L} 検索した直後、円が見えている範囲いっぱい（端から8px前後、部品で止まったときは部品から4px＋8px前後）`, isCircleFilled(st), fillDetail(st));
+        record(`${L} 検索した直後、出発駅が見えている範囲の真ん中（2px以内）`, st.depOffsetPx <= 2, `ずれ=${st.depOffsetPx}px`);
+        record(`${L} 検索した直後、円が見えている範囲からはみ出していない`, st.edgeGap >= 0 || st.zoom <= 8.55, `edgeGap=${st.edgeGap}`);
+        const shot = path.join(screenshotDir, `round64-fit-${vLabel}-${dim}.png`);
+        await page.screenshot({ path: shot });
+        savedPaths.push(shot);
+        console.log(`  保存: round64-fit-${vLabel}-${dim}.png`);
+
+        // ＋を押す（地図が止まっている状態から）
+        const incId = await resultScreenEquivalentId(page, 'budget-increment');
+        const decId = await resultScreenEquivalentId(page, 'budget-decrement');
+        await assertNotObscured(page, incId, `${L} ＋`);
+        if (dim === '3d') await waitForTerrainTilesLoaded(page);
+        const zoomBeforePlus = (await measureCircleState(page, dim)).zoom;
+        const plus = await clickAndSampleMotion(page, dim, incId);
+        await settle(page, dim);
+        const afterPlus = await measureCircleState(page, dim);
+        timingRows.push({ size: `${viewport.width}×${viewport.height}`, dim, op: '＋', moveStart: plus.moveStart, fitEnd: plus.fitEnd, waveStart: plus.waveStart, waveEnd: plus.waveEnd, dropStart: plus.dropStart, dropEnd: plus.dropEnd, newPins: plus.pendingNew, maxDropping: plus.maxDropping });
+        const rnd = (v) => (v === undefined ? v : Math.round(v));
+        const plusDetail = JSON.stringify({ moveStart: rnd(plus.moveStart), fitEnd: rnd(plus.fitEnd), waveStart: rnd(plus.waveStart), waveEnd: rnd(plus.waveEnd), dropStart: rnd(plus.dropStart), dropEnd: rnd(plus.dropEnd), newPins: plus.pendingNew, maxDropping: plus.maxDropping, overlapFrames: plus.overlapFrames });
+        // 押してから地図が動き出すまで（目標0.1秒以内）。3Dは動き出しの1コマで地形を描き直して止まることがある（52本目）ため、
+        // 0.1秒をこえたときは警告として記録する（集計外）。
+        const startOk = plus.moveStart !== undefined && plus.moveStart <= 100;
+        if (dim === '3d') recordWarn(`${L} ＋を押してから地図が動き出すまで0.1秒以内`, startOk, plusDetail);
+        else record(`${L} ＋を押してから地図が動き出すまで0.1秒以内`, startOk, plusDetail);
+        record(`${L} ＋を押すと地図を合わせ直す（引く）`, afterPlus.zoom < zoomBeforePlus - 0.01 || plus.moveStart !== undefined, `前=${zoomBeforePlus} 後=${afterPlus.zoom}`);
+        record(`${L} ＋の波は、地図合わせが終わってから出る（同時に動かない）`, plus.waveStart !== undefined && plus.fitEnd !== undefined && plus.waveStart >= plus.fitEnd - 1 && plus.overlapFrames === 0, plusDetail);
+        record(`${L} ＋の波は0.3秒前後で消える（0.25〜0.6秒。3Dは最後の1コマを描いてから消すため0.7秒まで）`, plus.waveEnd !== undefined && plus.waveEnd - plus.waveStart >= 250 && plus.waveEnd - plus.waveStart <= (dim === '3d' ? 700 : 600), plusDetail);
+        record(`${L} ＋の波は広がりながらうすくなる`, plus.waveOpacities.length >= 2 && plus.waveOpacities[plus.waveOpacities.length - 1] < plus.waveOpacities[0], JSON.stringify(plus.waveOpacities));
+        if (plus.pendingNew > 0) {
+          record(`${L} 新しいオレンジは、波が出てから「ぽよん」と落ちてくる（地図合わせの間は出ない）`, plus.dropStart !== undefined && plus.dropStart >= plus.waveStart - 1 && plus.maxDropping > 0, plusDetail);
+          record(`${L} 「ぽよん」は波が出てから0.6秒前後で終わる（波0.3秒＋ぽよん0.3秒、余裕を見て0.9秒以内）`, plus.dropEnd !== undefined && plus.dropEnd - plus.waveStart <= 900, plusDetail);
+        } else {
+          recordWarn(`${L} ＋で新しいオレンジが増えた（ぽよんを測る前提）`, false, plusDetail);
+        }
+        record(`${L} ＋のあと、円が見えている範囲いっぱい`, isCircleFilled(afterPlus), fillDetail(afterPlus));
+
+        // −を押す：寄る・波もぽよんも出ない
+        const minus = await clickAndSampleMotion(page, dim, decId, 1500);
+        await settle(page, dim);
+        const afterMinus = await measureCircleState(page, dim);
+        timingRows.push({ size: `${viewport.width}×${viewport.height}`, dim, op: '−', moveStart: minus.moveStart, fitEnd: minus.fitEnd });
+        record(`${L} −を押すと地図が寄る`, afterMinus.zoom > afterPlus.zoom + 0.01 || afterMinus.radiusKm >= afterPlus.radiusKm - 1e-6, `＋のあと=${afterPlus.zoom} −のあと=${afterMinus.zoom}（半径 ${afterPlus.radiusKm}→${afterMinus.radiusKm}km）`);
+        record(`${L} −では波もぽよんも出ない`, minus.waveStart === undefined && minus.maxDropping === 0, JSON.stringify({ waveStart: minus.waveStart, maxDropping: minus.maxDropping }));
+        record(`${L} −のあと、円が見えている範囲いっぱい`, isCircleFilled(afterMinus), fillDetail(afterMinus));
+
+        // 利用者が地図を動かしたあと（引いて横へずらす）でも、＋で合わせる
+        await page.evaluate((dim) => {
+          if (dim === '3d') { const m = window.__terrainMapForDebug; m.jumpTo({ zoom: m.getZoom() - 1.3, center: [m.getCenter().lng + 0.03, m.getCenter().lat] }); }
+          else { const m = window.__mapViewForDebug.map; m.setView([m.getCenter().lat, m.getCenter().lng + 0.03], m.getZoom() - 1.3, { animate: false }); }
+        }, dim);
+        await page.waitForTimeout(300);
+        await clickElementChecked(page, incId, `${L} 地図を動かしたあと：＋`);
+        await settle(page, dim);
+        const afterMovedPlus = await measureCircleState(page, dim);
+        record(`${L} 利用者が地図を動かしたあとでも、＋を押すと「いっぱい」に合わせ、出発駅が真ん中に戻る`, isCircleFilled(afterMovedPlus) && afterMovedPlus.depOffsetPx <= 2, fillDetail(afterMovedPlus));
+
+        // 続けて押す（＋を3回、80msおき）：波と地図合わせは重ならず、最後に「いっぱい」
+        const burst = await page.evaluate(({ dim, incId }) => new Promise((resolve) => {
+          const view = dim === '3d' ? window.__terrainViewForDebug : window.__mapViewForDebug;
+          const map = dim === '3d' ? window.__terrainMapForDebug : view.map;
+          const moving = () => (dim === '3d' ? map.isMoving() : !!view._circleFitAnim);
+          let overlap = 0; let waves = 0; let hadWave = false;
+          const t0 = performance.now();
+          const el = document.getElementById(incId);
+          el.click(); setTimeout(() => el.click(), 80); setTimeout(() => el.click(), 160);
+          const tick = () => {
+            if (view._circleWave) { if (!hadWave) waves += 1; hadWave = true; if (moving()) overlap += 1; } else hadWave = false;
+            if (performance.now() - t0 < 2500) requestAnimationFrame(tick); else resolve({ overlap, waves });
+          };
+          requestAnimationFrame(tick);
+        }), { dim, incId });
+        await settle(page, dim);
+        const afterBurst = await measureCircleState(page, dim);
+        record(`${L} ＋を続けて押しても、波と地図合わせは同時に動かず、波は最後の1回だけ`, burst.overlap === 0 && burst.waves === 1, JSON.stringify(burst));
+        record(`${L} ＋を続けて押したあと、円が見えている範囲いっぱい`, isCircleFilled(afterBurst), fillDetail(afterBurst));
+
+        // 最初の見え方に戻るボタン
+        await page.evaluate((dim) => {
+          if (dim === '3d') window.__terrainMapForDebug.jumpTo({ zoom: window.__terrainMapForDebug.getZoom() + 1 });
+          else window.__mapViewForDebug.map.setZoom(window.__mapViewForDebug.map.getZoom() + 1, { animate: false });
+        }, dim);
+        await page.waitForTimeout(200);
+        await clickElementChecked(page, 'map-reset-view-btn', `${L} 最初の見え方に戻るボタン`);
+        await page.waitForTimeout(1800);
+        await settle(page, dim);
+        const afterReset = await measureCircleState(page, dim);
+        record(`${L} 最初の見え方に戻るボタンで、円が見えている範囲いっぱい`, isCircleFilled(afterReset), fillDetail(afterReset));
+
+        // 開け閉め（PCは一覧パネル、スマホは下の一覧の小・大）
+        if (vLabel === 'pc') {
+          await clickElementChecked(page, 'results-list-close-btn', `${L} 一覧を閉じる`);
+        } else {
+          await page.evaluate(() => document.getElementById('results-sheet-handle').click());
+        }
+        await page.waitForTimeout(TEST_CIRCLE_FIT_DURATION_MS + 400);
+        await settle(page, dim);
+        const afterToggle = await measureCircleState(page, dim);
+        record(`${L} ${vLabel === 'pc' ? '一覧パネルを閉じた' : '下の一覧を大にした'}あとも、円が見えている範囲いっぱい`, isCircleFilled(afterToggle) && afterToggle.depOffsetPx <= 2, fillDetail(afterToggle));
+        if (pageErrors.length > 0) record(`${L} ページエラーが出ない`, false, pageErrors.join('; '));
+      } catch (e) {
+        record(`${L} 検証中にクラッシュしない`, false, e.message);
+      } finally {
+        await context.close();
+      }
+    }
+  }
+  console.log('  検索した直後の寄り方:', JSON.stringify(fitRows));
+  console.log('  ＋−の時間(ms):', JSON.stringify(timingRows.map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, typeof v === 'number' ? Math.round(v) : v])))));
+
+  // 動きを減らす設定：＋で波もぽよんも出ず、地図はすぐ合う
+  for (const dim of ['2d', '3d']) {
+    const context = await browser.newContext({ viewport: VIEWPORTS.pc, reducedMotion: 'reduce' });
+    const page = await context.newPage();
+    const L = `[64後半/動きを減らす/${dim}]`;
+    try {
+      await page.goto(baseUrl, { waitUntil: 'load' });
+      await page.waitForSelector('#departure-input');
+      await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+      await searchAt(page, '富山駅前', 800);
+      await waitForAllSpotsPrefetchSettled(page);
+      if (dim === '3d') {
+        await clickDimensionToggle(page);
+        const became3d = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+        if (!became3d) { record(`${L} 3D化（検証の前提）`, false); continue; }
+        await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+        await waitForTerrainCameraIdle(page);
+      }
+      const incId = await resultScreenEquivalentId(page, 'budget-increment');
+      const ev = await clickAndSampleMotion(page, dim, incId, 1200);
+      await settle(page, dim);
+      const st = await measureCircleState(page, dim);
+      record(`${L} ＋で波もぽよんも出ない`, ev.waveStart === undefined && ev.maxDropping === 0, JSON.stringify({ waveStart: ev.waveStart, maxDropping: ev.maxDropping }));
+      record(`${L} ＋のあと、円が見えている範囲いっぱい`, isCircleFilled(st), fillDetail(st));
+    } catch (e) {
+      record(`${L} 検証中にクラッシュしない`, false, e.message);
+    } finally {
+      await context.close();
+    }
+  }
+}
+
 async function checkRound64(browser, baseUrl, savedPaths) {
   console.log('\n=== 64本目：出発地を変える・入力欄・上の1行のカード ===');
   const open = async (page) => {
@@ -10802,6 +10913,7 @@ async function main() {
     await runWithFreshBrowser(checkRound59, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound62, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound64, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkRound64Motion, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBreadcrumbTrail, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBudgetSlider, baseUrl, savedPaths);
     await runWithFreshBrowser(checkWaveRevealAndCircleScreenshots, baseUrl, savedPaths);

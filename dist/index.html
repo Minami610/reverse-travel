@@ -10579,11 +10579,22 @@ class ReverseTravel {
     this.renderResultsList();
     // 【2026-10-27、64本目、不具合修正】スマホでは、一覧を描いたあとで下の一覧の高さが変わり（390×844で156px→193px）、
     // 見えている範囲が変わる。3Dは上のreturnToSearchView()が一覧を描く前の高さで合わせていたため、出発駅が見えている
-    // 範囲の真ん中から18pxずれていた（2Dはrender()の次のコマのrefitBounds()で合わせ直している）。3Dも次のコマで、
-    // まだ合わせたままなら（利用者が動かしていなければ）合わせ直す。
-    requestAnimationFrame(() => {
-      if (this.terrainMapView?.isAtLastCircleFit?.()) this.terrainMapView.returnToSearchView({ durationMs: 0 });
-    });
+    // 範囲の真ん中から18pxずれていた（2Dはrender()の次のコマのrefitBounds()で合わせ直している）。高さが変わるのは
+    // 次のコマとは限らない（写真・文字の読み込みしだい）ため、検索してから1秒のあいだ毎コマ見て、見えている範囲が
+    // 合わせたときと変わっていて、まだ合わせたままなら（利用者が動かしていなければ）一瞬で合わせ直す。
+    // ＋−を押したら（_budgetFitTokenが進む）やめる（＋−の地図合わせ・波を取り消さないため）。
+    const refitUntil = performance.now() + 1000;
+    let fitToken = this.terrainMapView?._budgetFitToken;
+    const refitIfAreaChanged = () => {
+      const tv = this.terrainMapView;
+      if (!tv || tv._budgetFitToken !== fitToken) return;
+      if (tv.map && !tv.map.isMoving() && tv.visibleAreaChangedSinceFit?.() && tv.isAtLastCircleFit?.()) {
+        tv.returnToSearchView({ durationMs: 0 });
+        fitToken = tv._budgetFitToken;
+      }
+      if (performance.now() < refitUntil) requestAnimationFrame(refitIfAreaChanged);
+    };
+    requestAnimationFrame(refitIfAreaChanged);
   }
 
   /**

@@ -581,6 +581,8 @@ export class TerrainMapView {
     this._pendingCircleStyle = 'live';
     this._circleAnimFrame = null; // 【2026-10-17、32本目B】半径を0.25秒ほどでなめらかに変えるrequestAnimationFrameのID
     this._circleAnimToken = 0; // 進行中の半径アニメーションを無効化する世代カウンタ
+    this._fillRefinePending = false; // 【64本目】_scheduleFillRefine()が地図の落ち着くのを待っている間true（verify-layoutが待つ）
+    this._fillRefineToken = 0; // 【64本目】地形が読み込めたあとの「いっぱい」の合わせ直し（_scheduleFillRefine()）の世代
     this._budgetFitToken = 0; // 【64本目】＋−の地図合わせの世代（新しく押したら、前の「合わせ終わったら波」を無効にする）
     this._budgetFitWait = null; // 【64本目】＋−の地図合わせが終わるのを待っているmoveendの関数
     this._reachCircleTargetKm = 0; // 【37本目】半径アニメーションの行き先（地図合わせの判断は途中の値ではなくこれを使う）
@@ -1744,6 +1746,8 @@ export class TerrainMapView {
   /** ＋−の地図合わせの「合わせ終わったら波」を取り消し、走っている波を消す。 */
   _cancelFitCircleToView() {
     this._budgetFitToken++;
+    this._fillRefineToken++;
+    this._fillRefinePending = false;
     if (this._budgetFitWait && this.map) this.map.off('moveend', this._budgetFitWait);
     this._budgetFitWait = null;
     this._cancelCircleWave();
@@ -1844,10 +1848,13 @@ export class TerrainMapView {
       const p = destinationPoint(dep.stop_lat, dep.stop_lon, i * 5, radiusKm);
       edge.push(new maplibregl.LngLat(p.lon, p.lat));
     }
+    // 【64本目】地形の上の円の見た目で測る（map.project()と同じく地形の高さを入れて写す）。カメラの中心の高さは今のまま
+    // （MapLibreが動き終わりにそろえるとは限らない。出発駅の高さにそろえて測ると、富山駅前・PCで2.4pxはみ出した）。
+    const terrain = this.map.terrain || null;
     const fits = (z) => {
       tr.setZoom(z);
       return edge.every((ll) => {
-        const pt = tr.locationToScreenPoint(ll);
+        const pt = tr.locationToScreenPoint(ll, terrain || undefined);
         if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return false;
         if (pt.x < box.left || pt.x > box.right || pt.y < box.top || pt.y > box.bottom) return false;
         return !rects.some((r) => (r.round
@@ -1893,6 +1900,9 @@ export class TerrainMapView {
       if (this._circleFitAnim === anim) this._circleFitAnim = null;
       this._rememberFitCamera();
     };
+    // 【64本目、不具合修正】動いている途中に一瞬で合わせるときは、先に前の動きを止める（止めたときのmoveendで、
+    // 途中のカメラを「合わせたカメラ」として覚えてしまい、利用者が動かした扱いになっていた）。
+    if (!anim && this.map.isMoving()) this.map.stop();
     if (!anim) this.map.once('moveend', onEnd);
     this.map.easeTo({
       center: [dep.stop_lon, dep.stop_lat],
@@ -1922,6 +1932,14 @@ export class TerrainMapView {
   }
 
   /** 【58本目】地図が、最後に円に合わせたときのまま（利用者が動かしていない・ピンへ寄っていない）か。 */
+  /** 【64本目】最後に合わせたときの見えている範囲（padding）と、今の見えている範囲が1pxより違うか（main.jsが検索した直後に見る）。 */
+  visibleAreaChangedSinceFit() {
+    if (!this.map) return false;
+    const now = visiblePadding(this.map.getContainer());
+    const p = this.map.getPadding();
+    return ['top', 'right', 'bottom', 'left'].some((k) => Math.abs((p[k] || 0) - (now[k] || 0)) > 1);
+  }
+
   isAtLastCircleFit() {
     const f = this._lastFitCamera;
     if (!this.map || !f) return false;
@@ -2013,11 +2031,45 @@ export class TerrainMapView {
     // 最後に検索した金額の円に合わせる。傾きはOVERVIEW_PITCH（41本目から45°）、向きは変えない。
     this._cancelFitCircleToView();
     // 【64本目】今描いている円（今の金額、＋−で変えたあとはその金額）に「いっぱい」で合わせる（2Dと同じ）。
-    this.fitCircleToView({
-      radiusKm: this.computeReachRadiusKm(this._liveBudget ?? this._lastBudget),
-      pitch: OVERVIEW_PITCH,
-      durationMs,
-    });
+    const radiusKm = this.computeReachRadiusKm(this._liveBudget ?? this._lastBudget);
+    this.fitCircleToView({ radiusKm, pitch: OVERVIEW_PITCH, durationMs });
+    this._scheduleFillRefine(radiusKm);
+  }
+
+  /**
+   * 【64本目】「いっぱい」は地形の高さを入れて測るが、検索した直後・初めて3Dにした直後は、行き先の標高タイルが
+   * まだ無く平らとして測ることになる（大池・PCで実測：平らなら下の端まで8px、標高が届くと手前の山で円の下の縁が
+   * 持ち上がり26px）。そこで地図が落ち着いたら（idle＝タイルを読み終わった）測り直し、ずれていれば短く（0.25秒）
+   * 合わせ直す。利用者が動かした・＋−を押した（_cancelFitCircleToView()が世代を進める）・波やぽよんの最中はしない。
+   * idleは描き続けている間は来ないことがあるため、0.15秒ごとに「止まっていてタイルを読み終わった」かを見て、
+   * 4秒たったら読み終わっていなくても測り直す。
+   */
+  _scheduleFillRefine(radiusKm) {
+    if (!this.map) return;
+    const token = ++this._fillRefineToken;
+    const deadline = performance.now() + 4000;
+    this._fillRefinePending = true;
+    const check = () => {
+      if (token !== this._fillRefineToken) return;
+      if (!this.map) { this._fillRefinePending = false; return; }
+      const late = performance.now() > deadline;
+      if (this.map.isMoving() || this._circleFitAnim || (!late && !this.map.areTilesLoaded())) {
+        setTimeout(check, 150);
+        return;
+      }
+      this._fillRefinePending = false;
+      if (this._circleWave || this._pinPop || this._budgetFitWait || !this.isAtLastCircleFit()) return;
+      const dep = this._lastDepartureStation;
+      const container = this.map.getContainer();
+      if (!dep || container.clientWidth === 0 || container.clientHeight === 0) return;
+      const pad = visiblePadding(container);
+      const pitch = this.map.getPitch();
+      const bearing = this.map.getBearing();
+      const zoom = this._zoomForCircleFill(dep, radiusKm, pitch, bearing, pad);
+      if (zoom === null || Math.abs(zoom - this.map.getZoom()) < 0.005) return;
+      this._easeToCircle(dep, zoom, pitch, bearing, prefersReducedMotion() ? 0 : 250, pad);
+    };
+    setTimeout(check, 150);
   }
 
   /**
