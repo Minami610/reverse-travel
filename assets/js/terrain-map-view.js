@@ -70,7 +70,7 @@ const DEFAULT_PITCH = 57; // Minami指示：55〜60の中間
 // 遠近でつぶれ、画面の上の約4割に出発駅から6〜44km先の遠景が写り（富山駅北口なら
 // 富山湾）、円が下の方に小さく見えていた（40本目の計測）。場所に寄ったときの傾き
 // （SPOT_FOCUS_PITCH）は変えない。ハンドルで傾きを変えた人が金額を変えたときも、
-// 傾きは勝手に戻さない（fitCircleToView({onlyIfNeeded:true})は今の傾きのまま）。
+// 傾きは勝手に戻さない（＋−の地図合わせfitAfterBudgetChange()は今の傾きのまま）。
 const OVERVIEW_PITCH = 45;
 const DEFAULT_ZOOM = 9;
 const DEFAULT_EXAGGERATION = 2; // Minami指示：2〜2.5倍から開始
@@ -191,7 +191,8 @@ const REACH_CIRCLE_POINTS = 72; // 円を近似する多角形の頂点数（5°
 // はじめ少し濃く→広がりながらうすくなる。白い光・ぼかし・点滅は使わない。
 const REACH_WAVE_SOURCE_ID = 'reach-wave';
 const REACH_WAVE_LINE_LAYER_ID = 'reach-wave-line';
-const CIRCLE_WAVE_DURATION_MS = 500;
+// 【2026-10-27、64本目、Minami決定】波は地図合わせが終わってから出す。0.5秒→0.3秒。
+const CIRCLE_WAVE_DURATION_MS = 300;
 const CIRCLE_WAVE_START_OPACITY = 0.7;
 // 【62本目】波の時間が終わったとき、最後に描いた濃さがこれをこえていたら、CIRCLE_WAVE_TAIL_OPACITYで1コマ描いてから消す
 const CIRCLE_WAVE_TAIL_MAX_OPACITY = 0.1;
@@ -214,8 +215,8 @@ const SELECTED_GLOW_LAYER_ID = 'selected-spot-glow';
 // 【2026-10-20、35本目、Minami決定】待ち時間が長すぎる（読み込みが遅いのかと
 // 思うほど）との指摘により、円0.25秒→0.2秒・デバウンス0.4秒→0.15秒・
 // 地図を合わせる動き0.7秒→0.45秒に短縮した（合計1.35秒→0.8秒）。
+// 【2026-10-27、64本目、Minami決定】＋−を押したら待たずに地図を合わせる（0.15秒の待ちはやめた）。
 const CIRCLE_RADIUS_ANIM_MS = 200;
-const CIRCLE_FIT_DEBOUNCE_MS = 150;
 const CIRCLE_FIT_DURATION_MS = 450;
 // 【2026-10-20、35本目、Minami決定：A、不具合修正】以前は「短辺の8%」と
 // 「方位磁針・ハンドルに隠れない右側の余白（90px固定）」のうち大きい方を
@@ -232,15 +233,16 @@ const CIRCLE_FIT_DURATION_MS = 450;
 // 地図を合わせたときの円を小さめにして広がる余地を残す。
 // 【2026-10-23、47本目、Minami決定：2】0.6→0.85（2Dと同じ）。検索した直後の縮尺では、結局
 // 近づいて確認することになるため、最初からもっと寄る。横方向で測るのは35本目のまま。
-const CIRCLE_FIT_TARGET_DIAMETER_RATIO = 0.85;
+// 【2026-10-27、64本目、Minami決定】0.85・横方向で測るのをやめ、円が見えている範囲いっぱいになるまで寄る。斜めから
+// 見た円は横長の楕円に写るため、楕円の見た目の幅と高さで測り、縦か横のどちらかが見えている範囲の端から
+// CIRCLE_FIT_EDGE_GAP_PX（8px）のところに来るまで寄る（_zoomForCircleFill()）。
+const CIRCLE_FIT_EDGE_GAP_PX = 8;
 // 【2026-10-20、37本目、Minami決定：A】金額操作のあとは、円の直径÷短辺（3Dは35本目と
 // 同じく横方向で測る）が0.9をこえたときだけ0.75へ引き、0.35を下回ったときだけ0.6へ
 // 寄る。その間は地図を動かさず円だけが広がる・縮む（2Dのmap-view.jsと同じ値）。
 // 【41本目】9割をこえたときの行き先も0.75→0.6（CIRCLE_FIT_TARGET_DIAMETER_RATIO）。
 // 【47本目、Minami決定：2】引く境目0.9→0.95、寄る先0.6→0.85（2Dと同じ）。寄る境目0.35は変えない。
-const CIRCLE_REFIT_UPPER_RATIO = 0.95;
-const CIRCLE_REFIT_LOWER_RATIO = 0.35;
-const CIRCLE_ZOOM_IN_TARGET_RATIO = 0.85;
+// 【2026-10-27、64本目、Minami決定】0.95／0.35の決まりはやめた。＋−を押したら、いつも「いっぱい」に合わせる（2Dと同じ）。
 // 【47本目、Minami指示】0.85にすると円の縁が地図の上の部品（方位磁針・戻るボタン・ハンドル等）に
 // かかりやすい（実測：375×667の3Dで、円の右上の縁がハンドルの下を通った）。円に合わせるときは、
 // 縁が部品（とのすき間CIRCLE_OBSTACLE_GAP_PX）にかからないズームまでだけ寄る（2Dのmap-view.jsと同じ部品）。
@@ -254,9 +256,8 @@ const CIRCLE_OBSTACLE_SELECTORS = [
   '#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle', '#map-dimension-toggle',
   '#map-zoom-controls', '[data-map-overlay="bar"]', '#results-list-open-btn', '#results-list-close-btn',
 ];
+// 【64本目】部品とのすき間は4px＋8px（CIRCLE_FIT_EDGE_GAP_PX）。
 const CIRCLE_OBSTACLE_GAP_PX = 4;
-const CIRCLE_OBSTACLE_ZOOM_STEP = 0.03;
-const CIRCLE_OBSTACLE_MAX_STEPS = 30;
 
 /**
  * 【2026-10-25、57本目、Minami決定：ア】地図の上に重ねた入れ物（data-map-overlayの付いた、見えている要素：PCの左の
@@ -403,16 +404,11 @@ function mergeOverlappingClusters(items, singleRadius) {
 }
 // 【48本目、Minami決定：2】＋で新しく増えたオレンジを、波（CIRCLE_WAVE_DURATION_MS、ease-out）が
 // その場所の距離を通り過ぎた瞬間に「ぽん」と出す（小さく出て少しふくらみ元の大きさへ、0.2秒。
-// 2DのCSS .map-pin-popと同じ動き）。出している間はまとめないソース（SPOTS_POP_SOURCE_ID）に入れ、
-// 出そろって「ぽん」が終わってから、いつものソースへ戻してまとめ直す。
-const SPOTS_POP_SOURCE_ID = 'spots-pop';
-const SPOTS_POP_LAYER_ID = 'spots-pop-circle';
-const PIN_POP_DURATION_MS = 200;
-/** 「ぽん」の大きさ（経過時間ms→倍率）：0.3倍で出て、6割の時点で1.3倍、最後に1倍。 */
-function pinPopScale(ageMs) {
-  const t = Math.min(1, Math.max(0, ageMs / PIN_POP_DURATION_MS));
-  return t < 0.6 ? 0.3 + (1.3 - 0.3) * (t / 0.6) : 1.3 - 0.3 * ((t - 0.6) / 0.4);
-}
+// 2DのCSS .map-pin-popと同じ動き）。出そろって「ぽん」が終わってから、いつものソースへ戻してまとめ直す。
+// 【2026-10-27、64本目、Minami決定】「ぽん」→「ぽよん」（しずくのように上から落ちて刺さり、つぶれて戻る。0.3秒）。
+// 地図に描く円は形を変えられない（つぶせない）ため、落ちてくる間だけHTMLの印（.map-pin-drop-3d、2Dと同じCSSの動き）で
+// 描き、出そろって落ち終わったら地図に描く点へ戻す（以前の「ぽん」用のソースspots-popはやめた）。
+const PIN_DROP_DURATION_MS = 300;
 // まとめた丸（数字入り、HTMLの印）の位置・数字を更新する間隔の下限（描画のたびに作り直さない）。
 const PIN_CLUSTER_UPDATE_INTERVAL_MS = 100;
 
@@ -585,7 +581,8 @@ export class TerrainMapView {
     this._pendingCircleStyle = 'live';
     this._circleAnimFrame = null; // 【2026-10-17、32本目B】半径を0.25秒ほどでなめらかに変えるrequestAnimationFrameのID
     this._circleAnimToken = 0; // 進行中の半径アニメーションを無効化する世代カウンタ
-    this._circleFitTimer = null; // 【2026-10-17、32本目B】円が収まるよう地図を合わせる、0.4秒デバウンスのsetTimeout ID
+    this._budgetFitToken = 0; // 【64本目】＋−の地図合わせの世代（新しく押したら、前の「合わせ終わったら波」を無効にする）
+    this._budgetFitWait = null; // 【64本目】＋−の地図合わせが終わるのを待っているmoveendの関数
     this._reachCircleTargetKm = 0; // 【37本目】半径アニメーションの行き先（地図合わせの判断は途中の値ではなくこれを使う）
     this._circleFitAnim = null; // 【37本目】{zoom}：fitCircleToView()が動かしている最中の行き先ズーム（moveendで消す）
     this._circleWave = null; // 【37本目】＋の波：{fromKm, toKm, radiusKm, opacity, frame}
@@ -676,10 +673,6 @@ export class TerrainMapView {
             // 【54本目】マウスを乗せた点を元の濃さに戻すため、点ごとの状態（feature-state）を場所のIDで持つ。
             promoteId: 'id',
           },
-          [SPOTS_POP_SOURCE_ID]: {
-            type: 'geojson',
-            data: { type: 'FeatureCollection', features: [] },
-          },
           [REACH_CIRCLE_SOURCE_ID]: {
             type: 'geojson',
             data: { type: 'FeatureCollection', features: [] },
@@ -769,20 +762,6 @@ export class TerrainMapView {
               'circle-color': ['match', ['get', 'cat'], 'orange', PIN_COLOR_ORANGE, PIN_COLOR_BLUE],
               'circle-opacity': 1,
               'circle-stroke-width': ['match', ['get', 'cat'], 'orange', 1.5, 2],
-              'circle-stroke-color': '#ffffff',
-              'circle-blur': 0,
-            },
-          },
-          // 【48本目】「ぽん」と出しているオレンジ（まとめない）。大きさは点ごとの倍率（s）で変える。
-          {
-            id: SPOTS_POP_LAYER_ID,
-            type: 'circle',
-            source: SPOTS_POP_SOURCE_ID,
-            paint: {
-              'circle-radius': ['*', 4, ['get', 's']],
-              'circle-color': PIN_COLOR_ORANGE,
-              'circle-opacity': 1,
-              'circle-stroke-width': ['*', 1.5, ['get', 's']],
               'circle-stroke-color': '#ffffff',
               'circle-blur': 0,
             },
@@ -947,12 +926,11 @@ export class TerrainMapView {
     };
     this.map.on('click', SPOTS_LAYER_ID, onSpotClick);
     this.map.on('click', SPOTS_PLAIN_LAYER_ID, onSpotClick);
-    this.map.on('click', SPOTS_POP_LAYER_ID, onSpotClick); // 【48本目】
     // 【64本目】地図の何もないところ（点の無いところ）を押したとき（main.jsが、スマホの場所のカードを閉じる）。
     // まとめた丸・選んだピン・出発駅の印（HTMLの印）を押したときは、押した先が地図の絵（canvas）でないため数えない。
     this.map.on('click', (e) => {
       if (e.originalEvent?.target !== this.map.getCanvas()) return;
-      const layers = [SPOTS_LAYER_ID, SPOTS_PLAIN_LAYER_ID, SPOTS_POP_LAYER_ID].filter((id) => this.map.getLayer(id));
+      const layers = [SPOTS_LAYER_ID, SPOTS_PLAIN_LAYER_ID].filter((id) => this.map.getLayer(id));
       const hits = this.map.queryRenderedFeatures(e.point, { layers }).filter((ft) => !this._absorbedIds?.has(ft.properties.id));
       if (hits.length === 0) this.onBackgroundClick?.();
     });
@@ -968,7 +946,7 @@ export class TerrainMapView {
     // 何も書き換えないため、idle→描き直し→idleの繰り返しにはならない）。
     this.map.on('idle', () => this._updateClusterMarkers());
     this.map.on('sourcedata', (e) => { if (e.sourceId === SPOTS_SOURCE_ID) this._scheduleClusterMarkerUpdate(); });
-    [SPOTS_LAYER_ID, SPOTS_PLAIN_LAYER_ID, SPOTS_POP_LAYER_ID].forEach((layerId) => {
+    [SPOTS_LAYER_ID, SPOTS_PLAIN_LAYER_ID].forEach((layerId) => {
       this.map.on('mouseenter', layerId, () => { this.map.getCanvas().style.cursor = 'pointer'; });
       this.map.on('mouseleave', layerId, () => { this.map.getCanvas().style.cursor = ''; });
     });
@@ -1214,9 +1192,10 @@ export class TerrainMapView {
     // 減らす設定のとき・地図が見えていないときは、すぐ出す・消す。
     const container = this.map && this.map.getContainer();
     const visible = !!container && container.clientWidth > 0 && container.clientHeight > 0;
+    // 【64本目】出すのは、地図合わせが終わって波が通り過ぎたとき（fitAfterBudgetChange()が_startPinPop()を呼ぶ）。
     if (pop && visible && !prefersReducedMotion() && this._lastBudget != null && prevLive != null && budget > prevLive) {
+      this._pausePinPop();
       this._addPinPopPending(prevLive, budget);
-      this._startPinPop(budget);
     } else {
       this._cancelPinPop();
     }
@@ -1241,15 +1220,17 @@ export class TerrainMapView {
   }
 
   /**
-   * 【48本目】波と同じ速さ（0.5秒、ease-out）で広がる半径を毎コマ計算し、その半径を通り過ぎた
-   * まだ出していないオレンジを「ぽん」と出す（SPOTS_POP_SOURCE_IDに倍率sつきで入れる）。
-   * 全部出して「ぽん」が終わったら、いつものソースへ戻してまとめ直す。呼ばれるたびに時間を
-   * 0からやり直す（続けて押したときは新しい波に合わせる）。
+   * 【48本目】波と同じ速さ（ease-out）で広がる半径を毎コマ計算し、その半径を通り過ぎた
+   * まだ出していないオレンジを出す。全部出して落ち終わったら、いつものソースへ戻してまとめ直す。
+   * 呼ばれるたびに時間を0からやり直す（続けて押したときは新しい波に合わせる）。
+   * 【64本目】「ぽん」→「ぽよん」。呼ぶのは地図合わせが終わって波を出すとき（fitAfterBudgetChange()）。
+   * 落ちてくる間はHTMLの印（_dropPin()）で描く。
    */
   _startPinPop(budget) {
     const state = this._pinPop;
     if (!state || !this.map) return;
     if (state.frame) cancelAnimationFrame(state.frame);
+    state.startedAt = performance.now(); // 検証用（verify-layout.js）
     const totalKm = this.computeReachRadiusKm(budget);
     const startTime = performance.now();
     const step = (now) => {
@@ -1259,37 +1240,54 @@ export class TerrainMapView {
       state.pending.forEach((km, id) => {
         if (progress < 1 && km > radiusKm) return;
         state.pending.delete(id);
-        state.shown.set(id, now);
+        this._dropPin(state, id, now);
       });
-      const popping = [...state.shown.values()].some((t) => now - t < PIN_POP_DURATION_MS);
-      if (state.pending.size === 0 && !popping) {
+      const dropping = [...state.shown.values()].some((d) => now - d.t < PIN_DROP_DURATION_MS);
+      if (state.pending.size === 0 && !dropping) {
         state.frame = null;
-        this._pinPop = null;
-        this._rebuildSpotData(); // 出そろってから、本当に重なるものだけまとめる
+        this._finishPinPop(state);
         return;
       }
-      this._paintPinPop(now);
       state.frame = requestAnimationFrame(step);
     };
     state.frame = requestAnimationFrame(step);
   }
 
-  /** 【48本目】「ぽん」と出しているオレンジを、経過時間に合わせた倍率で描く。 */
-  _paintPinPop(now = performance.now()) {
-    const source = this.map && this.map.getSource(SPOTS_POP_SOURCE_ID);
-    if (!source) return;
+  /** 【64本目】新しいオレンジを、落ちてくるHTMLの印（2Dと同じCSSの動き.map-pin-drop）で出す。 */
+  _dropPin(state, id, now) {
+    const f = (this._spotFeatureById || new Map()).get(id);
+    if (!f || id === this.selectedSpotId) return;
+    const el = document.createElement('div');
+    el.className = 'map-pin-drop-3d';
+    const dot = document.createElement('span');
+    dot.className = 'map-pin-drop-dot';
+    el.appendChild(dot);
+    const marker = new maplibregl.Marker({ element: el }).setLngLat(f.geometry.coordinates).addTo(this.map);
+    state.shown.set(id, { t: now, marker });
+  }
+
+  /** 【64本目】出そろって落ち終わったら、地図に描く点へ戻す（点を描き直してから印を外す。同じコマで外すと一瞬消える）。 */
+  _finishPinPop(state) {
+    if (this._pinPop === state) this._pinPop = null;
+    this._rebuildSpotData(); // 出そろってから、本当に重なるものだけまとめる
+    const markers = [...state.shown.values()].map((d) => d.marker);
+    state.shown.clear();
+    if (markers.length > 0) setTimeout(() => markers.forEach((m) => m.remove()), 120);
+  }
+
+  /**
+   * 【64本目】続けて押したとき：弾んでいる最中の印はその場で止め（元の形で出したまま）、まだ出していないピンは
+   * 隠したまま、次の地図合わせのあとの波で出す。
+   */
+  _pausePinPop() {
     const state = this._pinPop;
-    const features = [];
-    if (state) {
-      const byId = this._spotFeatureById || new Map();
-      state.shown.forEach((t, id) => {
-        const f = byId.get(id);
-        if (!f || id === this.selectedSpotId) return;
-        features.push({ type: 'Feature', geometry: f.geometry, properties: { ...f.properties, cat: 'orange', s: pinPopScale(now - t) } });
-      });
-    }
-    source.setData({ type: 'FeatureCollection', features });
-    this._popDataCount = features.length; // 検証用（verify-layout.js）
+    if (!state) return;
+    if (state.frame) cancelAnimationFrame(state.frame);
+    state.frame = null;
+    state.shown.forEach((d) => {
+      d.t = -Infinity;
+      d.marker.getElement().querySelector('.map-pin-drop-dot')?.style.setProperty('animation', 'none');
+    });
   }
 
   /** 【48本目】「ぽん」を止める（呼び出し元がデータを作り直すと、まだ出していないピンもすぐ出る）。 */
@@ -1298,6 +1296,8 @@ export class TerrainMapView {
     if (!state) return;
     this._pinPop = null;
     if (state.frame) cancelAnimationFrame(state.frame);
+    state.shown.forEach((d) => d.marker.remove()); // 【64本目】落ちてくる印も外す
+    state.shown.clear();
   }
 
   /**
@@ -1337,7 +1337,6 @@ export class TerrainMapView {
     });
     source.setData({ type: 'FeatureCollection', features: clustered });
     plainSource.setData({ type: 'FeatureCollection', features: plain });
-    this._paintPinPop(); // 【48本目】「ぽん」が無いときは空にする
     // 検証用（verify-layout.js）：出している点の数と、点ごとの色の決まりの一覧
     this._spotDataCount = features.length;
     this._spotDataSignature = features.map((f) => `${f.properties.id}:${f.properties.cat}`).sort().join(',');
@@ -1545,15 +1544,10 @@ export class TerrainMapView {
    * @param {number} budget
    * @param {{style?: 'live'|'settled'}} [opts] - settled:検索確定後（薄くする）
    */
-  updateReachCircle(budget, { style = 'live', wave = false } = {}) {
+  updateReachCircle(budget, { style = 'live' } = {}) {
     const targetKm = this.computeReachRadiusKm(budget);
-    // 【41本目、Minami決定】ユーザーが金額を上げたとき（呼び出し元のmain.jsがwave:trueを
-    // 渡す）、出発駅（円の中心）から新しい縁まで波を出す（2Dと同じ）。37本目は「前の縁
-    // から」で、円が広がらなかったときは出さなかったが、「ここまで届く」を見せるため、
-    // 半径が同じでも出す。
-    if (wave && targetKm > 0) {
-      this._startCircleWave(0, targetKm);
-    }
+    // 【41本目、Minami決定】ユーザーが金額を上げたとき、出発駅（円の中心）から新しい縁まで波を出す（2Dと同じ）。
+    // 半径が同じでも出す。【64本目】波は地図合わせが終わってから出す（fitAfterBudgetChange()）。
     this._animateCircleRadius(targetKm, style);
   }
 
@@ -1717,98 +1711,62 @@ export class TerrainMapView {
   }
 
   /**
-   * 【2026-10-17、32本目B、Minami決定】予算の±・スライダー操作のたびに呼ぶ。
-   * 円の半径変化（updateReachCircle()）はそのたびに起きるが、地図を合わせる
-   * （fitCircleToView()）のは最後の呼び出しから0.4秒止まったときだけ
-   * （連打・ドラッグ中に地図が何度も動いて酔わないようにするMinami指示）。
+   * 【2026-10-27、64本目、Minami決定】予算の±・スライダー操作のたびに呼ぶ（2Dのmap-view.jsと同じ）。押したらすぐ
+   * （待たずに）地図を「いっぱい」（fitCircleToView()）に合わせる。−のときは寄る。利用者が地図を動かしたあとでも合わせる。
+   * ＋のとき（raised）だけ、地図合わせが終わってから波を出し、波が通り過ぎた新しいオレンジを「ぽよん」と出す。
+   * 続けて押したら、走っている波・ぽよんは消して、新しい地図合わせに移る。
+   * 以前の「0.15秒待ってから、0.95をこえた・0.35を下回ったときだけ動かす」（32本目B・37本目・47本目）と、「波が
+   * 終わってから地図合わせ」（52本目）はやめた。波と地図合わせを同時に動かさないため、52本目の「地図合わせの動き出しの
+   * 1コマで画面が止まり、波が濃いまま消える」も起きない（波は地図合わせが終わってから出す）。
+   * @param {{raised?: boolean}} [opts]
    */
-  scheduleFitCircleToView() {
+  fitAfterBudgetChange({ raised = false } = {}) {
     this._cancelFitCircleToView();
-    // 【2026-10-24、52本目、Minami決定：①】＋の波が出ているときは、地図合わせを波が終わってから始める
-    // （押してから約0.5秒後。合わせ終わるのは約0.95秒後）。3Dでは地図合わせの動き出しの最初のコマで画面が
-    // 0.2〜0.37秒止まることがあり（地形の描き直し）、それが波（0.5秒）の終わりと重なると、波がうすくなり
-    // きらずに消えていた（「ぽん」も同じ理由で遅れていた）。−のとき・波が出ないときは今までどおり
-    // CIRCLE_FIT_DEBOUNCE_MS（0.15秒）。2Dは止まらないため変えていない。
-    // 地図合わせがすでに動いている途中に押したときも今までどおり0.15秒で行き先を変える（止まるのは
-    // 動き出しのときだけで、待つと今の動きが一度止まってから動き直すことになり、35本目の決まり
-    // 「動いている途中でまた押しても、なめらかに行き先を変える」に反するため）。
-    const wave = this._circleWave;
-    const alreadyMoving = !!(this.map && this.map.isMoving());
-    const waveLeftMs = wave && !alreadyMoving ? Math.max(0, wave.startedAt + CIRCLE_WAVE_DURATION_MS - performance.now()) : 0;
-    const fire = () => {
-      this._circleFitTimer = null;
-      // 波の時間が終わっていても、波を消すのは次のコマ（requestAnimationFrame）のため、まだ残っていることがある。
-      // そのまま動き出すと、止まったコマの間も波が残る。時間が終わっていればここで消し、少し早く呼ばれた
-      // ときは残りを待つ。
-      const w = this._circleWave;
-      if (w && waveLeftMs > 0) {
-        const left = w.startedAt + CIRCLE_WAVE_DURATION_MS - performance.now();
-        if (left > 0) {
-          this._circleFitTimer = setTimeout(fire, left);
-          return;
-        }
-        // 【62本目】時間切れで、最後のうすい1コマ（_startCircleWave()）をまだ描いていなければ、描くのを待つ
-        // （描画が止まっている間＝タブが裏にあるときなど、待ち続けないよう10回まで）
-        if (!w.tailPainted && w.paintedOpacity > CIRCLE_WAVE_TAIL_MAX_OPACITY && (w.tailWaits = (w.tailWaits || 0) + 1) <= 10) {
-          this._circleFitTimer = setTimeout(fire, 16);
-          return;
-        }
-        this._cancelCircleWave();
-        // 「ぽん」も同じ：波が縁まで届いた（時間が終わった）ので、まだ出していないオレンジをここで出す。
-        const pop = this._pinPop;
-        if (pop && pop.pending.size > 0) {
-          const now = performance.now();
-          pop.pending.forEach((km, id) => pop.shown.set(id, now));
-          pop.pending.clear();
-          this._paintPinPop(now);
-        }
-      }
-      // 【37本目、Minami決定：A】金額操作のあとは、はみ出しそう・小さすぎる
-      // ときだけ動かす。半径は描画途中の値ではなく行き先で判断する
-      // （半径アニメーション0.2秒はデバウンス0.15秒より長く、まだ途中のことがあるため）。
-      this.fitCircleToView({ radiusKm: this._reachCircleTargetKm, onlyIfNeeded: true });
+    this._pausePinPop();
+    if (!this.map) return;
+    const token = this._budgetFitToken;
+    const radiusKm = this._reachCircleTargetKm;
+    this.fitCircleToView({ radiusKm });
+    const afterFit = () => {
+      if (token !== this._budgetFitToken) return;
+      this._budgetFitWait = null;
+      if (raised && radiusKm > 0) this._startCircleWave(0, radiusKm);
+      if (this._pinPop) this._startPinPop(this._liveBudget);
     };
-    this._circleFitTimer = setTimeout(fire, Math.max(CIRCLE_FIT_DEBOUNCE_MS, waveLeftMs));
-  }
-
-  _cancelFitCircleToView() {
-    if (this._circleFitTimer) {
-      clearTimeout(this._circleFitTimer);
-      this._circleFitTimer = null;
+    if (this._circleFitAnim) {
+      this._budgetFitWait = afterFit;
+      this.map.once('moveend', afterFit);
+    } else {
+      afterFit();
     }
   }
 
+  /** ＋−の地図合わせの「合わせ終わったら波」を取り消し、走っている波を消す。 */
+  _cancelFitCircleToView() {
+    this._budgetFitToken++;
+    if (this._budgetFitWait && this.map) this.map.off('moveend', this._budgetFitWait);
+    this._budgetFitWait = null;
+    this._cancelCircleWave();
+  }
+
   /**
-   * 【2026-10-17、32本目B、Minami決定】今描画中の到達円「全体」が画面に収まる
-   * よう、滑らかにカメラを引く/寄せる。今までの「予算を触ったら全体表示に
-   * 戻る」（fitToBudget()ベースのreturnToOverview()）をこれに置き換える
-   * （円そのものを収める点がfitToBudget()と異なる：スポットの座標ではなく、
-   * 出発駅からの半径で決まる円の外接範囲を使う）。
-   * 向き（bearing）・傾き（pitch）は今の値のまま変えない（Minami指示：
-   * ハンドルで向き・傾きを変えたあとに＋／−を押しても戻らない）。
-   * 中心は出発駅に固定する（円は必ず出発駅中心のため、対称な余白
-   * （padding）を使えば出発駅中心＝cameraForBounds()が計算する中心と一致する）。
-   * 【2026-10-20、36本目、Minami指示】検索直後の初回表示にも同じ計算を使う
-   * ため、半径（radiusKm）・アニメーションの有無（animate）を上書きできる
-   * ようにした。省略時は今まで通り_reachCircleRadiusKm（円の現在の描画値）・
-   * animate:trueのまま（予算操作時の挙動は変えない）。検索直後は
-   * _reachCircleRadiusKmがまだ0→目標値へアニメーション中（_animateCircleRadius()
-   * 参照）のため、目標値を直接渡す必要がある。
-   * 【2026-10-20、37本目、Minami決定：A】onlyIfNeeded:true（金額操作のあと）のときは、
-   * 今の円の横方向の直径÷短辺がCIRCLE_REFIT_UPPER_RATIO（0.9）をこえたとき、または
-   * CIRCLE_REFIT_LOWER_RATIO（0.35）を下回ったときだけ合わせる。その間は動かさない
-   * （寄っている状態にも触れない）。検索直後・最初の見え方に戻るボタン・「← 一覧に戻る」は
-   * 常に合わせる（onlyIfNeeded:false、returnToSearchView()）。
-   * 【41本目】合わせる先はどの場面も短辺の0.6（CIRCLE_FIT_TARGET_DIAMETER_RATIO）。
-   * 【37本目】傾き（pitch）と動きの長さ（durationMs）も上書きできる（returnToSearchView()が
-   * 傾きOVERVIEW_PITCHを渡す）。
-   * @param {{radiusKm?: number, animate?: boolean, onlyIfNeeded?: boolean, pitch?: number, durationMs?: number}} [opts]
-   * @returns {number|null} 動かした先のズーム（動かさなかったときはnull）
+   * 【2026-10-17、32本目B、Minami決定】到達円「全体」が画面に収まるよう、滑らかにカメラを引く/寄せる。
+   * 向き（bearing）・傾き（pitch）は今の値のまま変えない（Minami指示：ハンドルで向き・傾きを変えたあとに
+   * ＋／−を押しても戻らない）。
+   * 【2026-10-25、57本目、Minami決定：ア】地図から重ねた入れ物を除いた「見えている範囲」で測り、出発駅をその
+   * 真ん中に置く。見えている範囲はカメラのpaddingとして渡す。
+   * 【2026-10-27、64本目、Minami決定】円が見えている範囲いっぱいになるまで寄る（以前の「横方向の直径を短辺の0.85」・
+   * 金額操作のあとの0.95／0.35はやめた）。斜めから見た円は横長の楕円に写るため、行き先のカメラで円の縁を画面に写し、
+   * 楕円の見た目の幅と高さが見えている範囲の端から8px（CIRCLE_FIT_EDGE_GAP_PX）のところまでに入る一番大きいズームに
+   * する（縦か横のどちらかが先に端にぶつかる）。地図の上の部品からは4px＋8pxのすき間を残す。
+   * 検索した直後・最初の見え方に戻るボタン・「← 一覧に戻る」・初めて3Dにしたとき・開け閉め・＋−のどれも同じ合わせ方。
+   * 【37本目】傾き（pitch）と動きの長さ（durationMs）も上書きできる（returnToSearchView()が傾きOVERVIEW_PITCHを渡す）。
+   * @param {{radiusKm?: number, animate?: boolean, pitch?: number, durationMs?: number}} [opts]
+   * @returns {number|null} 合わせた先のズーム（合わせられなかったときはnull）
    */
   fitCircleToView({
     radiusKm = this._reachCircleRadiusKm,
     animate = true,
-    onlyIfNeeded = false,
     pitch: pitchOverride,
     durationMs = CIRCLE_FIT_DURATION_MS,
   } = {}) {
@@ -1817,124 +1775,42 @@ export class TerrainMapView {
     if (!dep || !isFiniteNumber(dep.stop_lat) || !isFiniteNumber(dep.stop_lon) || !radiusKm || radiusKm <= 0) {
       return null;
     }
-    // 【不具合修正、32本目B】スマホの予算操作帯（#mobile-budget-overlay）は
-    // 「一覧」タブを見ている間も操作できる（22本目）ため、0.4秒のデバウンス後に
-    // この関数が発火する時点では、地図タブ側のコンテナ（#spots-map-3d）が
-    // タブ切替でdisplay:none・0×0になっていることがある。0×0のまま
-    // cameraForBounds()を呼ぶとMapLibreが「Map cannot fit within canvas」の
-    // 警告を出す（verify-layoutの実機相当検証で実際に確認）。コンテナが
-    // 見えていないときは何もしない（円自体は既に正しい半径で描画済みのため、
-    // 地図タブへ戻って次に予算を操作したときに改めて合わせ直せば実害はない）。
+    // 【不具合修正、32本目B】地図が見えていない（0×0）ときは何もしない（見えたときに合わせ直す）。
     const container = this.map.getContainer();
     if (container.clientWidth === 0 || container.clientHeight === 0) return null;
-    // 【2026-10-25、57本目、Minami決定：ア】地図から重ねた入れ物を除いた「見えている範囲」で測り、出発駅をその
-    // 真ん中に置く（以前は地図全体の短辺・中心は出発駅のまま。PCの左の入れ物・スマホの下の入れ物の下に、
-    // 円や出発駅が隠れていたため）。見えている範囲はカメラのpaddingとして渡す。
     const visPad = visiblePadding(container);
-    const shortSide = Math.max(1, Math.min(
-      container.clientWidth - visPad.left - visPad.right,
-      container.clientHeight - visPad.top - visPad.bottom,
-    ));
-
-    if (onlyIfNeeded) {
-      // 【37本目】35本目と同じく横方向で測る：出発駅から「画面の左右」の向き
-      // （地図の向き±90°）へ半径ぶん進んだ2点を今のカメラで画面に写し、その距離を
-      // 直径とする（縦方向は傾きによる遠近で縮んで見えるため使わない）。
-      // 前の地図合わせがまだ動いている途中なら、途中のズームではなく行き先の
-      // ズームで判断する（ズームが1上がると画面上の長さは2倍になる）。
-      const bearingNow = this.map.getBearing();
-      const left = destinationPoint(dep.stop_lat, dep.stop_lon, bearingNow - 90, radiusKm);
-      const right = destinationPoint(dep.stop_lat, dep.stop_lon, bearingNow + 90, radiusKm);
-      const pl = this.map.project([left.lon, left.lat]);
-      const pr = this.map.project([right.lon, right.lat]);
-      const zoomNow = this.map.getZoom();
-      const effectiveZoom = this._circleFitAnim ? this._circleFitAnim.zoom : zoomNow;
-      const ratio = (Math.hypot(pr.x - pl.x, pr.y - pl.y) / shortSide) * Math.pow(2, effectiveZoom - zoomNow);
-      if (!(ratio > 0) || !Number.isFinite(ratio)) return null;
-      let targetRatio;
-      if (ratio > CIRCLE_REFIT_UPPER_RATIO) targetRatio = CIRCLE_FIT_TARGET_DIAMETER_RATIO;
-      else if (ratio < CIRCLE_REFIT_LOWER_RATIO) targetRatio = CIRCLE_ZOOM_IN_TARGET_RATIO;
-      else return null;
-      const zoom = this._capCircleZoomForObstacles(
-        dep, radiusKm, Math.min(Math.max(effectiveZoom + Math.log2(targetRatio / ratio), CIRCLE_FIT_MIN_ZOOM), 22),
-        this.map.getPitch(), bearingNow, visPad
-      );
-      // 最低ズーム8.5に張り付いていて、もう動く余地が無いときは動かさない
-      // （¥2000付近で＋を押すたびに同じ場所へ飛び直す空の動きを出さない）。
-      if (Math.abs(zoom - effectiveZoom) < 0.02) return null;
-      // 事前のsetPadding()はしない（easeTo()自体にpaddingを渡す）。事前に呼ぶと、それ自体が瞬時のカメラ操作として
-      // 余分なmoveendを出してしまう。
-      this._easeToCircle(dep, zoom, this.map.getPitch(), bearingNow, (prefersReducedMotion() || !animate) ? 0 : durationMs, visPad);
-      return zoom;
-    }
-
-    // 【57本目】行き先のカメラ（transformの複製、paddingは見えている範囲）で、円の横方向の直径（画面上のpx）が
-    // 見えている範囲の短辺の0.85になるズームを求める（35本目からの「横方向で測る」と同じ。地図は動かさない）。
-    // 以前のcameraForBounds()は対称な余白でしか中心を出発駅にできず、また呼ぶ前に地図のpaddingを0へ戻す必要が
-    // あった（見えている範囲をpaddingで持つようになったため、0へ戻すと地図が一瞬ずれる）。
     const pitch = pitchOverride ?? this.map.getPitch();
     const bearing = this.map.getBearing();
-    const fitZoom = this._zoomForCircleDiameter(dep, radiusKm, shortSide * CIRCLE_FIT_TARGET_DIAMETER_RATIO, pitch, bearing, visPad);
-    if (fitZoom !== null) {
-      const zoom = this._capCircleZoomForObstacles(dep, radiusKm, Math.max(fitZoom, CIRCLE_FIT_MIN_ZOOM), pitch, bearing, visPad);
-      this._easeToCircle(dep, zoom, pitch, bearing, (prefersReducedMotion() || !animate) ? 0 : durationMs, visPad);
-      return zoom;
+    const duration = (prefersReducedMotion() || !animate) ? 0 : durationMs;
+    const fillZoom = this._zoomForCircleFill(dep, radiusKm, pitch, bearing, visPad);
+    if (fillZoom !== null) {
+      this._easeToCircle(dep, fillZoom, pitch, bearing, duration, visPad);
+      return fillZoom;
     }
-    // transformを複製できない版だけ、以前のcameraForBounds()で合わせる（見えている範囲は使わない）。
-
+    // transformを複製できない版だけ、cameraForBounds()で円の外接四角を見えている範囲に合わせる（見えている範囲は使わない）。
     const north = destinationPoint(dep.stop_lat, dep.stop_lon, 0, radiusKm);
     const east = destinationPoint(dep.stop_lat, dep.stop_lon, 90, radiusKm);
     const south = destinationPoint(dep.stop_lat, dep.stop_lon, 180, radiusKm);
     const west = destinationPoint(dep.stop_lat, dep.stop_lon, 270, radiusKm);
-    const bounds = [
-      [west.lon, south.lat],
-      [east.lon, north.lat],
-    ];
-
-    // 【2026-10-20、35本目、Minami決定：A、不具合修正】「地図を合わせたあと、
-    // 円の直径が見えている範囲の短い辺の7〜8割になるように」という目標から
-    // 直接、余白の比率を逆算する（以前の「短辺の8%」と「固定90px」をmax()で
-    // 二重に持つ設計をやめた）。bounds（円の外接矩形）の一辺＝円の直径と
-    // ほぼ一致するため、cameraForBounds()が余白pxぶんを除いた残りに
-    // boundsをぴったり収めるという性質を使い、
-    // 余白(片側) = 短辺 × (1 - 目標直径比率) / 2 という単純な式で求める
-    // （目標0.75なら余白は短辺の12.5%）。対称な（上下左右同じ）paddingを
-    // 渡すことで、cameraForBounds()が計算する中心＝円の幾何中心（出発駅）に
-    // なる（出発駅中心を保つため、上下左右で余白を変えない）。
-    // 【不具合修正、32本目B】上下左右対称のpaddingは「左右の合計」「上下の合計」が
-    // それぞれコンテナの幅・高さ未満でないと、MapLibreが「Map cannot fit
-    // within canvas」という警告を出す（getRevealPadding()が同じ理由で既に
-    // 動的にクランプしているのと同じ事情）。短い辺の半分未満（余裕を見て
-    // 半分-1px）にクランプする（目標比率が0.75なら12.5%で収まるため、通常は
-    // このクランプに当たらない）。
-    const targetPadding = Math.round(shortSide * (1 - CIRCLE_FIT_TARGET_DIAMETER_RATIO) / 2);
-    const padding = Math.min(targetPadding, Math.floor(shortSide / 2) - 1);
-    // 【不具合修正、32本目B、根本原因特定】上のクランプだけでは「own」viewport
-    // （400×464）で実際に警告が再現した。原因を追ったところ、cameraForBounds()は
-    // 引数のpaddingだけでなく、地図に残っている現在のpadding状態
-    // （flyToSpot()がgetRevealPadding()で設定したまま、戻るときに明示的に
-    // 0へ戻していない場合がある）も合算して「収まるか」を判定していた
-    // （MapLibre本体のソースで、引数のpadding合計＋地図の現在のpadding合計が
-    // コンテナの辺の長さを超えるとkt()＝この警告を出す実装を確認）。
-    // ピンを選んで寄ったあと（情報枠を帯よけのpaddingぶん開けたまま）
-    // 予算を操作すると、この関数の引数paddingに地図の残存paddingが上乗せされ、
-    // 小さい画面で合計がコンテナの辺を超えてしまっていた。cameraForBounds()を
-    // 呼ぶ前に地図のpaddingを明示的に0へ戻し、引数のpaddingだけで判定させる。
+    const shortSide = Math.max(1, Math.min(container.clientWidth, container.clientHeight));
+    const padding = Math.min(CIRCLE_FIT_EDGE_GAP_PX, Math.floor(shortSide / 2) - 1);
+    // 【不具合修正、32本目B】cameraForBounds()は地図に残っているpaddingも合算して「収まるか」を見るため、先に0へ戻す。
     this.map.setPadding(CLEAR_PADDING);
-    const camera = this.map.cameraForBounds(bounds, { padding, pitch, bearing });
+    const camera = this.map.cameraForBounds([[west.lon, south.lat], [east.lon, north.lat]], { padding, pitch, bearing });
     if (!camera) return null;
     const zoom = Math.max(camera.zoom, CIRCLE_FIT_MIN_ZOOM);
-    this._easeToCircle(dep, zoom, pitch, bearing, (prefersReducedMotion() || !animate) ? 0 : durationMs, CLEAR_PADDING);
+    this._easeToCircle(dep, zoom, pitch, bearing, duration, CLEAR_PADDING);
     return zoom;
   }
 
   /**
-   * 【57本目】出発駅を見えている範囲の真ん中（padding）に置き、傾きpitch・向きbearingにしたとき、半径radiusKmの円の
-   * 横方向の直径（画面の左右の向きの2点の画面上の距離）がdiameterPxになるズーム。transformを複製して測る
-   * （地図そのものは動かさない）。ズームが1上がると画面上の長さは2倍になるため、1回目の見積もりのあと
-   * もう1回測り直して合わせる（地形・遠近による小さなずれをならす）。複製できない版ではnull。
+   * 【64本目】出発駅を見えている範囲の真ん中（padding）に置き、傾きpitch・向きbearingにしたとき、半径radiusKmの円の縁
+   * （5°ごとの72点）が、見えている範囲を8px内側に縮めた枠の中に入り、地図の上の部品（4px＋8px広げた形）にかからない、
+   * 一番大きいズーム（最低ズーム8.5）。行き先のカメラはtransformの複製で作る（地図そのものは動かさない）。
+   * ズームを上げるほど円は外へ広がるため、1ずつ上げて入らなくなる段を見つけ、その間を二分して求める。
+   * 複製できない版ではnull。
    */
-  _zoomForCircleDiameter(dep, radiusKm, diameterPx, pitch, bearing, padding) {
+  _zoomForCircleFill(dep, radiusKm, pitch, bearing, padding) {
     let tr;
     try {
       tr = this.map.transform.clone();
@@ -1945,75 +1821,79 @@ export class TerrainMapView {
     } catch {
       return null;
     }
-    const l = destinationPoint(dep.stop_lat, dep.stop_lon, bearing - 90, radiusKm);
-    const r = destinationPoint(dep.stop_lat, dep.stop_lon, bearing + 90, radiusKm);
-    const ll = new maplibregl.LngLat(l.lon, l.lat);
-    const rr = new maplibregl.LngLat(r.lon, r.lat);
-    let z = this.map.getZoom();
-    for (let i = 0; i < 2; i++) {
-      tr.setZoom(z);
-      const a = tr.locationToScreenPoint(ll);
-      const b = tr.locationToScreenPoint(rr);
-      const d = Math.hypot(b.x - a.x, b.y - a.y);
-      if (!(d > 0) || !Number.isFinite(d)) return null;
-      z = Math.min(Math.max(z + Math.log2(diameterPx / d), 0), 22);
-    }
-    return z;
-  }
-
-  /**
-   * 【47本目】出発駅を中心に、ズームzoom・傾きpitch・向きbearingにしたとき、半径radiusKmの円の縁が
-   * 地図の上の部品にかかるなら、かからなくなるまで少しずつ引いたズームを返す（最低ズーム8.5まで）。
-   * 行き先のカメラはMapLibreのtransformを複製して作る（地図そのものは動かさない）。複製できない版では
-   * 何もしない（zoomのまま）。
-   */
-  _capCircleZoomForObstacles(dep, radiusKm, zoom, pitch, bearing, padding = CLEAR_PADDING) {
-    // 【57本目】見えている範囲（padding）の外＝重ねた入れ物の下にある部品は見ない。
     const container = this.map.getContainer();
-    const vr = container.clientWidth - padding.right;
-    const vb = container.clientHeight - padding.bottom;
+    const g = CIRCLE_FIT_EDGE_GAP_PX;
+    const box = {
+      left: padding.left + g,
+      top: padding.top + g,
+      right: container.clientWidth - padding.right - g,
+      bottom: container.clientHeight - padding.bottom - g,
+    };
+    // 見えている範囲（padding）の外＝重ねた入れ物の下にある部品は見ない。真ん中（出発駅）にかぶっている部品も見ない（2Dと同じ）。
+    const cx = (padding.left + container.clientWidth - padding.right) / 2;
+    const cy = (padding.top + container.clientHeight - padding.bottom) / 2;
+    const og = CIRCLE_OBSTACLE_GAP_PX + g;
     const rects = circleObstacleRects(container)
-      .filter((r) => !(r.right <= padding.left || r.left >= vr || r.bottom <= padding.top || r.top >= vb));
-    if (rects.length === 0) return zoom;
-    let tr;
-    try {
-      tr = this.map.transform.clone();
-      tr.setPadding(padding);
-      tr.setCenter(new maplibregl.LngLat(dep.stop_lon, dep.stop_lat));
-      tr.setPitch(pitch);
-      tr.setBearing(bearing);
-    } catch {
-      return zoom;
-    }
+      .filter((r) => !(r.right <= padding.left || r.left >= container.clientWidth - padding.right
+        || r.bottom <= padding.top || r.top >= container.clientHeight - padding.bottom))
+      .filter((r) => (r.round
+        ? Math.hypot(r.cx - cx, r.cy - cy) >= r.radius + og
+        : !(cx > r.left - og && cx < r.right + og && cy > r.top - og && cy < r.bottom + og)));
     const edge = [];
     for (let i = 0; i < 72; i++) {
       const p = destinationPoint(dep.stop_lat, dep.stop_lon, i * 5, radiusKm);
       edge.push(new maplibregl.LngLat(p.lon, p.lat));
     }
-    const g = CIRCLE_OBSTACLE_GAP_PX;
-    let z = zoom;
-    for (let step = 0; step <= CIRCLE_OBSTACLE_MAX_STEPS; step++) {
+    const fits = (z) => {
       tr.setZoom(z);
-      const hit = edge.some((ll) => {
+      return edge.every((ll) => {
         const pt = tr.locationToScreenPoint(ll);
-        return rects.some((r) => (r.round
-          ? Math.hypot(pt.x - r.cx, pt.y - r.cy) < r.radius + g
-          : pt.x > r.left - g && pt.x < r.right + g && pt.y > r.top - g && pt.y < r.bottom + g));
+        if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return false;
+        if (pt.x < box.left || pt.x > box.right || pt.y < box.top || pt.y > box.bottom) return false;
+        return !rects.some((r) => (r.round
+          ? Math.hypot(pt.x - r.cx, pt.y - r.cy) < r.radius + og
+          : pt.x > r.left - og && pt.x < r.right + og && pt.y > r.top - og && pt.y < r.bottom + og));
       });
-      if (!hit) return z;
-      if (z <= CIRCLE_FIT_MIN_ZOOM) return CIRCLE_FIT_MIN_ZOOM;
-      z = Math.max(z - CIRCLE_OBSTACLE_ZOOM_STEP, CIRCLE_FIT_MIN_ZOOM);
+    };
+    const maxZoom = 22;
+    let lo = CIRCLE_FIT_MIN_ZOOM;
+    if (!fits(lo)) return lo;
+    while (lo + 1 <= maxZoom && fits(lo + 1)) lo += 1;
+    let hi = Math.min(lo + 1, maxZoom);
+    for (let i = 0; i < 14; i++) {
+      const mid = (lo + hi) / 2;
+      if (fits(mid)) lo = mid;
+      else hi = mid;
     }
-    return z;
+    return lo;
   }
 
   /** fitCircleToView()の実際のカメラ移動。動いている間は行き先のズームを
    * _circleFitAnimに覚えておき（37本目、途中で次の判断をするときに使う）、止まったら消す。 */
   _easeToCircle(dep, zoom, pitch, bearing, duration, padding = CLEAR_PADDING) {
+    this._focusedOnSpot = false;
+    this._flyFocusedSpotId = null;
+    // 【64本目】もう合わせた位置にいるときは動かさない（同じ場所へ動き直す空の動きを出さない。＋−の波はすぐ出せる）。
+    const p = this.map.getPadding();
+    const samePadding = ['top', 'right', 'bottom', 'left'].every((k) => Math.abs((p[k] || 0) - (padding[k] || 0)) < 1);
+    const a = this.map.project(this.map.getCenter());
+    const b = this.map.project([dep.stop_lon, dep.stop_lat]);
+    if (!this.map.isMoving() && samePadding && Math.abs(this.map.getZoom() - zoom) < 0.005
+      && Math.abs(this.map.getPitch() - pitch) < 0.1 && Math.abs(((this.map.getBearing() - bearing + 540) % 360) - 180) < 0.1
+      && Math.hypot(a.x - b.x, a.y - b.y) < 1) {
+      this._circleFitAnim = null;
+      this._rememberFitCamera();
+      return;
+    }
     const anim = duration > 0 ? { zoom } : null;
     this._circleFitAnim = anim;
-    // 【58本目】合わせ終えたときのカメラを覚える（duration 0のときはeaseTo()の中でmoveendが出るため、先に登録する）
-    this.map.once('moveend', () => this._rememberFitCamera());
+    // 【58本目】合わせ終えたときのカメラを覚える。duration 0のときはeaseTo()の中でmoveendが出るため先に登録する。
+    // 動かすときは後で登録する（動いている途中にeaseTo()を呼ぶと、前の動きのmoveendがeaseTo()の中で出るため）。
+    const onEnd = () => {
+      if (this._circleFitAnim === anim) this._circleFitAnim = null;
+      this._rememberFitCamera();
+    };
+    if (!anim) this.map.once('moveend', onEnd);
     this.map.easeTo({
       center: [dep.stop_lon, dep.stop_lat],
       zoom,
@@ -2023,19 +1903,22 @@ export class TerrainMapView {
       // 【57本目】出発駅を見えている範囲（重ねた入れ物を除く）の真ん中に置く。
       padding,
     });
-    if (anim) {
-      this.map.once('moveend', () => {
-        if (this._circleFitAnim === anim) this._circleFitAnim = null;
-      });
-    }
-    this._focusedOnSpot = false;
-    this._flyFocusedSpotId = null;
+    if (anim) this.map.once('moveend', onEnd);
   }
 
   /** 【58本目】円に合わせ終えたときのカメラ（開け閉めのとき、そのあと地図が動いたかを見るため）。 */
   _rememberFitCamera() {
     if (!this.map) return;
     this._lastFitCamera = { center: this.map.getCenter(), zoom: this.map.getZoom(), pitch: this.map.getPitch(), bearing: this.map.getBearing() };
+  }
+
+  /**
+   * 【64本目】最後に円に合わせたあと、利用者が地図を動かしたか（2Dのmap-view.jsと同じ）。円に合わせる動きの途中・
+   * まだ一度も合わせていない・見えたら合わせる保留があるときは、動かしていない扱い。
+   */
+  hasUserMovedSinceFit() {
+    if (this._circleFitAnim) return false;
+    return !!this.map && !!this._lastFitCamera && !this._pendingReturnToSearchView && !this.isAtLastCircleFit();
   }
 
   /** 【58本目】地図が、最後に円に合わせたときのまま（利用者が動かしていない・ピンへ寄っていない）か。 */
@@ -2129,8 +2012,9 @@ export class TerrainMapView {
     this._flySpotToken++;
     // 最後に検索した金額の円に合わせる。傾きはOVERVIEW_PITCH（41本目から45°）、向きは変えない。
     this._cancelFitCircleToView();
+    // 【64本目】今描いている円（今の金額、＋−で変えたあとはその金額）に「いっぱい」で合わせる（2Dと同じ）。
     this.fitCircleToView({
-      radiusKm: this.computeReachRadiusKm(this._lastBudget),
+      radiusKm: this.computeReachRadiusKm(this._liveBudget ?? this._lastBudget),
       pitch: OVERVIEW_PITCH,
       durationMs,
     });

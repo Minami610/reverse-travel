@@ -1020,15 +1020,41 @@ body {
 }
 
 /* 【48本目、Minami決定：2】＋で新しく増えたオレンジが、波に合わせて「ぽん」と出る（小さく出て、
-   少しふくらんで元の大きさに。0.2秒）。動きを減らす設定のときはJS側がこのクラスを付けない。 */
-.map-pin-spot.map-pin-pop {
-  animation: map-pin-pop 0.2s ease-out;
+   少しふくらんで元の大きさに。0.2秒）。動きを減らす設定のときはJS側がこのクラスを付けない。
+   【2026-10-27、64本目、Minami決定】「ぽん」をやめ、しずくのように上から落ちて刺さり、「ぽよん」と弾む（つぶれて
+   戻る）動きにした（0.3秒）。前半で落ち（だんだん速く）、着いたところでつぶれ、少し縦にのびて元の形に戻る。
+   3D（terrain-map-view.js）の落ちる印（.map-pin-drop-3d）も同じ動き。 */
+.map-pin-spot.map-pin-drop,
+.map-pin-drop-3d .map-pin-drop-dot {
+  transform-origin: 50% 100%;
+  animation: map-pin-drop 0.3s linear;
 }
 
-@keyframes map-pin-pop {
-  0% { transform: scale(0.3); }
-  60% { transform: scale(1.3); }
-  100% { transform: scale(1); }
+@keyframes map-pin-drop {
+  0% { transform: translateY(-18px) scale(0.85, 1.2); opacity: 0; animation-timing-function: cubic-bezier(0.55, 0, 1, 0.45); }
+  12% { opacity: 1; }
+  45% { transform: translateY(0) scale(0.9, 1.15); animation-timing-function: ease-out; }
+  62% { transform: translateY(0) scale(1.4, 0.6); animation-timing-function: ease-in-out; }
+  80% { transform: translateY(0) scale(0.9, 1.12); animation-timing-function: ease-in-out; }
+  100% { transform: translateY(0) scale(1, 1); }
+}
+
+/* 3Dで落ちてくる間だけ出す印（地図に描く点と同じ大きさ・色：直径11px、白いふち）。落ち終わったら地図に描く点に戻す。 */
+.map-pin-drop-3d {
+  width: 11px;
+  height: 11px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.map-pin-drop-3d .map-pin-drop-dot {
+  display: block;
+  width: 11px;
+  height: 11px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background-color: #ff6b2b;
+  border: 1.5px solid white;
 }
 
 /* 【49本目】灰色の点（金額帯より安い場所）はやめた。紺とオレンジの2色にする。 */

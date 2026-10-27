@@ -821,15 +821,15 @@ class ReverseTravel {
     this.mapView.setLiveBudget(budget, { pop: raised });
     this.terrainMapView?.setLiveBudget(budget, { pop: raised });
     this.updateNewSpotMarks(budget);
-    this.mapView.updateReachCircle(budget, { style: 'live', wave: raised });
-    this.terrainMapView?.updateReachCircle(budget, { style: 'live', wave: raised });
+    this.mapView.updateReachCircle(budget, { style: 'live' });
+    this.terrainMapView?.updateReachCircle(budget, { style: 'live' });
     if (userTouch) {
-      // 【2026-10-17、32本目B、Minami決定】まず円の半径が変わるのを見せ、
-      // 最後の操作から0.4秒止まったら地図を円全体が収まる大きさへ合わせる。
-      // 今までの「予算を触ったら全体表示（fitToBudget）に戻る」
-      // （returnToOverview()）はこれに置き換える。
-      this.mapView.scheduleFitCircleToView();
-      this.terrainMapView?.scheduleFitCircleToView();
+      // 【2026-10-17、32本目B、Minami決定】今までの「予算を触ったら全体表示（fitToBudget）に戻る」
+      // （returnToOverview()）は、円全体が収まる大きさへ合わせる動きに置き換えた。
+      // 【2026-10-27、64本目、Minami決定】待たずに（0.15秒の待ち・0.95／0.35の決まりはやめた）、押したらすぐ
+      // 円の半径を変え、地図を「いっぱい」に合わせる。＋のときだけ、合わせ終わってから波とぽよんを出す。
+      this.mapView.fitAfterBudgetChange({ raised });
+      this.terrainMapView?.fitAfterBudgetChange({ raised });
     }
     // 【59本目】結果画面では一覧も一緒に今の金額に合わせる
     this.syncListToBudget(budget);
@@ -1334,9 +1334,15 @@ class ReverseTravel {
           // 【2026-10-27、62本目、Minami指示】検索したあと利用者が自分で地図を動かしていたら（拡大・縮小・移動・
           // 回転・傾け・ピンで寄る）、この描き直しでは円に合わせ直さない（ピン・円・数・一覧は今までどおり変える）。
           // 動かす前なら今までどおり合わせ直す。＋−の地図合わせの保留も消さない（background）。
+          // 【2026-10-27、64本目】＋−で金額を変えてあったら（今の金額≠検索した金額）、検索した金額の円には合わせ直さず、
+          // 下で今の金額の円へ「いっぱい」に合わせる（裏取得が終わって円が今の金額の大きさに広がるため。合わせないと、
+          // 円が見えている範囲からはみ出す・小さいままになる）。利用者が地図を動かしていたら、どちらも合わせない。
+          const liveBudget = parseInt(this.elements.budgetInput.value, 10);
+          const moved2d = this.mapView.hasUserMovedSinceFit();
+          const moved3d = !!this.terrainMapView?.hasUserMovedSinceFit?.();
           this.mapView.render(departureStation, allSpots, this.currentBudget, {
             background: true,
-            keepView: this.mapView.hasUserMovedSinceFit(),
+            keepView: moved2d || liveBudget !== this.currentBudget,
           });
           if (this.terrainMapView) this.terrainMapView.render(departureStation, allSpots, this.currentBudget, { background: true });
           // 【43本目、不具合修正】render()は地図のピンを作り直して選択を外すため、検索直後にピンを
@@ -1346,10 +1352,13 @@ class ReverseTravel {
           // 円・帯の件数プレビューはスライダーの今の値で出してよい（動かしながら
           // 変えてよい表示のため）。allSpotsが揃ったことで、半径・件数とも
           // より正確になる。
-          const liveBudget = parseInt(this.elements.budgetInput.value, 10);
           // 【2026-10-15、11本目②】裏取得はユーザーの予算操作ではないため、
           // 情報枠を閉じたり全体に戻したりしない（userTouch:false）。
           this.updateMapBudgetLive(liveBudget, { userTouch: false });
+          if (liveBudget !== this.currentBudget) {
+            if (!moved2d) this.mapView.fitAfterBudgetChange();
+            if (this.terrainMapView && !moved3d) this.terrainMapView.fitAfterBudgetChange();
+          }
           // 【2026-10-17、32本目B、検証用】¥2000全域の裏取得が実際に反映された
           // 回数。verify-layout.jsが「裏取得が終わるまで待つ」ために使う
           // （_lastSpots.lengthの安定待ちだけだと、安定したように見える瞬間が
@@ -1543,6 +1552,13 @@ class ReverseTravel {
     }
 
     this.renderResultsList();
+    // 【2026-10-27、64本目、不具合修正】スマホでは、一覧を描いたあとで下の一覧の高さが変わり（390×844で156px→193px）、
+    // 見えている範囲が変わる。3Dは上のreturnToSearchView()が一覧を描く前の高さで合わせていたため、出発駅が見えている
+    // 範囲の真ん中から18pxずれていた（2Dはrender()の次のコマのrefitBounds()で合わせ直している）。3Dも次のコマで、
+    // まだ合わせたままなら（利用者が動かしていなければ）合わせ直す。
+    requestAnimationFrame(() => {
+      if (this.terrainMapView?.isAtLastCircleFit?.()) this.terrainMapView.returnToSearchView({ durationMs: 0 });
+    });
   }
 
   /**
