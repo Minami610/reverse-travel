@@ -243,21 +243,8 @@ const CIRCLE_FIT_EDGE_GAP_PX = 8;
 // 【41本目】9割をこえたときの行き先も0.75→0.6（CIRCLE_FIT_TARGET_DIAMETER_RATIO）。
 // 【47本目、Minami決定：2】引く境目0.9→0.95、寄る先0.6→0.85（2Dと同じ）。寄る境目0.35は変えない。
 // 【2026-10-27、64本目、Minami決定】0.95／0.35の決まりはやめた。＋−を押したら、いつも「いっぱい」に合わせる（2Dと同じ）。
-// 【47本目、Minami指示】0.85にすると円の縁が地図の上の部品（方位磁針・戻るボタン・ハンドル等）に
-// かかりやすい（実測：375×667の3Dで、円の右上の縁がハンドルの下を通った）。円に合わせるときは、
-// 縁が部品（とのすき間CIRCLE_OBSTACLE_GAP_PX）にかからないズームまでだけ寄る（2Dのmap-view.jsと同じ部品）。
-// 3Dの円は傾きで上側が縮んだ形に写るため、行き先のカメラ（MapLibreのtransformの複製）で縁の点を
-// 実際に画面へ写して確かめ、かかっていれば少しずつ引く。
-// 名前の帯（#spot-info-panel）は見ない（map-view.jsのMAP_CIRCLE_OBSTACLE_SELECTORSと同じ理由）。
-// 【57本目、Minami決定：ア】予算操作帯（#mobile-budget-overlay）は結果の入れ物の一部として扱い、ここからは外した
-// （入れ物ごと「見えている範囲」から除く。visibleMapRect()）。ここに残す部品は、見えている範囲の中で4px避ける。
-// 【58本目】PCで一覧を閉じたときの細いバー・「☰ 一覧を開く」、開いているときのパネルの右の縁の「◀」も避ける。
-const CIRCLE_OBSTACLE_SELECTORS = [
-  '#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle', '#map-dimension-toggle',
-  '#map-zoom-controls', '[data-map-overlay="bar"]', '#results-list-open-btn', '#results-list-close-btn',
-];
-// 【64本目】部品とのすき間は4px＋8px（CIRCLE_FIT_EDGE_GAP_PX）。
-const CIRCLE_OBSTACLE_GAP_PX = 4;
+// 【2026-10-29、65本目、Minami決定】47本目からの「円の縁が地図の上の部品にかからないズームまで」はやめた。円の縁は
+// 部品の下を通ってよい（2Dのmap-view.jsと同じ）。避けるのは重ねた入れ物（visiblePadding()）と地図の端だけ。
 
 /**
  * 【2026-10-25、57本目、Minami決定：ア】地図の上に重ねた入れ物（data-map-overlayの付いた、見えている要素：PCの左の
@@ -278,7 +265,7 @@ function visibleMapRect(container) {
   const area = (v) => Math.max(0, v.right - v.left) * Math.max(0, v.bottom - v.top);
   document.querySelectorAll('[data-map-overlay]').forEach((el) => {
     if (el.hidden) return;
-    // 【58本目】PCで一覧を閉じたときの細いバー（data-map-overlay="bar"）は、覆う入れ物ではなく円が避ける部品
+    // 【58本目】PCで一覧を閉じたときの細いバー（data-map-overlay="bar"）は、覆う入れ物として数えない（65本目から円も避けない）
     if (el.getAttribute('data-map-overlay') === 'bar') return;
     // 【59本目】入れ物の中の入れ物（PCの一覧パネルの中の上の部分・下の部分）は、外の入れ物で数える。
     // スマホでは外の入れ物（.results-panel）がdisplay: contentsで箱を持たないため、中の2つを数える。
@@ -314,32 +301,6 @@ function visiblePadding(container) {
     right: Math.max(0, Math.round(container.clientWidth - vis.right)),
     bottom: Math.max(0, Math.round(container.clientHeight - vis.bottom)),
   };
-}
-
-/** 【47本目】地図の上に見えている部品の形（地図の入れ物の左上を基準にしたpx。丸い部品はround・中心・半径つき）。 */
-function circleObstacleRects(container) {
-  const c = container.getBoundingClientRect();
-  const out = [];
-  CIRCLE_OBSTACLE_SELECTORS.forEach((sel) => {
-    const el = document.querySelector(sel);
-    if (!el || el.hidden) return;
-    const cs = getComputedStyle(el);
-    if (cs.display === 'none' || cs.visibility === 'hidden') return;
-    const r = el.getBoundingClientRect();
-    if (!(r.width > 0 && r.height > 0)) return;
-    if (r.right <= c.left || r.left >= c.right || r.bottom <= c.top || r.top >= c.bottom) return;
-    // 丸い部品（方位磁針・戻るボタン・ハンドル）は丸として扱う（四角で見ると隅の分だけ余計に避ける）。
-    const radius = cs.borderTopLeftRadius;
-    // 大きさは回転（ハンドルはtransform: rotate()で回る）前の幅で見る（回った四角の外枠は大きくなるため）。
-    const w = el.offsetWidth || r.width;
-    const round = Math.abs(w - (el.offsetHeight || r.height)) < 1
-      && (radius.endsWith('%') ? parseFloat(radius) >= 50 : parseFloat(radius) >= w / 2 - 0.5);
-    out.push({
-      left: r.left - c.left, top: r.top - c.top, right: r.right - c.left, bottom: r.bottom - c.top,
-      round, cx: r.left - c.left + r.width / 2, cy: r.top - c.top + r.height / 2, radius: w / 2,
-    });
-  });
-  return out;
 }
 
 // 【2026-10-21、43本目、Minami決定：B-1】ピンの色（2Dのassets/css/style.cssの.map-pin-blue等と
@@ -1762,7 +1723,7 @@ export class TerrainMapView {
    * 【2026-10-27、64本目、Minami決定】円が見えている範囲いっぱいになるまで寄る（以前の「横方向の直径を短辺の0.85」・
    * 金額操作のあとの0.95／0.35はやめた）。斜めから見た円は横長の楕円に写るため、行き先のカメラで円の縁を画面に写し、
    * 楕円の見た目の幅と高さが見えている範囲の端から8px（CIRCLE_FIT_EDGE_GAP_PX）のところまでに入る一番大きいズームに
-   * する（縦か横のどちらかが先に端にぶつかる）。地図の上の部品からは4px＋8pxのすき間を残す。
+   * する（縦か横のどちらかが先に端にぶつかる）。地図の上の部品は避けない（65本目）。
    * 検索した直後・最初の見え方に戻るボタン・「← 一覧に戻る」・初めて3Dにしたとき・開け閉め・＋−のどれも同じ合わせ方。
    * 【37本目】傾き（pitch）と動きの長さ（durationMs）も上書きできる（returnToSearchView()が傾きOVERVIEW_PITCHを渡す）。
    * @param {{radiusKm?: number, animate?: boolean, pitch?: number, durationMs?: number}} [opts]
@@ -1809,7 +1770,7 @@ export class TerrainMapView {
 
   /**
    * 【64本目】出発駅を見えている範囲の真ん中（padding）に置き、傾きpitch・向きbearingにしたとき、半径radiusKmの円の縁
-   * （5°ごとの72点）が、見えている範囲を8px内側に縮めた枠の中に入り、地図の上の部品（4px＋8px広げた形）にかからない、
+   * （5°ごとの72点）が、見えている範囲を8px内側に縮めた枠の中に入る
    * 一番大きいズーム（最低ズーム8.5）。行き先のカメラはtransformの複製で作る（地図そのものは動かさない）。
    * ズームを上げるほど円は外へ広がるため、1ずつ上げて入らなくなる段を見つけ、その間を二分して求める。
    * 複製できない版ではnull。
@@ -1833,16 +1794,6 @@ export class TerrainMapView {
       right: container.clientWidth - padding.right - g,
       bottom: container.clientHeight - padding.bottom - g,
     };
-    // 見えている範囲（padding）の外＝重ねた入れ物の下にある部品は見ない。真ん中（出発駅）にかぶっている部品も見ない（2Dと同じ）。
-    const cx = (padding.left + container.clientWidth - padding.right) / 2;
-    const cy = (padding.top + container.clientHeight - padding.bottom) / 2;
-    const og = CIRCLE_OBSTACLE_GAP_PX + g;
-    const rects = circleObstacleRects(container)
-      .filter((r) => !(r.right <= padding.left || r.left >= container.clientWidth - padding.right
-        || r.bottom <= padding.top || r.top >= container.clientHeight - padding.bottom))
-      .filter((r) => (r.round
-        ? Math.hypot(r.cx - cx, r.cy - cy) >= r.radius + og
-        : !(cx > r.left - og && cx < r.right + og && cy > r.top - og && cy < r.bottom + og)));
     const edge = [];
     for (let i = 0; i < 72; i++) {
       const p = destinationPoint(dep.stop_lat, dep.stop_lon, i * 5, radiusKm);
@@ -1856,10 +1807,7 @@ export class TerrainMapView {
       return edge.every((ll) => {
         const pt = tr.locationToScreenPoint(ll, terrain || undefined);
         if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return false;
-        if (pt.x < box.left || pt.x > box.right || pt.y < box.top || pt.y > box.bottom) return false;
-        return !rects.some((r) => (r.round
-          ? Math.hypot(pt.x - r.cx, pt.y - r.cy) < r.radius + og
-          : pt.x > r.left - og && pt.x < r.right + og && pt.y > r.top - og && pt.y < r.bottom + og));
+        return !(pt.x < box.left || pt.x > box.right || pt.y < box.top || pt.y > box.bottom);
       });
     };
     const maxZoom = 22;

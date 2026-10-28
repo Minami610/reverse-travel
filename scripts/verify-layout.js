@@ -2527,6 +2527,9 @@ async function checkSpotInfoPanel(browser, baseUrl, savedPaths) {
     // パネルを閉じてから押す（閉じていたら開く）
     await page.evaluate(() => document.getElementById('results-list-close-btn')?.click());
     await page.waitForTimeout(600);
+    // 閉じると見えている範囲が変わり、3Dは円に合わせ直す（GPUが混んでいると0.6秒では終わらず、動いている途中の
+    // ピンの位置を押して外れることがあった）。止まってからピンの位置を測る。
+    if (dim === '3d') await waitForTerrainCameraIdle(page);
     const pressed = await pressPin(page, dim);
     if (!pressed) { record(`[pc/${dim}] 押せるピンがある（検証の前提）`, false); await context.close(); continue; }
     await page.waitForFunction(() => document.getElementById('app-layout').getAttribute('data-view') === 'detail', { timeout: 8000 }).catch(() => {});
@@ -4037,7 +4040,7 @@ async function checkInitialSearchCircleFit(browser, baseUrl, savedPaths) {
         await page.waitForTimeout(800);
 
         // 【64本目、Minami決定】円が見えている範囲いっぱい（円の見た目の外枠が見えている範囲の端から8px前後。3Dは楕円の
-        // 見た目の幅と高さで測る。部品で止まったとき・最低ズーム8.5に当たっているときを除く）。
+        // 見た目の幅と高さで測る。最低ズーム8.5に当たっているときを除く。65本目から部品は避けない）。
         const st = await measureCircleState(page, dim);
         record(
           `[${vLabel}/${dim}/¥${budget}] 検索直後、円が見えている範囲いっぱい（64本目）`,
@@ -4195,7 +4198,7 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
         JSON.stringify({ ...withinFrame, zoom: zoomAfterFit, atZoomFloor })
       );
       record('[circle-fit/3D] 最低ズーム8.5を下回らない', zoomAfterFit >= 8.45, `zoom=${zoomAfterFit}`);
-      // 【64本目、Minami決定】円が見えている範囲いっぱい（楕円の見た目の幅と高さで測る。最低ズーム8.5・部品で止まったときを除く）。
+      // 【64本目、Minami決定】円が見えている範囲いっぱい（楕円の見た目の幅と高さで測る。最低ズーム8.5を除く。65本目から部品は避けない）。
       const fill3d = await measureCircleState(page, '3d');
       const diameterRatio3d = await page.evaluate(() => {
         const tv = window.__terrainViewForDebug;
@@ -4534,7 +4537,7 @@ async function checkCircleThenFit(browser, baseUrl, savedPaths) {
     });
     const fill2d = await measureCircleState(page, '2d');
     record(
-      '[circle-fit/2D] ＋のあと、円が見えている範囲いっぱい（64本目。最低ズーム8.5・部品で止まったときを除く）',
+      '[circle-fit/2D] ＋のあと、円が見えている範囲いっぱい（64本目。最低ズーム8.5を除く。部品は避けない）',
       isCircleFilled(fill2d),
       JSON.stringify({ fill: fillDetail(fill2d), ...diameterRatio2d })
     );
@@ -4716,18 +4719,15 @@ const TEST_PIN_DROP_DURATION_MS = 300; // 【64本目】本番のMAP_PIN_DROP_DU
 // 【41本目、Minami決定：C／案1】地図を合わせたときの円の直径÷短辺（本番のCIRCLE_FIT_TARGET_DIAMETER_RATIO）と、
 // 全体の見え方（検索した直後・最初の見え方に戻るボタン・「← 一覧に戻る」）の3Dの傾き（本番のOVERVIEW_PITCH）。
 // 0.6の許容範囲は0.55〜0.65（35本目の0.75に対する0.65〜0.85より狭いのは、目標そのものが小さいため）。
-// 【64本目、Minami決定】0.85はやめ、「いっぱい」（円の見た目の外枠が見えている範囲の端から8px、部品から4px＋8px）にした。
-// 許容は端から3〜13px（ズームの丸め・地形の高さによる写り方の小さなずれを見込む）、部品から7〜16px。
+// 【64本目、Minami決定】0.85はやめ、「いっぱい」（円の見た目の外枠が見えている範囲の端から8px）にした。
+// 許容は端から3〜13px（ズームの丸め・地形の高さによる写り方の小さなずれを見込む）。
+// 【65本目、Minami決定】地図の上の部品は避けない（縁は部品の下を通ってよい）ため、部品で止まったときの許容はやめた。
 const TEST_FIT_EDGE_GAP_MIN = 3;
 const TEST_FIT_EDGE_GAP_MAX = 13;
-const TEST_FIT_CTRL_GAP_MIN = 7;
-const TEST_FIT_CTRL_GAP_MAX = 16;
 // 3Dは地形の高さで円の縁が上下するうえ、＋−で合わせる時点では行き先の標高タイルがまだ無いことがある（64本目）。
-// そのため3Dは端まで0〜16px・部品まで4〜20pxを「いっぱい」とする（はみ出しは不可）。
+// そのため3Dは端まで0〜16pxを「いっぱい」とする（はみ出しは不可）。
 const TEST_FIT_3D_EDGE_GAP_MIN = 0;
 const TEST_FIT_3D_EDGE_GAP_MAX = 16;
-const TEST_FIT_3D_CTRL_GAP_MIN = 4;
-const TEST_FIT_3D_CTRL_GAP_MAX = 20;
 const TEST_OVERVIEW_PITCH = 45;
 const TEST_SPOT_FOCUS_PITCH = 60; // 本番のSPOT_FOCUS_PITCH（場所に寄ったときの傾き、41本目でも変えない）
 // 【37本目】3Dの波（0.5秒）の途中経過を測るための、実GPU（Direct3D 11）を使うChromiumの
@@ -4745,30 +4745,26 @@ const GPU_LAUNCH_ARGS = ['--use-angle=d3d11', '--enable-gpu', '--ignore-gpu-bloc
  */
 async function measureCircleState(page, dim) {
   const st = await measureCircleStateRaw(page, dim);
-  // 【64本目】円の縁は地図の上の部品から4px＋8pxのすき間を残してかからない大きさまでだけ寄るため、部品で止まったか
-  // （縁と部品の一番近いすき間ctrlGapがTEST_FIT_CTRL_GAP_MAX以下）も返す（isCircleFilled()）。
+  // 縁と地図の上の部品の一番近いすき間ctrlGap（記録用。負なら縁が部品の下を通っている。65本目からはそれでよい）。
   const gaps = await circleEdgeControlGaps(page, dim).catch(() => ({}));
   const ctrl = Object.entries(gaps).filter(([sel]) => sel !== '#mobile-budget-overlay').map(([, g]) => g);
   st.ctrlGap = ctrl.length > 0 ? Math.min(...ctrl) : Infinity;
   st.dim = dim;
-  st.limitedByControl = st.ctrlGap <= (dim === '3d' ? TEST_FIT_3D_CTRL_GAP_MAX : TEST_FIT_CTRL_GAP_MAX);
   st.gaps = gaps;
   return st;
 }
 
 /**
  * 【2026-10-27、64本目、Minami決定】円が見えている範囲「いっぱい」か：円の見た目（3Dは楕円）の外枠が、見えている範囲の
- * 端から8px前後（TEST_FIT_EDGE_GAP_MIN〜MAX）のところに縦か横のどちらかで来ている。部品で止まったとき（縁と部品の
- * すき間が4px＋8px前後）・最低ズーム8.5に当たっているときは、端まで届いていなくてよい（はみ出してはいけない）。
+ * 端から8px前後（TEST_FIT_EDGE_GAP_MIN〜MAX）のところに縦か横のどちらかで来ている。最低ズーム8.5に当たっているときは、
+ * 端まで届いていなくてよい。【65本目】部品で止まったときの例外はやめた（部品は避けない）。
  */
 function isCircleFilled(st) {
   if (st.zoom <= 8.55) return true;
   const is3d = st.dim === '3d';
   const eMin = is3d ? TEST_FIT_3D_EDGE_GAP_MIN : TEST_FIT_EDGE_GAP_MIN;
   const eMax = is3d ? TEST_FIT_3D_EDGE_GAP_MAX : TEST_FIT_EDGE_GAP_MAX;
-  const cMin = is3d ? TEST_FIT_3D_CTRL_GAP_MIN : TEST_FIT_CTRL_GAP_MIN;
-  if (st.edgeGap >= eMin && st.edgeGap <= eMax) return true;
-  return !!st.limitedByControl && st.ctrlGap >= cMin && st.edgeGap >= eMin;
+  return st.edgeGap >= eMin && st.edgeGap <= eMax;
 }
 
 /** isCircleFilled()の詳細（記録用）。 */
@@ -5699,11 +5695,11 @@ async function checkReturnToListMatchesSearchView(browser, baseUrl, savedPaths) 
       const back = await measureCircleState(page, '3d');
       const shift = await centerShiftPx(page, '3d', baseline.center);
       // 【59本目】スマホでは詳細を開くと下の一覧が大になり、一覧に戻ったあとも大のまま（見えている範囲が狭い）。そのときは
-      // 「検索した直後と同じ決まり」（見えている範囲の短辺の0.85・出発駅が真ん中、57本目のア）で合っているかを見る。
+      // 「検索した直後と同じ決まり」（見えている範囲いっぱい・出発駅が真ん中。64・65本目）で合っているかを見る。
       const sameArea = Math.abs(back.visShort - baseline.visShort) < 1;
       record(
         `${label} 「一覧」で戻ると、検索した直後と同じ中心・ズーム・傾きに戻る（見えている範囲が変わったときは、同じ決まりで合わせ直す）`,
-        (sameArea ? Math.abs(back.zoom - baseline.zoom) < 0.05 && shift < 3 : back.depOffsetPx <= 3 && back.ratio >= 0.5 && back.ratio <= 0.9)
+        (sameArea ? Math.abs(back.zoom - baseline.zoom) < 0.05 && shift < 3 : back.depOffsetPx <= 3 && isCircleFilled(back))
           && Math.abs(back.pitch - baseline.pitch) < 0.5 && Math.abs(back.bearing - baseline.bearing) < 0.5,
         JSON.stringify({ sameArea, baselineZoom: baseline.zoom, backZoom: back.zoom, centerShiftPx: +shift.toFixed(2), backRatio: +back.ratio.toFixed(3), backDepOffsetPx: +back.depOffsetPx.toFixed(1), baselinePitch: baseline.pitch, backPitch: back.pitch })
       );
@@ -7187,14 +7183,14 @@ async function waitForBaseMapLoaded(page, dim) {
  * 3. オレンジの丸を押すと、寄って分かれる。
  * 4. 「この条件で検索」（スマホは「¥◯で探す」）でオレンジがなくなると、紺がまとまった丸に戻り、
  *    灰色は丸に入らない。円は0.85前後。寄ってから最初の見え方に戻るボタンでも0.85前後。
- * 5. 375×667・390×844・400×464・PCで、検索した直後の円の縁が地図の上の部品に隠れない（2D・3D）。
+ * 5. 375×667・390×844・400×464・PCで、検索した直後の円が見えている範囲いっぱい（2D・3D）。【65本目】以前は「円の縁が
+ *    地図の上の部品に隠れない」を見ていたが、縁は部品の下を通ってよくなった。
  * どの場合もコンソールにエラーが出ない（国土地理院の標高タイルの404を除く）。
  * スクリーンショット：PCと400×464、2Dと3Dで、検索した直後／＋を4回押したとき（地図の読み込み後）。
  */
 async function checkRound47(browser, baseUrl, savedPaths) {
   console.log('\n=== 47本目：オレンジの場所をまとめて主役にする・検索した直後にもっと寄る ===');
   const viewports = { pc: VIEWPORTS.pc, own: { width: 400, height: 464 }, sp375: { width: 375, height: 667 }, sp390: { width: 390, height: 844 } };
-  const ratioOk = (s) => isCircleFilled(s); // 【64本目】「いっぱい」（部品で止まったとき・最低ズームを除く）
   for (const [vLabel, viewport] of Object.entries(viewports)) {
     const isMobile = vLabel !== 'pc';
     const full = vLabel === 'pc' || vLabel === 'own'; // まとめ方・円の大きさ・スクリーンショットはPCと400×464
@@ -7236,21 +7232,15 @@ async function checkRound47(browser, baseUrl, savedPaths) {
           await page.waitForTimeout(300);
         }
 
-        // --- 5. 検索した直後、円の縁が部品に隠れない（4つの画面幅すべて） ---
-        const gaps0 = await circleEdgeControlGaps(page, dim);
+        // --- 5. 検索した直後、円が見えている範囲いっぱい（4つの画面幅すべて。65本目から部品は避けない） ---
         const s0 = await measureCircleState(page, dim);
-        record(
-          `${label} 検索した直後、円の縁が地図の上の部品（方位磁針・戻るボタン・ハンドル・切替・ズーム・名前の帯・予算操作帯）に隠れない`,
-          Object.values(gaps0).every((g) => g >= 0),
-          JSON.stringify({ ratio: +s0.ratio.toFixed(3), gaps: gaps0 })
-        );
+        record(`${label} 検索した直後、円が見えている範囲いっぱい（部品は避けない、65本目）`, isCircleFilled(s0), fillDetail(s0));
         if (!full) {
           record(`${label} コンソールにエラーが出ていない（標高タイルの404を除く）`, errors.length === 0, errors.join(' / '));
           continue;
         }
 
         // --- 1. 検索した直後：紺だけをまとめる・灰色は丸に入らない・円は0.85前後 ---
-        record(`${label} 検索した直後、円が見えている範囲いっぱい（64本目）`, ratioOk(s0), fillDetail(s0));
         const c0 = await readPinCategories(page, dim);
         record(
           `${label} 検索した直後（オレンジなし）は、紺だけが紺の丸にまとまる（灰色の点は無い）`,
@@ -7408,7 +7398,7 @@ async function checkRound47(browser, baseUrl, savedPaths) {
           JSON.stringify({ searched: c2.searched, counts: c2.counts, clusters: c2.clusterCount, kind: c2.clusterKindMismatch, foreign: c2.foreignInCluster, color: c2.colorMismatch })
         );
         const s2 = await measureCircleState(page, dim);
-        record(`${label} 検索し直した直後も、円が見えている範囲いっぱい`, ratioOk(s2), fillDetail(s2));
+        record(`${label} 検索し直した直後も、円が見えている範囲いっぱい`, isCircleFilled(s2), fillDetail(s2));
 
         // 寄ってから最初の見え方に戻るボタン → 0.85前後
         await page.evaluate((dim) => {
@@ -7421,7 +7411,7 @@ async function checkRound47(browser, baseUrl, savedPaths) {
         if (dim === '3d') await waitForTerrainCameraIdle(page);
         await page.waitForTimeout(300);
         const s3 = await measureCircleState(page, dim);
-        record(`${label} 最初の見え方に戻るボタンで、円が見えている範囲いっぱいに戻る`, ratioOk(s3), fillDetail(s3));
+        record(`${label} 最初の見え方に戻るボタンで、円が見えている範囲いっぱいに戻る`, isCircleFilled(s3), fillDetail(s3));
 
         // 【49本目】−を4回（¥1,000＝直前の検索の金額）でオレンジがなくなると、紺をまとめる形に戻る
         const decId = isMobile ? 'mobile-budget-decrement' : 'budget-decrement';
@@ -8405,7 +8395,7 @@ async function checkRound49(browser, baseUrl, savedPaths) {
  * 2. 「条件を変える」で開いて金額を変えると、ボタンのすぐ上に「条件が変わりました」が出て、検索すると消える（PC・400×464）。
  * 3. 検索した直後（富山駅前・¥800）と、地図を動かして最初の見え方に戻るボタンを押したあと：出発駅が「見えている範囲」
  *    （地図から重ねた入れ物を除いた範囲）の真ん中にあり（3px以内）、円の直径は見えている範囲の短辺の0.85以下
- *    （部品を避けて小さくなることはある）・0.5以上（PC 1920×1080・390×844・375×667・400×464、2Dと3D）。
+ *    （64本目からは「いっぱい」、65本目から部品は避けない）（PC 1920×1080・390×844・375×667・400×464、2Dと3D）。
  * スクリーンショット：結果画面（4画面×2D/3D）、トップ画面（400×464・375×667）。
  */
 async function checkRound57(browser, baseUrl, savedPaths) {
@@ -8648,8 +8638,8 @@ async function checkRound57(browser, baseUrl, savedPaths) {
  * 一番小さい幅（760×720）の、2Dと3D。富山駅前・¥800。
  * 1. パネル・「◀」・バー・「☰ 一覧を開く」が、地図の上の部品（ズーム・方位磁針・戻るボタン・ハンドル）・出典と重ならない。
  * 2. 「◀」と「☰ 一覧を開く」で開け閉めできる（clickElementChecked）。
- * 3. 開いても閉じても、出発駅が見えている範囲の真ん中（3px以内）、円が見えている範囲いっぱい（64本目）
- *    （部品を避けて小さくなることはある）。閉じているとき、円の縁がバー・「☰ 一覧を開く」から3px以上離れている。
+ * 3. 開いても閉じても、出発駅が見えている範囲の真ん中（3px以内）、円が見えている範囲いっぱい（64本目）。
+ *    【65本目】閉じているとき、円の縁はバー・「☰ 一覧を開く」の下を通ってよい（以前は3px以上離すことを見ていた）。
  * 4. 開いても閉じても「データ出典・免責」が見えていて、隠れていない。
  * 5. パネルの中の一覧がスクロールでき、上の部分（出発〜見出し）は動かない（開いているとき）。
  * 6. ＋−で金額を変えても、閉じたまま。「条件を変える」で開くとバーは隠れ、検索し直すと閉じたまま戻る。
@@ -8713,39 +8703,6 @@ async function checkRound58(browser, baseUrl, savedPaths) {
         return { ok: b.width > 0 && inView && !!t && el.contains(t), top: t && (t.id || t.className) };
       }, sel);
       // 円の縁（72点）が、閉じたときのバー・「☰ 一覧を開く」からどれだけ離れているか（px、負なら重なる）
-      const circleGapToBar = () => page.evaluate((dim) => {
-        const toRad = (d) => (d * Math.PI) / 180;
-        const toDeg = (r) => (r * 180) / Math.PI;
-        const dest = (lat, lon, bearingDeg, km) => {
-          const delta = km / 6371; const th = toRad(bearingDeg); const p1 = toRad(lat); const l1 = toRad(lon);
-          const p2 = Math.asin(Math.sin(p1) * Math.cos(delta) + Math.cos(p1) * Math.sin(delta) * Math.cos(th));
-          const l2 = l1 + Math.atan2(Math.sin(th) * Math.sin(delta) * Math.cos(p1), Math.cos(delta) - Math.sin(p1) * Math.sin(p2));
-          return [toDeg(p2), toDeg(l2)];
-        };
-        let lat; let lon; let km; let project;
-        if (dim === '3d') {
-          const tv = window.__terrainViewForDebug; const m = window.__terrainMapForDebug;
-          lat = tv._lastDepartureStation.stop_lat; lon = tv._lastDepartureStation.stop_lon; km = tv._reachCircleRadiusKm;
-          project = (ll) => m.project([ll[1], ll[0]]);
-        } else {
-          const mv = window.__mapViewForDebug; [lat, lon] = mv.departureLatLng; km = mv._reachCircleRadiusKm;
-          project = (ll) => mv.map.latLngToContainerPoint(ll);
-        }
-        const mapRect = document.getElementById('map-area').getBoundingClientRect();
-        const rects = ['.results-panel', '#results-list-open-btn'].map((s) => document.querySelector(s).getBoundingClientRect())
-          .map((b) => ({ left: b.left - mapRect.left, top: b.top - mapRect.top, right: b.right - mapRect.left, bottom: b.bottom - mapRect.top }));
-        let min = Infinity;
-        for (let i = 0; i < 72; i++) {
-          const p = project(dest(lat, lon, i * 5, km));
-          rects.forEach((r) => {
-            const dx = Math.max(r.left - p.x, 0, p.x - r.right);
-            const dy = Math.max(r.top - p.y, 0, p.y - r.bottom);
-            const inside = dx === 0 && dy === 0;
-            min = Math.min(min, inside ? -1 : Math.hypot(dx, dy));
-          });
-        }
-        return Math.round(min * 10) / 10;
-      }, dim);
       const desc = (s) => JSON.stringify({ ratio: +s.ratio.toFixed(3), visShort: Math.round(s.visShort), depOffsetPx: +s.depOffsetPx.toFixed(1) });
       try {
         await page.goto(baseUrl, { waitUntil: 'load' });
@@ -8822,8 +8779,6 @@ async function checkRound58(browser, baseUrl, savedPaths) {
         const st2 = await measureCircleState(page, dim);
         console.log(`  ${label} 閉じたとき：円の直径÷見えている範囲の短辺=${st2.ratio.toFixed(3)}（短辺${Math.round(st2.visShort)}px）、出発駅と真ん中のずれ=${st2.depOffsetPx.toFixed(1)}px`);
         record(`${label} 閉じたとき：出発駅が地図全体の真ん中（3px以内）、円は見えている範囲いっぱい（64本目）`, st2.depOffsetPx <= 3 && isCircleFilled(st2), `${desc(st2)} ${fillDetail(st2)}`);
-        const gap = await circleGapToBar();
-        record(`${label} 閉じたとき：円の縁がバー・「☰ 一覧を開く」から3px以上離れている`, gap >= 3, `最小のすき間=${gap}px`);
         const dl2 = await shown('#map-data-line .data-line-btn');
         record(`${label} 閉じたとき：「データ出典・免責」が地図の右下に見えていて隠れていない`, dl2.ok, JSON.stringify(dl2));
         await shot(`round58-${vLabel}-${dim}-closed.png`);
@@ -8889,8 +8844,8 @@ async function checkRound58(browser, baseUrl, savedPaths) {
  * 富山駅前・¥800。
  * 1. 上の＋−カード・下の一覧・右下の部品の列・出典が重ならない（ピンを押したときの名前の帯も）。
  * 2. つまみで小⇔大を切り替えられる（押す：clickElementChecked、上下にドラッグ）。
- * 3. 小でも大でも、出発駅が見えている範囲の真ん中（3px以内）、円は見えている範囲いっぱい（64本目）（部品を避けて
- *    小さくなるのは可）。
+ * 3. 小でも大でも、出発駅が見えている範囲の真ん中（3px以内）、円は見えている範囲いっぱい（64本目。65本目から
+ *    部品は避けない）。
  * 4. 小でも大でも「データ出典・免責」が見えていて隠れていない（小は地図の右下、大は一覧の一番下）。
  * 5. ＋−で一覧の見出し・カード・「◯か所」が一緒に変わる。「¥◯で探す」が無い（PC 1920×1080でも確かめる）。
  * 6. 「条件を変える」で検索カードが開く。
@@ -10464,7 +10419,7 @@ async function checkRound62(browser, baseUrl, savedPaths) {
 /**
  * 【2026-10-27、64本目（後半）、Minami決定】地図の動き。
  * 5. 検索した直後・初めて3Dにしたとき・最初の見え方に戻るボタン・開け閉めで、円が見えている範囲「いっぱい」
- *    （円の見た目の外枠が見えている範囲の端から8px、部品から4px＋8px。3Dは楕円の見た目の幅と高さで測る）。
+ *    （円の見た目の外枠が見えている範囲の端から8px。3Dは楕円の見た目の幅と高さで測る。65本目から部品は避けない）。
  *    出発駅は見えている範囲の真ん中。1920×1080・390×844・375×667・400×464、2D・3D（富山駅前・¥800）。
  * 6. ＋−：押したらすぐ地図を合わせる（押してから動き出すまでを測る。目標0.1秒以内）。＋のときだけ、合わせ終わって
  *    から短い波（0.3秒）、波が通り過ぎた新しいオレンジが「ぽよん」（0.3秒）。波と地図合わせは同時に動かない。
@@ -10551,7 +10506,7 @@ async function checkRound64Motion(browser, baseUrl, savedPaths) {
         await waitForBaseMapLoaded(page, dim);
         const st = await measureCircleState(page, dim);
         fitRows.push({ size: `${viewport.width}×${viewport.height}`, dim, fillW: Math.round(st.fillW * 1000) / 1000, fillH: Math.round(st.fillH * 1000) / 1000, edgeGap: Math.round(st.edgeGap * 10) / 10, ctrlGap: st.ctrlGap, depOffsetPx: Math.round(st.depOffsetPx * 10) / 10, zoom: Math.round(st.zoom * 100) / 100 });
-        record(`${L} 検索した直後、円が見えている範囲いっぱい（端から8px前後、部品で止まったときは部品から4px＋8px前後）`, isCircleFilled(st), fillDetail(st));
+        record(`${L} 検索した直後、円が見えている範囲いっぱい（端から8px前後。部品は避けない、65本目）`, isCircleFilled(st), fillDetail(st));
         record(`${L} 検索した直後、出発駅が見えている範囲の真ん中（2px以内）`, st.depOffsetPx <= 2, `ずれ=${st.depOffsetPx}px`);
         record(`${L} 検索した直後、円が見えている範囲からはみ出していない`, st.edgeGap >= 0 || st.zoom <= 8.55, `edgeGap=${st.edgeGap}`);
         const shot = path.join(screenshotDir, `round64-fit-${vLabel}-${dim}.png`);

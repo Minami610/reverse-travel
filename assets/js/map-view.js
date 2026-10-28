@@ -124,21 +124,10 @@ const MAP_CIRCLE_FIT_MIN_ZOOM = 8.5;
 // ときだけ引く）、寄る先を0.6→0.85にした。寄る境目（0.35）は変えない。
 // 【2026-10-27、64本目、Minami決定】0.95／0.35で動かす・動かさないを分ける決まりはやめた。＋−を押したら、
 // 利用者が地図を動かしたあとでも、いつも「いっぱい」に合わせる（fitAfterBudgetChange()）。
-// 【47本目、Minami指示】0.85にすると円の縁が地図の上の部品にかかりやすいため、円に合わせるときは
-// 縁が部品（とのすき間MAP_CIRCLE_OBSTACLE_GAP_PX）にかからない大きさまでだけ寄る（かからなければ0.85のまま）。
-// 【64本目】部品とのすき間は4px＋8px（MAP_CIRCLE_FIT_EDGE_GAP_PX）。
-// 中心は出発駅のまま動かさない。3D（terrain-map-view.js）も同じ部品を見る。
-// 名前の帯（#spot-info-panel）は見ない：検索した直後・戻るボタンのときは出ておらず、「← 一覧に戻る」の
-// ときだけ選んだ場所の帯が出たままになる。そこで帯を避けると、検索した直後と同じ見え方に戻らなくなる
-// （39本目の決まり。実測：400×464の3Dで0.85→0.67に縮んだ）。
-// 【57本目、Minami決定：ア】予算操作帯（#mobile-budget-overlay）は結果の入れ物の一部として扱い、ここからは外した
-// （入れ物ごと「見えている範囲」から除く。visibleMapRect()）。ここに残す部品は、見えている範囲の中で4px避ける。
-// 【58本目】PCで一覧を閉じたときの細いバー・「☰ 一覧を開く」、開いているときのパネルの右の縁の「◀」も避ける。
-const MAP_CIRCLE_OBSTACLE_SELECTORS = [
-  '#map-compass-btn', '#map-reset-view-btn', '#map-rotate-handle', '#map-dimension-toggle',
-  '#map-zoom-controls', '[data-map-overlay="bar"]', '#results-list-open-btn', '#results-list-close-btn',
-];
-const MAP_CIRCLE_OBSTACLE_GAP_PX = 4;
+// 【2026-10-29、65本目、Minami決定】47本目からの「円の縁が地図の上の部品（ズーム・方位磁針・戻るボタン・ハンドル・2D/3D切替、
+// PCで閉じたときの細いバー・「☰ 一覧を開く」・「◀」）にかからない大きさまで」はやめた。円の縁は部品の下を通ってよい
+// （部品は円の上に載る）。スマホの3Dで右の部品の列を避けて円が小さくなっていた（390×844で幅0.62・高さ0.31）ため。
+// 避けるのは重ねた入れ物（visibleMapRect()）と地図の端（MAP_CIRCLE_FIT_EDGE_GAP_PX）だけ。
 
 /**
  * 【2026-10-25、57本目、Minami決定：ア】地図の上に重ねた入れ物（data-map-overlayの付いた、見えている要素：PCの左の
@@ -159,7 +148,7 @@ function visibleMapRect(container) {
   const area = (v) => Math.max(0, v.right - v.left) * Math.max(0, v.bottom - v.top);
   document.querySelectorAll('[data-map-overlay]').forEach((el) => {
     if (el.hidden) return;
-    // 【58本目】PCで一覧を閉じたときの細いバー（data-map-overlay="bar"）は、覆う入れ物ではなく円が避ける部品
+    // 【58本目】PCで一覧を閉じたときの細いバー（data-map-overlay="bar"）は、覆う入れ物として数えない（65本目から円も避けない）
     if (el.getAttribute('data-map-overlay') === 'bar') return;
     // 【59本目】入れ物の中の入れ物（PCの一覧パネルの中の上の部分・下の部分）は、外の入れ物で数える。
     // スマホでは外の入れ物（.results-panel）がdisplay: contentsで箱を持たないため、中の2つを数える。
@@ -183,31 +172,6 @@ function visibleMapRect(container) {
   return vis;
 }
 
-/** 【47本目】地図の上に見えている部品の形（地図の入れ物の左上を基準にしたpx。丸い部品はround・中心・半径つき）。 */
-function circleObstacleRects(container) {
-  const c = container.getBoundingClientRect();
-  const out = [];
-  MAP_CIRCLE_OBSTACLE_SELECTORS.forEach((sel) => {
-    const el = document.querySelector(sel);
-    if (!el || el.hidden) return;
-    const cs = getComputedStyle(el);
-    if (cs.display === 'none' || cs.visibility === 'hidden') return;
-    const r = el.getBoundingClientRect();
-    if (!(r.width > 0 && r.height > 0)) return;
-    if (r.right <= c.left || r.left >= c.right || r.bottom <= c.top || r.top >= c.bottom) return;
-    // 丸い部品（方位磁針・戻るボタン・ハンドル）は丸として扱う（四角で見ると隅の分だけ余計に避ける）。
-    const radius = cs.borderTopLeftRadius;
-    // 大きさは回転（ハンドルはtransform: rotate()で回る）前の幅で見る（回った四角の外枠は大きくなるため）。
-    const w = el.offsetWidth || r.width;
-    const round = Math.abs(w - (el.offsetHeight || r.height)) < 1
-      && (radius.endsWith('%') ? parseFloat(radius) >= 50 : parseFloat(radius) >= w / 2 - 0.5);
-    out.push({
-      left: r.left - c.left, top: r.top - c.top, right: r.right - c.left, bottom: r.bottom - c.top,
-      round, cx: r.left - c.left + r.width / 2, cy: r.top - c.top + r.height / 2, radius: w / 2,
-    });
-  });
-  return out;
-}
 // 【2026-10-20、37本目、Minami決定：B2】＋で円が広がるとき、前の縁から新しい縁へ
 // うすい青の線（波）を1本だけ広げて消す。色は円の縁と同じ青、太さ3px、
 // 0.5秒で、はじめ少し濃く→広がりながらうすくなる。白い光・ぼかし・点滅は使わない。
@@ -1336,8 +1300,8 @@ export class MapView {
    * _reachCircleRadiusKmがまだ0→目標値へアニメーション中（_animateCircleRadius()
    * 参照）のため、目標値（computeReachRadiusKm()）を直接渡す必要がある。
    * 【2026-10-27、64本目、Minami決定】円が見えている範囲いっぱいになるまで寄る（以前の「短辺の0.85」・金額操作の
-   * あとの0.95／0.35はやめた）。円の縁は、見えている範囲の端からMAP_CIRCLE_FIT_EDGE_GAP_PX（8px）、地図の上の部品から
-   * 4px＋8pxのすき間を残す。2Dの円は丸いため、見えている範囲の短い辺いっぱい。検索した直後・最初の見え方に戻る
+   * あとの0.95／0.35はやめた）。円の縁は、見えている範囲の端からMAP_CIRCLE_FIT_EDGE_GAP_PX（8px）のすき間を残す
+   * （65本目から、地図の上の部品は避けない。縁は部品の下を通ってよい）。2Dの円は丸いため、見えている範囲の短い辺いっぱい。検索した直後・最初の見え方に戻る
    * ボタン・開け閉め・＋−（fitAfterBudgetChange()）のどれも同じ合わせ方。
    * @param {{radiusKm?: number, animate?: boolean, durationSec?: number}} [opts]
    * @returns {number|null} 合わせた先のズーム（合わせられなかったときはnull）
@@ -1356,33 +1320,16 @@ export class MapView {
     const shortSide = Math.max(1, Math.min(vis.right - vis.left, vis.bottom - vis.top));
     const cx = (vis.left + vis.right) / 2;
     const cy = (vis.top + vis.bottom) / 2;
-    // 円の半径（画面上のpx）の上限：見えている範囲の短い辺の半分から8px。
-    let maxRadiusPx = shortSide / 2 - MAP_CIRCLE_FIT_EDGE_GAP_PX;
-    // 【47本目】円の縁が地図の上の部品にかからない大きさまでにとどめる。中心（出発駅）から一番近い部品までの距離から
-    // すき間（4px＋8px）を引いたものを半径の上限にする（2Dの円は真円）。部品が中心にかぶっているときは見ない。
-    // 見えている範囲の外（入れ物の下）にある部品は見ない。
-    let nearestPx = Infinity;
-    circleObstacleRects(this.map.getContainer()).forEach((r) => {
-      if (r.right <= vis.left || r.left >= vis.right || r.bottom <= vis.top || r.top >= vis.bottom) return;
-      if (r.round) {
-        nearestPx = Math.min(nearestPx, Math.max(0, Math.hypot(r.cx - cx, r.cy - cy) - r.radius));
-        return;
-      }
-      const dx = Math.max(r.left - cx, 0, cx - r.right);
-      const dy = Math.max(r.top - cy, 0, cy - r.bottom);
-      nearestPx = Math.min(nearestPx, Math.hypot(dx, dy));
-    });
-    const obstacleRadiusPx = nearestPx - MAP_CIRCLE_OBSTACLE_GAP_PX - MAP_CIRCLE_FIT_EDGE_GAP_PX;
-    if (Number.isFinite(obstacleRadiusPx) && obstacleRadiusPx > 0) maxRadiusPx = Math.min(maxRadiusPx, obstacleRadiusPx);
-    maxRadiusPx = Math.max(1, maxRadiusPx);
+    // 円の半径（画面上のpx）：見えている範囲の短い辺の半分から8px（65本目から地図の上の部品は避けない）。
+    const radiusPx = Math.max(1, shortSide / 2 - MAP_CIRCLE_FIT_EDGE_GAP_PX);
     // 2D（メルカトル）ではズームが1上がると画面上の長さがちょうど2倍になるため、円の東西の直径（画面上のpx）が
-    // 2×maxRadiusPxになるズームは z0 + log2(2×maxRadiusPx / 今の直径) で求まる（メルカトルは等角のため、円は画面上でも真円）。
+    // 2×radiusPxになるズームは z0 + log2(2×radiusPx / 今の直径) で求まる（メルカトルは等角のため、円は画面上でも真円）。
     const z0 = this.map.getZoom();
     const pe = this.map.project(reachDestinationPoint(lat, lon, 90, radiusKm), z0);
     const pw = this.map.project(reachDestinationPoint(lat, lon, 270, radiusKm), z0);
     const d0 = Math.abs(pe.x - pw.x);
     if (!(d0 > 0)) return null;
-    const zoom = Math.min(Math.max(z0 + Math.log2((2 * maxRadiusPx) / d0), MAP_CIRCLE_FIT_MIN_ZOOM), 16);
+    const zoom = Math.min(Math.max(z0 + Math.log2((2 * radiusPx) / d0), MAP_CIRCLE_FIT_MIN_ZOOM), 16);
     // 【57本目】出発駅が見えている範囲の真ん中に来るよう、地図の中心をずらす。
     const center = this._centerPlacingAt(this.departureLatLng, zoom, cx, cy);
     // もう合わせた位置にいるときは動かさない（同じ場所へ飛び直す空の動きを出さない。＋−の波はすぐ出せる）。

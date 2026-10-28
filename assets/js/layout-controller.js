@@ -36,7 +36,7 @@ export function getMapOverlayRects() {
   const out = [];
   document.querySelectorAll(OVERLAY_SELECTOR).forEach((el) => {
     if (el.hidden) return;
-    // 【58本目】PCで一覧を閉じたときの細いバー（data-map-overlay="bar"）は、地図を覆う入れ物ではなく、円が避ける部品として扱う
+    // 【58本目】PCで一覧を閉じたときの細いバー（data-map-overlay="bar"）は、地図を覆う入れ物として数えない（65本目から円も避けない）
     if (el.getAttribute('data-map-overlay') === 'bar') return;
     // 【59本目】入れ物の中の入れ物（PCの一覧パネルの中の上の部分・下の部分）は、外の入れ物で数える
     const outer = el.parentElement && el.parentElement.closest(OVERLAY_SELECTOR);
@@ -106,8 +106,8 @@ export class LayoutController {
   /**
    * 【58本目】PCの結果画面で、左の一覧パネルを開く・閉じる（#app-layoutの.results-list-closed）。
    * 閉じている間、パネルは地図の左上の細いバーになり、地図を覆う入れ物（見えている範囲から除く）ではなく、
-   * 円が避ける部品になる（data-map-overlay="bar"。map-view.js・terrain-map-view.jsのvisibleMapRect()と
-   * circleObstacleRects()）。
+   * 地図の上に載る部品になる（data-map-overlay="bar"。map-view.js・terrain-map-view.jsのvisibleMapRect()）。
+   * 65本目から円の縁はこのバーの下を通ってよい。
    * @param {boolean} open
    * @returns {boolean} 変わったか
    */
