@@ -644,8 +644,8 @@ async function checkResultCards(html) {
  * 帯0件になる組み合わせ）で検索し、以下を確認する（2026-10-06、帯表示への変更に
  * 伴い全面的に書き換え）：
  * 1. 帯の見出し・0件の案内文が、どちらも想定どおりの帯（¥201〜¥400）を表すこと
- * 2. 「往復¥Xで探す」ボタンが1件以上出ること
- * 3. そのボタンを実際にクリックして検索すると、スポットが1件以上出ること
+ * 2. 【67本目】「往復¥Xで探す」ボタンは出ず、文で−・＋のどちらへ変えればよいかを伝えること
+ * 3. 文が案内した向きへ＋（または−）を押していくと、スポットが1件以上出ること
  *    （findNearestBudgetsWithResults()が「言うだけ」の案内をしていないことの確認）
  * 対象駅が見つからない、または（データ側の変化で）たまたま0件でなくなっていた場合は
  * このチェック自体をスキップする（0件になる特定の組み合わせに依存しすぎないため）。
@@ -694,47 +694,40 @@ async function checkNoResultsMessage(doc, window) {
   const expectedBandHeading = formatBandHeading(noResultsBudget, 0); // 【51本目】新しい見出しの形
   const bandHeadingOk = bandHeadingText === expectedBandHeading;
 
+  // 【67本目】「往復¥Xで探す」ボタンはやめ、−・＋のどちらへ変えればよいかを文で伝える
   const noResultsText = resultsList.querySelector('.no-results')?.textContent || '';
-  const expectedMessage = `往復${formatBandLabel(noResultsBudget)}で行ける場所は見つかりませんでした。`;
-  const messageOk = noResultsText === expectedMessage;
+  const band = formatBandLabel(noResultsBudget);
+  const hints = {
+    both: '−で金額を下げるか、＋で上げてみてください。',
+    down: '−で金額を下げてみてください。',
+    up: '＋で金額を上げてみてください。',
+  };
+  const dir = Object.keys(hints).find((k) => noResultsText === `${band} で行ける場所はありません。${hints[k]}`) || null;
+  const noButtons = resultsList.querySelectorAll('.budget-retry-btn, .no-results-actions').length === 0;
 
   console.log(
-    bandHeadingOk && messageOk
-      ? `✅ 0件案内文チェック: 見出し「${bandHeadingText}」・本文「${noResultsText}」とも想定どおりです`
-      : `❌ 0件案内文チェック: 見出し=${bandHeadingOk}["${bandHeadingText}"／期待"${expectedBandHeading}"] 本文=${messageOk}["${noResultsText}"／期待"${expectedMessage}"]`
+    bandHeadingOk && dir && noButtons
+      ? `✅ 0件案内文チェック: 見出し「${bandHeadingText}」・本文「${noResultsText}」とも想定どおりで、「往復¥Xで探す」ボタンは出ていません`
+      : `❌ 0件案内文チェック: 見出し=${bandHeadingOk}["${bandHeadingText}"／期待"${expectedBandHeading}"] 本文=${!!dir}["${noResultsText}"] ボタンなし=${noButtons}`
   );
-  if (!bandHeadingOk || !messageOk) return false;
+  if (!bandHeadingOk || !dir || !noButtons) return false;
 
-  // 上下いずれか近い「結果がある帯」のボタン（往復¥Xで探す）が出ているか
-  const retryButtons = [...resultsList.querySelectorAll('.budget-retry-btn')];
-  if (retryButtons.length === 0) {
-    console.log('❌ 0件案内文チェック: 「往復¥Xで探す」ボタンが1つも出ていません');
+  // 文が案内した向き（＋か−。両方なら＋）へ金額を変えていくと、実際に場所が出る（「言うだけ」になっていない）。
+  // ＋−は裏取得（¥2,000分）が終わってから一覧に効くため、押すたびに一覧が変わるまで待つ。
+  const btnId = dir === 'down' ? 'mobile-budget-decrement' : 'mobile-budget-increment';
+  let found = 0;
+  let pressed = 0;
+  for (; pressed < 18 && found === 0; pressed++) {
+    const before = resultsList.innerHTML;
+    doc.getElementById(btnId).dispatchEvent(new window.Event('click', { bubbles: true }));
+    await waitFor(() => doc.getElementById('results-list').innerHTML !== before && resultsSettled(doc), 4000);
+    found = resultsList.querySelectorAll('.spot-card').length;
+  }
+  if (found === 0) {
+    console.log(`❌ 0件案内文チェック: 文が案内した向き（${btnId}）へ${pressed}回変えても場所が出ませんでした（案内が実態と合っていません）`);
     return false;
   }
-  console.log(
-    `✅ 0件案内文チェック: 「往復¥Xで探す」ボタンが${retryButtons.length}件出ています` +
-    `（${retryButtons.map((b) => b.textContent).join('、')}）`
-  );
-
-  // ボタンが案内した予算が「言うだけ」になっていないか、実際にそのボタンを
-  // クリックして検索し、スポットが1件以上出ることを確認する（最初のボタンを使う）。
-  const retryBudget = retryButtons[0].getAttribute('data-budget');
-  const beforeHtml2 = resultsList.innerHTML;
-  retryButtons[0].dispatchEvent(new window.Event('click', { bubbles: true }));
-  const rendered2 = await waitFor(
-    () => doc.getElementById('results-list').innerHTML !== beforeHtml2 && resultsSettled(doc),
-    8000
-  );
-  if (!rendered2) {
-    console.log('❌ 0件案内文チェック: ボタン押下後も #results-list の内容が更新されませんでした（タイムアウト）');
-    return false;
-  }
-  const cardsAfterRetry = resultsList.querySelectorAll('.spot-card').length;
-  if (cardsAfterRetry === 0) {
-    console.log(`❌ 0件案内文チェック: ボタンが案内した往復¥${retryBudget}で実際に検索してもスポットが0件でした（案内が実態と合っていません）`);
-    return false;
-  }
-  console.log(`✅ 0件案内文チェック: ボタンが案内した往復¥${retryBudget}で実際に検索すると${cardsAfterRetry}件のスポットが出ました`);
+  console.log(`✅ 0件案内文チェック: 文が案内した向き（${btnId}）へ${pressed}回変えると${found}件の場所が出ました`);
   return true;
 }
 
@@ -1473,7 +1466,8 @@ async function checkDepartureMismatchGuard(html) {
  * 0件のときも「見つかりませんでした」と出ると「どこにも行けない」と誤読される）。
  * 魚津駅前は、行ける範囲の運賃がすべて¥800以下に収まる既知の基準駅
  * （config/regression-baseline.json参照）のため、往復¥1000で検索すると
- * 「この駅からは、往復¥800以下で行ける場所しかありません。」が出るはず。
+ * 「この駅からは、往復¥800以下で行ける場所しかありません。」が出るはず（67本目から「¥801〜¥1,000 で行ける
+ * 場所はありません。−で金額を下げてみてください。」）。
  */
 /**
  * 【2026-10-07拡張】Cowork（Minamiさん）が公開ページで確認した事例は「電鉄魚津駅前」
@@ -1523,7 +1517,9 @@ async function checkPartialBandMessage(html, stationName = '魚津駅前') {
   }
 
   const noResultsText = resultsList.querySelector('.no-results')?.textContent || '';
-  const expectedText = 'この駅からは、往復¥800以下で行ける場所しかありません。';
+  // 【67本目】文を「−・＋のどちらへ変えればよいか」に変えた。安い方にだけ場所があるので「−で下げて」と出る
+  // （「どこにも行けない」と読まれないという10-07の狙いは、この文でも守る）
+  const expectedText = '¥801〜¥1,000 で行ける場所はありません。−で金額を下げてみてください。';
   const ok = noResultsText === expectedText;
   console.log(
     ok

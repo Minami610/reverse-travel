@@ -34,11 +34,6 @@ const WAVE_REVEAL_SAFE_DELAY_MS = 1200;
 // 【56本目】検索ボタンの文言（見本のトップ画面）
 const SEARCH_BUTTON_LABEL = 'この条件で探す';
 
-/** 予算→帯の表示ラベル（例: budget=1000 → "¥801〜¥1000"） */
-function formatBandLabel(budget) {
-  return `¥${budget - BAND_WIDTH + 1}〜¥${budget}`;
-}
-
 /**
  * 【2026-10-24、51本目、Minami決定】一覧の上の見出し（例: budget=800・12件 → "¥601〜¥800 の場所　12か所"）。
  * 一覧に今出ている金額帯と、その中の数。
@@ -160,13 +155,11 @@ class ReverseTravel {
     // 【59本目】一覧（見出しの金額帯・カード）が今出している金額。結果画面で＋−を押すと、検索し直さずにこれだけ変わる
     // （「¥◯で探す」はやめた）。0件時の案内文もこの金額で出す。
     this.listBudget = null;
-    this.listHasCheaperSpots = false;
     // 【59本目】¥2,000分の裏取得（scheduleMaxBudgetPrefetch()）が、どの出発駅の分まで終わっているか。
     // 終わるまでは検索した金額の帯の場所しか持っていないため、＋−で一覧を合わせるのを待つ。
     this._allSpotsStationId = null;
     // 【61本目】今地図に渡している場所（「◯か所」「NEW +N」を地図と同じ数え方にするため。updateNewSpotMarks()）
     this._mapSpots = null;
-    this.currentHasCheaperSpots = false; // 帯は0件だが、予算以下にはスポットがあるか（0件案内文の出し分けに使う）
     this.currentSortOrder = 'recommended';
     // 直近に検索した条件（出発駅欄の文字列＋予算）。nullは「まだ一度も検索していない」。
     // 検索ボタンの見た目（updateSearchButtonState）は、現在の入力がこれと一致するかで決める。
@@ -491,19 +484,9 @@ class ReverseTravel {
     // 視覚的な手がかりとして残しつつ、クリック判定はカード全体に拡大）。
     // 一覧からの「選択」操作は行わない（選択状態は地図のピンクリック起点のみ）
     this.elements.resultsList.addEventListener('click', (e) => {
-      // 0件のときに出す「往復¥Xで探す」ボタン（findNearestBudgetsWithResults参照）。
-      // 押された予算で予算欄を更新し、そのまま再検索する。
-      const retryBtn = e.target.closest('.budget-retry-btn');
-      if (retryBtn) {
-        // 検索失敗時の「もう一度試す」（data-budget無し）は、予算を変えず
-        // そのまま同じ条件で再検索する。
-        if (retryBtn.classList.contains('search-retry-btn')) {
-          this.performSearch();
-          return;
-        }
-        const budget = parseInt(retryBtn.getAttribute('data-budget'), 10);
-        this.elements.budgetInput.value = budget;
-        this.updateBudgetUI();
+      // 検索失敗時の「もう一度試す」は、予算を変えずそのまま同じ条件で再検索する。
+      // 【67本目】0件のときの「往復¥Xで探す」ボタンはやめた（buildNoResultsMessage()参照）。
+      if (e.target.closest('.search-retry-btn')) {
         this.performSearch();
         return;
       }
@@ -772,9 +755,8 @@ class ReverseTravel {
     if (!layout.classList.contains('has-results') || !layout.classList.contains('form-collapsed')) return;
     if (this.listBudget === null || budget === this.listBudget) return;
     if (this._allSpotsStationId === null || this._allSpotsStationId !== this.currentDepartureStationId) return;
-    const { bandSpots, hasCheaperSpots } = this.filterBandFromAllSpots(this.currentAllSpots, budget);
+    const { bandSpots } = this.filterBandFromAllSpots(this.currentAllSpots, budget);
     this.listBudget = budget;
-    this.listHasCheaperSpots = !!hasCheaperSpots;
     this.currentSpots = bandSpots;
     this.lastSearchedBudget = budget;
     if (this.elements.bandHeading) this.elements.bandHeading.innerHTML = bandHeadingHtml(budget, bandSpots.length);
@@ -1444,9 +1426,7 @@ class ReverseTravel {
     this._mapSpots = this.currentAllSpots; // 【61本目】地図に渡す場所（下のrender()）。「◯か所」「NEW +N」はこれで数える
     this.currentReachableCount = reachableCount;
     this.currentBudget = budget;
-    this.currentHasCheaperSpots = !!hasCheaperSpots;
     this.listBudget = budget;
-    this.listHasCheaperSpots = !!hasCheaperSpots;
     // 渡されたallSpotsが¥2,000分かどうかはここでは分からないため、いったん「まだ」にする（裏取得・共有リンクで付け直す）
     this._allSpotsStationId = null;
     this.currentSortOrder = 'recommended';
@@ -2304,27 +2284,23 @@ class ReverseTravel {
    * この帯にだけ無いとき（もっと安く行ける場所しかない）を同じ文言で
    * 「見つかりませんでした」と言うと、後者が「どこにも行けない」と誤読される
    * （Minamiさんが公開ページで発見。例：魚津駅前の往復¥1000）。
-   * this.currentHasCheaperSpots（performSearch()が設定）で両者を出し分ける。
+   * （67本目で、この出し分けは「どちらの向きに結果があるか」の文に置き換えた）
+   *
+   * 【2026-10-29、67本目、Minami決定】結果画面の「¥◯で探す」は59本目でなくしたため、0件のときの「往復¥◯で探す」
+   * ボタンもやめた。代わりに、結果がある向き（下・上）へ−・＋で金額を変えればよいことを文で伝える
+   * （findNearestBudgetsWithResults()で、どちらの向きに結果があるかだけを使う）。
    */
   async buildNoResultsMessage() {
     // 【59本目】＋−で一覧が今の金額に合わせて変わるため、検索した金額ではなく一覧の金額で出す
     const budget = this.listBudget ?? this.currentBudget;
     const { lower, higher } = await this.findNearestBudgetsWithResults(budget);
-
-    let html = this.listHasCheaperSpots
-      ? `<p class="no-results">この駅からは、往復¥${budget - BAND_WIDTH}以下で行ける場所しかありません。</p>`
-      : `<p class="no-results">往復${formatBandLabel(budget)}で行ける場所は見つかりませんでした。</p>`;
-    if (lower !== null || higher !== null) {
-      html += '<div class="no-results-actions">';
-      if (lower !== null) {
-        html += `<button type="button" class="budget-retry-btn" data-budget="${lower}">往復¥${lower}で探す</button>`;
-      }
-      if (higher !== null) {
-        html += `<button type="button" class="budget-retry-btn" data-budget="${higher}">往復¥${higher}で探す</button>`;
-      }
-      html += '</div>';
-    }
-    return html;
+    const band = `¥${formatThousands(budget - BAND_WIDTH + 1)}〜¥${formatThousands(budget)}`;
+    let hint;
+    if (lower !== null && higher !== null) hint = '−で金額を下げるか、＋で上げてみてください。';
+    else if (lower !== null) hint = '−で金額を下げてみてください。';
+    else if (higher !== null) hint = '＋で金額を上げてみてください。';
+    else hint = `この駅からは、¥${formatThousands(MAX_BUDGET)}までで行ける場所が見つかりませんでした。`;
+    return `<p class="no-results">${band} で行ける場所はありません。${hint}</p>`;
   }
 
   /**

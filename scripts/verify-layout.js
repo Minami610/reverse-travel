@@ -555,14 +555,13 @@ async function checkHeaderNotTruncated(page, viewportLabel) {
 
 async function captureNoResultsScreen(page, viewportLabel) {
   await searchAt(page, 'ＪＲ栗林駅', 300);
-  // 【56本目】一覧は結果の入れ物の中でスクロールする（スマホは画面の下の半分ほど）。案内のボタンが入れ物の中で
+  // 【56本目】一覧は結果の入れ物の中でスクロールする（スマホは画面の下の半分ほど）。案内が入れ物の中で
   // 下のほうにあるときはスクロールして見せてから、画面の外にはみ出していないかを見る。
-  await page.locator('.budget-retry-btn').first().scrollIntoViewIfNeeded().catch(() => {});
+  await page.locator('.no-results').first().scrollIntoViewIfNeeded().catch(() => {});
   const screenshotPath = path.join(screenshotDir, `no-results-${viewportLabel}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: true });
 
   const noResultsBox = await page.locator('.no-results').boundingBox();
-  const buttonBoxes = await page.locator('.budget-retry-btn').all();
   const viewport = VIEWPORTS[viewportLabel];
 
   if (!noResultsBox) {
@@ -570,19 +569,11 @@ async function captureNoResultsScreen(page, viewportLabel) {
     return screenshotPath;
   }
   record(`[${viewportLabel}] 0件画面: 文章が画面内に収まっている`, isFullyVisible(noResultsBox, viewport));
-
-  if (buttonBoxes.length === 0) {
-    record(`[${viewportLabel}] 0件画面: 「往復¥Xで探す」ボタンが見つかる`, false);
-  } else {
-    for (let i = 0; i < buttonBoxes.length; i++) {
-      const box = await buttonBoxes[i].boundingBox();
-      record(`[${viewportLabel}] 0件画面: ボタン[${i}]が画面内に収まっている（見切れていない）`, isFullyVisible(box, viewport));
-      record(
-        `[${viewportLabel}] 0件画面: ボタン[${i}]が文章の下にあり重ならない`,
-        !!box && !rectsOverlap(noResultsBox, box) && box.y >= noResultsBox.y + noResultsBox.height - 1
-      );
-    }
-  }
+  // 【67本目】「往復¥Xで探す」ボタンはやめ、−・＋で金額を変えればよいことを文で伝える
+  const text = (await page.locator('.no-results').textContent()) || '';
+  const buttons = await page.locator('#results-list .budget-retry-btn').count();
+  record(`[${viewportLabel}] 0件画面: 「往復¥Xで探す」のボタンは無く、−・＋で金額を変えればよいことを文で伝える`,
+    buttons === 0 && /で行ける場所はありません。/.test(text) && /[−＋]で/.test(text), JSON.stringify({ text, buttons }));
   await checkNoHorizontalOverflow(page, `[${viewportLabel}] 0件画面`);
   return screenshotPath;
 }
@@ -11066,6 +11057,87 @@ async function checkRound66(browser, baseUrl, savedPaths) {
   }
 }
 
+/**
+ * 【67本目】スマホのトップ画面・「出発地を変える」で開いたカードで、検索カードの詰め方（57本目）・部品を隠す
+ * （61本目）・入力欄（66本目）と地図の大きさの測り直しが行ったり来たりして、画面ががくがくしないか。
+ * 出してから2秒間、毎コマ、検索カード（位置・高さ・詰め方のクラス）・部品の列（クラス・高さ）・地図と見えている
+ * 地図の描画面の大きさを記録し、後半1秒は変わらない（同じ値に落ち着く）こと、見えている地図の描画面が
+ * 大きさ0にならないこと、WebGLの「zero size」の警告が出ないことを見る。3Dは前に3Dを選んだ端末（検索のあと3Dで出る）。
+ */
+async function checkRound67(browser, baseUrl, savedPaths) {
+  console.log('\n=== 67本目：スマホのトップ画面・開いたカードががくがくしない ===');
+  const sampleLayout = (page) => page.evaluate(() => new Promise((resolve) => {
+    const rows = [];
+    let zeroCanvas = 0;
+    const t0 = performance.now();
+    const r = (el) => { if (!el) return '-'; const b = el.getBoundingClientRect(); return `${Math.round(b.top)},${Math.round(b.height)}`; };
+    const tick = () => {
+      const mapArea = document.getElementById('map-area');
+      const is3d = mapArea.classList.contains('mode-3d');
+      const canvas = is3d ? window.__terrainMapForDebug?.getCanvas() : window.__mapViewForDebug?._vectorBaseLayer?.getMaplibreMap()?.getCanvas();
+      if (canvas && (canvas.width === 0 || canvas.height === 0 || canvas.clientWidth === 0 || canvas.clientHeight === 0)) zeroCanvas++;
+      const card = document.getElementById('layout-left');
+      const cluster = document.getElementById('map-controls-cluster');
+      rows.push([r(card), card.className, r(cluster), cluster.className, r(mapArea), canvas ? `${canvas.width}x${canvas.height}` : '-'].join(' | '));
+      if (performance.now() - t0 < 2000) requestAnimationFrame(tick);
+      else resolve({ rows, zeroCanvas });
+    };
+    requestAnimationFrame(tick);
+  }));
+  const judge = (label, s, warns) => {
+    const changes = s.rows.reduce((n, row, i) => n + (i > 0 && row !== s.rows[i - 1] ? 1 : 0), 0);
+    const half = Math.floor(s.rows.length / 2);
+    const lateChanges = s.rows.slice(half).reduce((n, row, i, a) => n + (i > 0 && row !== a[i - 1] ? 1 : 0), 0);
+    record(`${label} 2秒間、検索カード・部品・地図の大きさが変わり続けない（後半1秒は同じ値）`, lateChanges === 0 && changes <= 3,
+      JSON.stringify({ frames: s.rows.length, changes, lateChanges, distinct: [...new Set(s.rows)].slice(0, 4) }));
+    record(`${label} 見えている地図の描画面が大きさ0にならず、WebGLの「zero size」の警告も出ない`, s.zeroCanvas === 0 && warns === 0, JSON.stringify({ zeroCanvas: s.zeroCanvas, warns }));
+  };
+  const viewports = [['411x473', { width: 411, height: 473 }], ['own', MOBILE_FORM_COLLAPSE_VIEWPORTS.own], ['se', MOBILE_FORM_COLLAPSE_VIEWPORTS.se], ['std', MOBILE_FORM_COLLAPSE_VIEWPORTS.std]];
+  for (const [vLabel, viewport] of viewports) {
+    for (const dim of ['2d', '3d']) {
+      const context = await browser.newContext({ viewport });
+      await context.addInitScript((dim) => {
+        try {
+          localStorage.setItem('reverse-travel-rotate-hint-seen', 'true');
+          localStorage.setItem('reverse-travel-map-mode', dim);
+        } catch { /* 無視 */ }
+      }, dim);
+      const page = await context.newPage();
+      let warns = 0;
+      page.on('console', (m) => { if (/zero size|Framebuffer is incomplete/i.test(m.text())) warns++; });
+      const pageErrors = [];
+      page.on('pageerror', (e) => pageErrors.push(e.message));
+      const L = `[67/${vLabel}/${dim}]`;
+      try {
+        await page.goto(baseUrl, { waitUntil: 'load' });
+        await page.waitForSelector('#departure-input');
+        await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+        judge(`${L} トップ画面`, await sampleLayout(page), warns);
+        await searchAt(page, '仏生山', 800);
+        await waitForAllSpotsPrefetchSettled(page);
+        if (dim === '3d') {
+          const became3d = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+          record(`${L} 前に3Dを選んだ端末では、検索のあと3Dで出る（検証の前提）`, became3d);
+          if (!became3d) continue;
+          await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+          await waitForTerrainCameraIdle(page);
+        }
+        warns = 0;
+        await clickElementChecked(page, 'search-summary-toggle', `${L} 駅名▾（出発地を変える）`);
+        judge(`${L} 「出発地を変える」で開いたカード`, await sampleLayout(page), warns);
+        // 開いたまま検索し直したあと（3Dのまま「出発地を変える」→ 検索）
+        warns = 0;
+        await page.click('#search-btn');
+        await page.waitForFunction(() => document.getElementById('app-layout').classList.contains('form-collapsed'), { timeout: 10000 }).catch(() => {});
+        judge(`${L} 開いたカードから検索し直した直後`, await sampleLayout(page), warns);
+        if (pageErrors.length > 0) record(`${L} ページエラーが発生していない`, false, pageErrors.join('; '));
+      } finally {
+        await context.close();
+      }
+    }
+  }
+}
+
 async function main() {
   assertBundleFresh('verify-layout');
   assertSiteDataFresh('verify-layout');
@@ -11178,6 +11250,7 @@ async function main() {
     await runWithFreshBrowser(checkRound64, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound64Motion, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound66, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkRound67, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBreadcrumbTrail, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBudgetSlider, baseUrl, savedPaths);
     await runWithFreshBrowser(checkWaveRevealAndCircleScreenshots, baseUrl, savedPaths);
