@@ -1688,24 +1688,26 @@ async function checkFavoriteCardToggle(html) {
   // （3本目）。クリック直後の同期読み取りだと描画前（ボタン未生成）を読んでしまうため待つ。
   await waitFor(() => !!doc.querySelector('.detail-favorite-btn'), 3000);
   const detailFavBtn = doc.querySelector('.detail-favorite-btn');
+  // 【66本目】詳細の☆は名前の行の右の小さなアイコンボタンになり、文言は出さない（状態はaria-label・aria-pressedで伝える）
   const detailShowsActive = !!detailFavBtn?.classList.contains('favorite-btn-active') &&
-    detailFavBtn?.textContent.trim() === '保存済み' &&
+    detailFavBtn?.getAttribute('aria-pressed') === 'true' &&
     detailFavBtn?.getAttribute('aria-label') === 'マイリストから外す';
   console.log(
     detailShowsActive
       ? '✅ 詳細画面でも同じスポットが「保存済み」として表示されます（aria-labelは「マイリストから外す」）'
-      : `❌ 詳細画面の☆ボタンに保存状態が反映されていません（文言="${detailFavBtn?.textContent.trim()}", aria-label="${detailFavBtn?.getAttribute('aria-label')}"）`
+      : `❌ 詳細画面の☆ボタンに保存状態が反映されていません（aria-pressed="${detailFavBtn?.getAttribute('aria-pressed')}", aria-label="${detailFavBtn?.getAttribute('aria-label')}"）`
   );
 
   // 詳細画面の☆を押して解除
   detailFavBtn.dispatchEvent(new window.Event('click', { bubbles: true }));
   const countAfterRemove = doc.getElementById('mylist-count')?.textContent;
-  const detailShowsInactive = detailFavBtn.textContent.trim() === 'マイリストに保存' &&
+  const detailShowsInactive = !detailFavBtn.classList.contains('favorite-btn-active') &&
+    detailFavBtn.getAttribute('aria-pressed') === 'false' &&
     detailFavBtn.getAttribute('aria-label') === 'マイリストに保存';
   console.log(
     countAfterRemove === '0' && detailShowsInactive
-      ? '✅ 詳細画面から解除すると、件数が0に戻り文言も「マイリストに保存」に戻ります'
-      : `❌ 詳細画面からの解除が反映されません（count=${countAfterRemove}, 文言="${detailFavBtn.textContent.trim()}"）`
+      ? '✅ 詳細画面から解除すると、件数が0に戻りaria-labelも「マイリストに保存」に戻ります'
+      : `❌ 詳細画面からの解除が反映されません（count=${countAfterRemove}, aria-label="${detailFavBtn.getAttribute('aria-label')}"）`
   );
 
   const allOk = activeAfterFirstClick && countAfterFirstClick === '1' && detailShowsActive &&
@@ -1777,11 +1779,11 @@ async function checkSharedSpotBandBypass(html) {
   // 「一覧 ＞ その場所」の2項目のみになる（Minami決定：共有リンク・マイリスト
   // から開いたときは「一覧 ＞ その場所」から始める）。
   const breadcrumbItemCount = doc.querySelectorAll('#detail-breadcrumb [data-history-index], #detail-breadcrumb .breadcrumb-current').length;
-  const breadcrumbFresh = breadcrumbItemCount === 2;
+  const breadcrumbFresh = breadcrumbItemCount === 1; // 【66本目】今の場所の名前は足あとに出さない（「← 一覧」だけ）
   console.log(
     breadcrumbFresh
-      ? '✅ 共有リンクから開いた詳細の足あとは「一覧 ＞ その場所」の2項目のみでした'
-      : `❌ 共有リンクから開いた詳細の足あとの項目数が想定と異なります（実際 ${breadcrumbItemCount}件、期待2件）`
+      ? '✅ 共有リンクから開いた詳細の足あとは「← 一覧」の1項目のみでした'
+      : `❌ 共有リンクから開いた詳細の足あとの項目数が想定と異なります（実際 ${breadcrumbItemCount}件、期待1件）`
   );
 
   doc.querySelector('.breadcrumb-list-link').dispatchEvent(new window.Event('click', { bubbles: true }));

@@ -4773,6 +4773,8 @@ function fillDetail(st) {
     fillW: st.fillW && Math.round(st.fillW * 1000) / 1000, fillH: st.fillH && Math.round(st.fillH * 1000) / 1000,
     edgeGap: st.edgeGap && Math.round(st.edgeGap * 10) / 10, ctrlGap: st.ctrlGap, zoom: st.zoom && Math.round(st.zoom * 1000) / 1000,
     depOffsetPx: st.depOffsetPx && Math.round(st.depOffsetPx * 10) / 10,
+    centerOffsetPx: st.centerOffsetPx && Math.round(st.centerOffsetPx * 10) / 10,
+    edgeGaps: st.edgeGaps && Object.fromEntries(Object.entries(st.edgeGaps).map(([k, v]) => [k, Math.round(v * 10) / 10])),
   });
 }
 
@@ -4826,7 +4828,11 @@ async function measureCircleStateRaw(page, dim) {
       const fillW = (bb.right - bb.left) / (vis.right - vis.left);
       const fillH = (bb.bottom - bb.top) / (vis.bottom - vis.top);
       const edgeGap = Math.min(bb.left - vis.left, vis.right - bb.right, bb.top - vis.top, vis.bottom - bb.bottom);
-      return { fillW, fillH, edgeGap, ratio: Math.max(fillW, fillH), bbox: bb };
+      // 【66本目】edgeGaps＝外枠と見えている範囲の上下左右それぞれのすき間、centerOffsetPx＝外枠の真ん中と見えている範囲の
+      // 真ん中のずれ（3Dは円の見た目を真ん中に置く。2Dは円が丸いので出発駅のずれと同じ）。
+      const edgeGaps = { top: bb.top - vis.top, bottom: vis.bottom - bb.bottom, left: bb.left - vis.left, right: vis.right - bb.right };
+      const centerOffsetPx = Math.hypot((bb.left + bb.right) / 2 - visCenter.x, (bb.top + bb.bottom) / 2 - visCenter.y);
+      return { fillW, fillH, edgeGap, ratio: Math.max(fillW, fillH), bbox: bb, edgeGaps, centerOffsetPx };
     };
     if (dim === '3d') {
       const tv = window.__terrainViewForDebug;
@@ -4842,7 +4848,7 @@ async function measureCircleStateRaw(page, dim) {
         ...fill(pts),
         zoom: map.getZoom(), center: { lat: c.lat, lng: c.lng }, pitch: map.getPitch(), bearing,
         radiusKm, dep: { lat: dep.stop_lat, lon: dep.stop_lon }, frame: { w: rect.width, h: rect.height },
-        vis, visShort, depOffsetPx: Math.hypot(pd.x - visCenter.x, pd.y - visCenter.y),
+        vis, visShort, depOffsetPx: Math.hypot(pd.x - visCenter.x, pd.y - visCenter.y), depPx: { x: pd.x, y: pd.y },
       };
     }
     const mv = window.__mapViewForDebug;
@@ -5138,11 +5144,11 @@ async function checkRefitOnlyWhenNeededAndWave(browser, baseUrl, savedPaths) {
         if (dim === '3d') await waitForTerrainCameraIdle(page);
         const after = await measureCircleState(page, dim);
         const budgetNow = Number(await page.evaluate(() => document.getElementById('budget-input').value));
-        plusCases.push({ budget: budgetNow, ok: isCircleFilled(after) && after.depOffsetPx <= 2, fill: fillDetail(after) });
+        plusCases.push({ budget: budgetNow, ok: isCircleFilled(after) && after.centerOffsetPx <= 2, fill: fillDetail(after) });
         if (budgetNow >= 2000) break;
       }
       record(
-        `${label} ＋を押すたびに、地図が円「いっぱい」に合わせ直され、出発駅が見えている範囲の真ん中に来る（64本目）`,
+        `${label} ＋を押すたびに、地図が円「いっぱい」に合わせ直され、円（3Dは見た目）が見えている範囲の真ん中に来る（64本目）`,
         plusCases.length > 0 && plusCases.every((c) => c.ok),
         JSON.stringify(plusCases)
       );
@@ -5658,8 +5664,10 @@ async function checkReturnToListMatchesSearchView(browser, baseUrl, savedPaths) 
         if (!tapped) { record(`${label} タップできるピンが見つかる（検証の前提）`, false); return; }
         const focused = await measureCircleState(page, '3d');
         record(
-          `${label} ピンをタップすると、その場所へ寄る`,
-          focused.zoom > baseline.zoom + 1,
+          `${label} ピンをタップすると、その場所へ寄る（寄ったときのズーム14まで）`,
+          // 【66本目】PCの3Dは検索した直後が横幅いっぱいになりズーム13.2前後になったため、「＋1以上」ではなく、寄ったときの
+          // ズーム（SPOT_FOCUS_ZOOM＝14）まで寄ったかで見る。
+          focused.zoom >= 13.95 && focused.zoom > baseline.zoom + 0.3,
           JSON.stringify({ spot: tapped.name, baselineZoom: baseline.zoom, focusedZoom: focused.zoom })
         );
         // 【64本目】PCはピンを押すと左のパネルに詳細が出る。スマホは場所のカードの「詳細を見る」から開く。
@@ -5695,13 +5703,16 @@ async function checkReturnToListMatchesSearchView(browser, baseUrl, savedPaths) 
       const back = await measureCircleState(page, '3d');
       const shift = await centerShiftPx(page, '3d', baseline.center);
       // 【59本目】スマホでは詳細を開くと下の一覧が大になり、一覧に戻ったあとも大のまま（見えている範囲が狭い）。そのときは
-      // 「検索した直後と同じ決まり」（見えている範囲いっぱい・出発駅が真ん中。64・65本目）で合っているかを見る。
+      // 「検索した直後と同じ決まり」（見えている範囲いっぱい・円（3Dは見た目）が真ん中。64・65本目）で合っているかを見る。
       const sameArea = Math.abs(back.visShort - baseline.visShort) < 1;
       record(
         `${label} 「一覧」で戻ると、検索した直後と同じ中心・ズーム・傾きに戻る（見えている範囲が変わったときは、同じ決まりで合わせ直す）`,
-        (sameArea ? Math.abs(back.zoom - baseline.zoom) < 0.05 && shift < 3 : back.depOffsetPx <= 3 && isCircleFilled(back))
+        // 【66本目】3Dのカメラの中心は円の見た目を真ん中に置く位置で、地形の高さ（寄ったときに場所の標高にそろえた中心の
+        // 高さ）によって同じ見た目でも中心の地面の位置が10px前後ずれることがある。そのときは同じ決まり（いっぱい・円の見た目が
+        // 真ん中）に合っていれば戻ったとみなす。
+        (sameArea ? Math.abs(back.zoom - baseline.zoom) < 0.05 && (shift < 3 || (back.centerOffsetPx <= 3 && isCircleFilled(back))) : back.centerOffsetPx <= 3 && isCircleFilled(back))
           && Math.abs(back.pitch - baseline.pitch) < 0.5 && Math.abs(back.bearing - baseline.bearing) < 0.5,
-        JSON.stringify({ sameArea, baselineZoom: baseline.zoom, backZoom: back.zoom, centerShiftPx: +shift.toFixed(2), backRatio: +back.ratio.toFixed(3), backDepOffsetPx: +back.depOffsetPx.toFixed(1), baselinePitch: baseline.pitch, backPitch: back.pitch })
+        JSON.stringify({ sameArea, baselineZoom: baseline.zoom, backZoom: back.zoom, centerShiftPx: +shift.toFixed(2), backRatio: +back.ratio.toFixed(3), backCenterOffsetPx: +back.centerOffsetPx.toFixed(1), backEdgeGap: +back.edgeGap.toFixed(1), backDepOffsetPx: +back.depOffsetPx.toFixed(1), baselinePitch: baseline.pitch, backPitch: back.pitch })
       );
       const box = await page.locator('#map-area').boundingBox();
       if (box) {
@@ -8535,9 +8546,9 @@ async function checkRound57(browser, baseUrl, savedPaths) {
         }
         await page.waitForTimeout(1200);
         const st = await measureCircleState(page, dim);
-        const desc = (s) => JSON.stringify({ ratio: +s.ratio.toFixed(3), visShort: Math.round(s.visShort), depOffsetPx: +s.depOffsetPx.toFixed(1), vis: s.vis });
-        console.log(`  ${label} 検索した直後：円の直径÷見えている範囲の短辺=${st.ratio.toFixed(3)}（短辺${Math.round(st.visShort)}px）、出発駅と見えている範囲の真ん中のずれ=${st.depOffsetPx.toFixed(1)}px`);
-        record(`${label} 検索した直後：出発駅が見えている範囲（重ねた入れ物を除く）の真ん中にある（3px以内）`, st.depOffsetPx <= 3, desc(st));
+        const desc = (s) => JSON.stringify({ ratio: +s.ratio.toFixed(3), visShort: Math.round(s.visShort), centerOffsetPx: +s.centerOffsetPx.toFixed(1), depOffsetPx: +s.depOffsetPx.toFixed(1), vis: s.vis });
+        console.log(`  ${label} 検索した直後：円の直径÷見えている範囲の短辺=${st.ratio.toFixed(3)}（短辺${Math.round(st.visShort)}px）、円（3Dは見た目）の真ん中のずれ=${st.centerOffsetPx.toFixed(1)}px`);
+        record(`${label} 検索した直後：円（3Dは見た目）が見えている範囲（重ねた入れ物を除く）の真ん中にある（3px以内）`, st.centerOffsetPx <= 3, desc(st));
         record(`${label} 検索した直後：円が見えている範囲いっぱい（64本目）`, isCircleFilled(st), `${desc(st)} ${fillDetail(st)}`);
         await waitForBaseMapLoaded(page, dim);
         await shot(page, `round57-result-${dim}-${vLabel}.png`);
@@ -8551,8 +8562,8 @@ async function checkRound57(browser, baseUrl, savedPaths) {
         await page.waitForTimeout(2200);
         if (dim === '3d') await waitForTerrainCameraIdle(page);
         const st2 = await measureCircleState(page, dim);
-        record(`${label} 最初の見え方に戻るボタンのあと：出発駅が見えている範囲の真ん中（3px以内）、円は検索した直後と同じ大きさ（差0.02以内）`,
-          st2.depOffsetPx <= 3 && Math.abs(st2.ratio - st.ratio) <= 0.02, desc(st2));
+        record(`${label} 最初の見え方に戻るボタンのあと：円（3Dは見た目）が見えている範囲の真ん中（3px以内）、円は検索した直後と同じ大きさ（差0.02以内）`,
+          st2.centerOffsetPx <= 3 && Math.abs(st2.ratio - st.ratio) <= 0.02, desc(st2));
         record(`${label} コンソールにエラーが出ない`, errors.length === 0, errors.join(' | '));
       } catch (e) {
         record(`${label} 検証中にクラッシュしない`, false, e.message);
@@ -8638,7 +8649,7 @@ async function checkRound57(browser, baseUrl, savedPaths) {
  * 一番小さい幅（760×720）の、2Dと3D。富山駅前・¥800。
  * 1. パネル・「◀」・バー・「☰ 一覧を開く」が、地図の上の部品（ズーム・方位磁針・戻るボタン・ハンドル）・出典と重ならない。
  * 2. 「◀」と「☰ 一覧を開く」で開け閉めできる（clickElementChecked）。
- * 3. 開いても閉じても、出発駅が見えている範囲の真ん中（3px以内）、円が見えている範囲いっぱい（64本目）。
+ * 3. 開いても閉じても、円（3Dは見た目）が見えている範囲の真ん中（3px以内）、円が見えている範囲いっぱい（64本目）。
  *    【65本目】閉じているとき、円の縁はバー・「☰ 一覧を開く」の下を通ってよい（以前は3px以上離すことを見ていた）。
  * 4. 開いても閉じても「データ出典・免責」が見えていて、隠れていない。
  * 5. パネルの中の一覧がスクロールでき、上の部分（出発〜見出し）は動かない（開いているとき）。
@@ -8703,7 +8714,7 @@ async function checkRound58(browser, baseUrl, savedPaths) {
         return { ok: b.width > 0 && inView && !!t && el.contains(t), top: t && (t.id || t.className) };
       }, sel);
       // 円の縁（72点）が、閉じたときのバー・「☰ 一覧を開く」からどれだけ離れているか（px、負なら重なる）
-      const desc = (s) => JSON.stringify({ ratio: +s.ratio.toFixed(3), visShort: Math.round(s.visShort), depOffsetPx: +s.depOffsetPx.toFixed(1) });
+      const desc = (s) => JSON.stringify({ ratio: +s.ratio.toFixed(3), visShort: Math.round(s.visShort), centerOffsetPx: +s.centerOffsetPx.toFixed(1), depOffsetPx: +s.depOffsetPx.toFixed(1) });
       try {
         await page.goto(baseUrl, { waitUntil: 'load' });
         await page.waitForSelector('#departure-input');
@@ -8737,8 +8748,8 @@ async function checkRound58(browser, baseUrl, savedPaths) {
         const ov1 = await overlaps(['.results-panel', '#results-list-close-btn']);
         record(`${label} 開いているとき：パネル・「◀」が地図の上の部品・出典と重ならない`, ov1.length === 0, ov1.join(', '));
         const st1 = await measureCircleState(page, dim);
-        console.log(`  ${label} 開いているとき：円の直径÷見えている範囲の短辺=${st1.ratio.toFixed(3)}（短辺${Math.round(st1.visShort)}px）、出発駅と真ん中のずれ=${st1.depOffsetPx.toFixed(1)}px`);
-        record(`${label} 開いているとき：出発駅が見えている範囲の真ん中（3px以内）、円は見えている範囲いっぱい（64本目）`, st1.depOffsetPx <= 3 && isCircleFilled(st1), `${desc(st1)} ${fillDetail(st1)}`);
+        console.log(`  ${label} 開いているとき：円の直径÷見えている範囲の短辺=${st1.ratio.toFixed(3)}（短辺${Math.round(st1.visShort)}px）、円（3Dは見た目）の真ん中のずれ=${st1.centerOffsetPx.toFixed(1)}px`);
+        record(`${label} 開いているとき：円（3Dは見た目）が見えている範囲の真ん中（3px以内）、円は見えている範囲いっぱい（64本目）`, st1.centerOffsetPx <= 3 && isCircleFilled(st1), `${desc(st1)} ${fillDetail(st1)}`);
         const dl1 = await shown('.results-sheet > .data-line .data-line-btn');
         record(`${label} 開いているとき：「データ出典・免責」が見えていて隠れていない`, dl1.ok, JSON.stringify(dl1));
         // 一覧のスクロール
@@ -8777,8 +8788,8 @@ async function checkRound58(browser, baseUrl, savedPaths) {
         const ov2 = await overlaps(['.results-panel', '#results-list-open-btn']);
         record(`${label} 閉じたとき：バー・「☰ 一覧を開く」が地図の上の部品・出典と重ならない`, ov2.length === 0, ov2.join(', '));
         const st2 = await measureCircleState(page, dim);
-        console.log(`  ${label} 閉じたとき：円の直径÷見えている範囲の短辺=${st2.ratio.toFixed(3)}（短辺${Math.round(st2.visShort)}px）、出発駅と真ん中のずれ=${st2.depOffsetPx.toFixed(1)}px`);
-        record(`${label} 閉じたとき：出発駅が地図全体の真ん中（3px以内）、円は見えている範囲いっぱい（64本目）`, st2.depOffsetPx <= 3 && isCircleFilled(st2), `${desc(st2)} ${fillDetail(st2)}`);
+        console.log(`  ${label} 閉じたとき：円の直径÷見えている範囲の短辺=${st2.ratio.toFixed(3)}（短辺${Math.round(st2.visShort)}px）、円（3Dは見た目）の真ん中のずれ=${st2.centerOffsetPx.toFixed(1)}px`);
+        record(`${label} 閉じたとき：円（3Dは見た目）が地図全体の真ん中（3px以内）、円は見えている範囲いっぱい（64本目）`, st2.centerOffsetPx <= 3 && isCircleFilled(st2), `${desc(st2)} ${fillDetail(st2)}`);
         const dl2 = await shown('#map-data-line .data-line-btn');
         record(`${label} 閉じたとき：「データ出典・免責」が地図の右下に見えていて隠れていない`, dl2.ok, JSON.stringify(dl2));
         await shot(`round58-${vLabel}-${dim}-closed.png`);
@@ -8804,7 +8815,7 @@ async function checkRound58(browser, baseUrl, savedPaths) {
         const s5 = await page.evaluate(() => ({ closed: document.getElementById('app-layout').classList.contains('results-list-closed'), bar: document.querySelector('.results-panel').offsetParent !== null }));
         record(`${label} 検索し直すと、閉じた状態のまま戻る`, s5.closed && s5.bar, JSON.stringify(s5));
         const st5 = await measureCircleState(page, dim);
-        record(`${label} 閉じたまま検索し直した直後も、出発駅が地図全体の真ん中（3px以内）`, st5.depOffsetPx <= 3, desc(st5));
+        record(`${label} 閉じたまま検索し直した直後も、円（3Dは見た目）が地図全体の真ん中（3px以内）`, st5.centerOffsetPx <= 3, desc(st5));
 
         // ---- 開く ----
         await clickElementChecked(page, 'results-list-open-btn', `${label} 「☰ 一覧を開く」`);
@@ -8813,8 +8824,8 @@ async function checkRound58(browser, baseUrl, savedPaths) {
           && document.getElementById('results-list').offsetParent !== null);
         record(`${label} 「☰ 一覧を開く」を押すとパネルが開く`, reopened);
         const st6 = await measureCircleState(page, dim);
-        record(`${label} 開き直したとき：出発駅が見えている範囲の真ん中（3px以内）、円は検索した直後と同じ（差0.02以内）`,
-          st6.depOffsetPx <= 3 && Math.abs(st6.ratio - st1.ratio) <= 0.02, desc(st6));
+        record(`${label} 開き直したとき：円（3Dは見た目）が見えている範囲の真ん中（3px以内）、円は検索した直後と同じ（差0.02以内）`,
+          st6.centerOffsetPx <= 3 && Math.abs(st6.ratio - st1.ratio) <= 0.02, desc(st6));
 
         // ---- （3D）閉じた状態で詳細から一覧に戻ると開く ----
         if (dim === '3d') {
@@ -8844,7 +8855,7 @@ async function checkRound58(browser, baseUrl, savedPaths) {
  * 富山駅前・¥800。
  * 1. 上の＋−カード・下の一覧・右下の部品の列・出典が重ならない（ピンを押したときの名前の帯も）。
  * 2. つまみで小⇔大を切り替えられる（押す：clickElementChecked、上下にドラッグ）。
- * 3. 小でも大でも、出発駅が見えている範囲の真ん中（3px以内）、円は見えている範囲いっぱい（64本目。65本目から
+ * 3. 小でも大でも、円（3Dは見た目）が見えている範囲の真ん中（3px以内）、円は見えている範囲いっぱい（64本目。65本目から
  *    部品は避けない）。
  * 4. 小でも大でも「データ出典・免責」が見えていて隠れていない（小は地図の右下、大は一覧の一番下）。
  * 5. ＋−で一覧の見出し・カード・「◯か所」が一緒に変わる。「¥◯で探す」が無い（PC 1920×1080でも確かめる）。
@@ -8857,7 +8868,7 @@ async function checkRound58(browser, baseUrl, savedPaths) {
 async function checkRound59(browser, baseUrl, savedPaths) {
   console.log('\n=== 59本目：スマホの結果画面（上の＋−カードと、下から引き出す一覧） ===');
   const vps = { std: { width: 390, height: 844 }, se: { width: 375, height: 667 }, own: { width: 400, height: 464 } };
-  const desc = (s) => JSON.stringify({ ratio: +s.ratio.toFixed(3), visShort: Math.round(s.visShort), depOffsetPx: +s.depOffsetPx.toFixed(1), zoom: +s.zoom.toFixed(2) });
+  const desc = (s) => JSON.stringify({ ratio: +s.ratio.toFixed(3), visShort: Math.round(s.visShort), centerOffsetPx: +s.centerOffsetPx.toFixed(1), depOffsetPx: +s.depOffsetPx.toFixed(1), zoom: +s.zoom.toFixed(2) });
   const listState = (page) => page.evaluate(() => ({
     heading: document.getElementById('results-band-heading').textContent,
     cards: [...document.querySelectorAll('.spot-card')].map((c) => c.getAttribute('data-spot-id')).join(','),
@@ -8952,8 +8963,8 @@ async function checkRound59(browser, baseUrl, savedPaths) {
         const ov1 = await overlapsOf(page, dim);
         record(`${label} 小：上のカード・下の一覧・部品・出典・「データ出典・免責」が重ならず、部品は地図の中`, ov1.overlaps.length === 0 && ov1.outside.length === 0, JSON.stringify(ov1));
         const st1 = await measureCircleState(page, dim);
-        console.log(`  ${label} 小：円の直径÷見えている範囲の短辺=${st1.ratio.toFixed(3)}（短辺${Math.round(st1.visShort)}px）、出発駅と真ん中のずれ=${st1.depOffsetPx.toFixed(1)}px`);
-        record(`${label} 小：出発駅が見えている範囲の真ん中（3px以内）、円は見えている範囲いっぱい（64本目）`, st1.depOffsetPx <= 3 && isCircleFilled(st1), `${desc(st1)} ${fillDetail(st1)}`);
+        console.log(`  ${label} 小：円の直径÷見えている範囲の短辺=${st1.ratio.toFixed(3)}（短辺${Math.round(st1.visShort)}px）、円（3Dは見た目）の真ん中のずれ=${st1.centerOffsetPx.toFixed(1)}px`);
+        record(`${label} 小：円（3Dは見た目）が見えている範囲の真ん中（3px以内）、円は見えている範囲いっぱい（64本目）`, st1.centerOffsetPx <= 3 && isCircleFilled(st1), `${desc(st1)} ${fillDetail(st1)}`);
         const dl1 = await shown(page, '#map-data-line .data-line-btn');
         record(`${label} 小：「データ出典・免責」が地図の右下に見えていて隠れていない`, dl1.ok, JSON.stringify(dl1));
         await shot(`round59-${vLabel}-${dim}-small.png`);
@@ -8979,8 +8990,8 @@ async function checkRound59(browser, baseUrl, savedPaths) {
         const ov2 = await overlapsOf(page, dim);
         record(`${label} 大：上のカード・下の一覧・部品・出典が重ならず、部品は地図の中`, ov2.overlaps.length === 0 && ov2.outside.length === 0, JSON.stringify(ov2));
         const st2 = await measureCircleState(page, dim);
-        console.log(`  ${label} 大：円の直径÷見えている範囲の短辺=${st2.ratio.toFixed(3)}（短辺${Math.round(st2.visShort)}px）、出発駅と真ん中のずれ=${st2.depOffsetPx.toFixed(1)}px`);
-        record(`${label} 大：出発駅が見えている範囲の真ん中（3px以内）、円は見えている範囲いっぱい（64本目）`, st2.depOffsetPx <= 3 && isCircleFilled(st2), `${desc(st2)} ${fillDetail(st2)}`);
+        console.log(`  ${label} 大：円の直径÷見えている範囲の短辺=${st2.ratio.toFixed(3)}（短辺${Math.round(st2.visShort)}px）、円（3Dは見た目）の真ん中のずれ=${st2.centerOffsetPx.toFixed(1)}px`);
+        record(`${label} 大：円（3Dは見た目）が見えている範囲の真ん中（3px以内）、円は見えている範囲いっぱい（64本目）`, st2.centerOffsetPx <= 3 && isCircleFilled(st2), `${desc(st2)} ${fillDetail(st2)}`);
         const large = await page.evaluate(() => {
           const t = (sel) => document.querySelector(sel)?.textContent.replace(/\s+/g, ' ').trim();
           const vis = (sel) => { const el = document.querySelector(sel); return !!el && el.offsetParent !== null; };
@@ -9000,7 +9011,7 @@ async function checkRound59(browser, baseUrl, savedPaths) {
         await settle();
         record(`${label} つまみを下へドラッグすると小に戻る`, !(await isLarge()));
         const st3 = await measureCircleState(page, dim);
-        record(`${label} 小に戻したとき（地図を動かしていない）：出発駅が見えている範囲の真ん中、円は小のときと同じ（差0.02以内）`, st3.depOffsetPx <= 3 && Math.abs(st3.ratio - st1.ratio) <= 0.02, desc(st3));
+        record(`${label} 小に戻したとき（地図を動かしていない）：円（3Dは見た目）が見えている範囲の真ん中、円は小のときと同じ（差0.02以内）`, st3.centerOffsetPx <= 3 && Math.abs(st3.ratio - st1.ratio) <= 0.02, desc(st3));
 
         // ---- 地図を動かしてから大（上へドラッグ）：Aの決まり ----
         await page.evaluate((dim) => {
@@ -9459,7 +9470,7 @@ async function checkBreadcrumbTrail(browser, baseUrl, savedPaths) {
     const names = [await page.locator('#detail-content h2').textContent()];
 
     let itemCount = await page.locator(breadcrumbItemSelector).count();
-    record(`[${label}] 一覧から直接開いたときは「一覧 ＞ 今の場所」の2項目だけ`, itemCount === 2, `実際 ${itemCount}件`);
+    record(`[${label}] 一覧から直接開いたときは「← 一覧」の1項目だけ（66本目：今の場所の名前は出さない）`, itemCount === 1, `実際 ${itemCount}件`);
 
     // 「この先へ」を2回たどる（計3か所訪問）
     for (let step = 0; step < 2; step++) {
@@ -9473,7 +9484,7 @@ async function checkBreadcrumbTrail(browser, baseUrl, savedPaths) {
     record(`[${label}] 「この先へ」を2回たどり3か所を訪問できた`, names.length === 3, `${names.length}か所: ${names.join(' → ')}`);
 
     itemCount = await page.locator(breadcrumbItemSelector).count();
-    record(`[${label}] 3か所たどると足あとが4つ並ぶ（一覧＋3）`, itemCount === 4, `実際 ${itemCount}件`);
+    record(`[${label}] 3か所たどると足あとが3つ並ぶ（一覧＋前の2か所。66本目：今の場所は出さない）`, itemCount === 3, `実際 ${itemCount}件`);
 
     if (label === 'pc') {
       const bcBox = await page.locator('#detail-breadcrumb').boundingBox();
@@ -9512,7 +9523,7 @@ async function checkBreadcrumbTrail(browser, baseUrl, savedPaths) {
     record(`[${label}] 2つ前に戻ると、その場所の詳細が表示される`, headingAfterJump === names[0], `期待="${names[0]}" 実際="${headingAfterJump}"`);
 
     itemCount = await page.locator(breadcrumbItemSelector).count();
-    record(`[${label}] 2つ前に戻ると、後ろの足あとが消える（残り2つ：一覧＋今の場所）`, itemCount === 2, `実際 ${itemCount}件`);
+    record(`[${label}] 2つ前に戻ると、後ろの足あとが消える（残り「← 一覧」の1つ）`, itemCount === 1, `実際 ${itemCount}件`);
 
     // 戻ったときは、その場所の「この先へ」の位置を見せている。
     // 【2026-10-11修正】PC（縦1080px）は詳細画面の内容が丸ごと収まることがあり、
@@ -9568,7 +9579,7 @@ async function checkBreadcrumbTrail(browser, baseUrl, savedPaths) {
         `候補="${candidateHeading}" → 戻った後="${backHeading}"（元="${originalHeading}"）`
       );
       const itemCount = await page.locator(breadcrumbItemSelector).count();
-      record('[sp] popstateで戻った後の足あとは「一覧＋今の場所」の2項目', itemCount === 2, `実際 ${itemCount}件`);
+      record('[sp] popstateで戻った後の足あとは「← 一覧」の1項目', itemCount === 1, `実際 ${itemCount}件`);
     }
     await context.close();
   }
@@ -10505,9 +10516,9 @@ async function checkRound64Motion(browser, baseUrl, savedPaths) {
         await settle(page, dim);
         await waitForBaseMapLoaded(page, dim);
         const st = await measureCircleState(page, dim);
-        fitRows.push({ size: `${viewport.width}×${viewport.height}`, dim, fillW: Math.round(st.fillW * 1000) / 1000, fillH: Math.round(st.fillH * 1000) / 1000, edgeGap: Math.round(st.edgeGap * 10) / 10, ctrlGap: st.ctrlGap, depOffsetPx: Math.round(st.depOffsetPx * 10) / 10, zoom: Math.round(st.zoom * 100) / 100 });
+        fitRows.push({ size: `${viewport.width}×${viewport.height}`, dim, fillW: Math.round(st.fillW * 1000) / 1000, fillH: Math.round(st.fillH * 1000) / 1000, edgeGap: Math.round(st.edgeGap * 10) / 10, ctrlGap: st.ctrlGap, centerOffsetPx: Math.round(st.centerOffsetPx * 10) / 10, depOffsetPx: Math.round(st.depOffsetPx * 10) / 10, gapTop: Math.round(st.edgeGaps.top), gapBottom: Math.round(st.edgeGaps.bottom), zoom: Math.round(st.zoom * 100) / 100 });
         record(`${L} 検索した直後、円が見えている範囲いっぱい（端から8px前後。部品は避けない、65本目）`, isCircleFilled(st), fillDetail(st));
-        record(`${L} 検索した直後、出発駅が見えている範囲の真ん中（2px以内）`, st.depOffsetPx <= 2, `ずれ=${st.depOffsetPx}px`);
+        record(`${L} 検索した直後、円（3Dは見た目）が見えている範囲の真ん中（2px以内）`, st.centerOffsetPx <= 2, fillDetail(st));
         record(`${L} 検索した直後、円が見えている範囲からはみ出していない`, st.edgeGap >= 0 || st.zoom <= 8.55, `edgeGap=${st.edgeGap}`);
         const shot = path.join(screenshotDir, `round64-fit-${vLabel}-${dim}.png`);
         await page.screenshot({ path: shot });
@@ -10561,7 +10572,7 @@ async function checkRound64Motion(browser, baseUrl, savedPaths) {
         await clickElementChecked(page, incId, `${L} 地図を動かしたあと：＋`);
         await settle(page, dim);
         const afterMovedPlus = await measureCircleState(page, dim);
-        record(`${L} 利用者が地図を動かしたあとでも、＋を押すと「いっぱい」に合わせ、出発駅が真ん中に戻る`, isCircleFilled(afterMovedPlus) && afterMovedPlus.depOffsetPx <= 2, fillDetail(afterMovedPlus));
+        record(`${L} 利用者が地図を動かしたあとでも、＋を押すと「いっぱい」に合わせ、円（3Dは見た目）が真ん中に戻る`, isCircleFilled(afterMovedPlus) && afterMovedPlus.centerOffsetPx <= 2, fillDetail(afterMovedPlus));
 
         // 続けて押す（＋を3回、80msおき）：波と地図合わせは重ならず、最後に「いっぱい」
         const burst = await page.evaluate(({ dim, incId }) => new Promise((resolve) => {
@@ -10604,7 +10615,7 @@ async function checkRound64Motion(browser, baseUrl, savedPaths) {
         await page.waitForTimeout(TEST_CIRCLE_FIT_DURATION_MS + 400);
         await settle(page, dim);
         const afterToggle = await measureCircleState(page, dim);
-        record(`${L} ${vLabel === 'pc' ? '一覧パネルを閉じた' : '下の一覧を大にした'}あとも、円が見えている範囲いっぱい`, isCircleFilled(afterToggle) && afterToggle.depOffsetPx <= 2, fillDetail(afterToggle));
+        record(`${L} ${vLabel === 'pc' ? '一覧パネルを閉じた' : '下の一覧を大にした'}あとも、円が見えている範囲いっぱい`, isCircleFilled(afterToggle) && afterToggle.centerOffsetPx <= 2, fillDetail(afterToggle));
         if (pageErrors.length > 0) record(`${L} ページエラーが出ない`, false, pageErrors.join('; '));
       } catch (e) {
         record(`${L} 検証中にクラッシュしない`, false, e.message);
@@ -10758,6 +10769,303 @@ async function checkRound64(browser, baseUrl, savedPaths) {
   }
 }
 
+/**
+ * 【66本目】Minamiの確認を受けた直し。
+ * 1. 3Dの円の見た目（楕円の上下左右の端）を見えている範囲の真ん中に置く（上下のすき間がそろう）。出発駅は円の中・
+ *    見えている範囲の中にある。富山駅前・¥1,200で、初めて3Dにしたとき・3Dのまま検索し直した直後・戻るボタンのあと。
+ * 2. 詳細は、スクロールしなくても名前・写真の一部・紹介文の1行以上（PC 1920×1080とスマホ390×844は2行以上）が見える。
+ *    足あとは1行の「← 一覧」（見出し「見てきた場所」・今の名前は出さない）。写真を押すと画面いっぱいに大きく見られ、×で閉じる。
+ * 3. 低い画面（411×473・400×464）でも、ピンを押すと場所のカードが出る。詳細を出してから下の一覧を小に戻したあとも出る。
+ * 4. 「出発地を変える」で開いたカードの入力欄は44px以上で、文字が切れず、線が重ならない。開いている間は色の説明を出さない。
+ */
+async function checkRound66(browser, baseUrl, savedPaths) {
+  console.log('\n=== 66本目：円の位置・詳細の配置・スマホの不具合 ===');
+  const open = async (page) => {
+    await page.goto(baseUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#departure-input');
+    await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+  };
+  const newPage = async (viewport) => {
+    const context = await browser.newContext({ viewport });
+    await context.addInitScript(() => { try { localStorage.setItem('reverse-travel-rotate-hint-seen', 'true'); } catch { /* 無視 */ } });
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+    await open(page);
+    return { context, page, pageErrors };
+  };
+  const to3d = async (page) => {
+    await clickDimensionToggle(page);
+    const ok = await page.waitForFunction(() => document.getElementById('map-area').classList.contains('mode-3d'), { timeout: 30000 }).then(() => true).catch(() => false);
+    if (ok) {
+      await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+      await waitForTerrainCameraIdle(page);
+    }
+    return ok;
+  };
+  const centerDetail = (st) => JSON.stringify({ gaps: Object.fromEntries(Object.entries(st.edgeGaps).map(([k, v]) => [k, Math.round(v * 10) / 10])), centerOffsetPx: Math.round(st.centerOffsetPx * 10) / 10, edgeGap: Math.round(st.edgeGap * 10) / 10, zoom: Math.round(st.zoom * 100) / 100 });
+  const depInside = (st) => {
+    const d = st.depPx;
+    return !!d && d.x > st.vis.left && d.x < st.vis.right && d.y > st.vis.top && d.y < st.vis.bottom
+      && d.x > st.bbox.left && d.x < st.bbox.right && d.y > st.bbox.top && d.y < st.bbox.bottom;
+  };
+
+  // --- 1. 3Dの円の見た目を真ん中に ---
+  const centerRows = [];
+  for (const [vLabel, viewport] of [['pc', VIEWPORTS.pc], ['std', MOBILE_FORM_COLLAPSE_VIEWPORTS.std], ['se', MOBILE_FORM_COLLAPSE_VIEWPORTS.se], ['own', MOBILE_FORM_COLLAPSE_VIEWPORTS.own]]) {
+    const { context, page, pageErrors } = await newPage(viewport);
+    const L = `[66/${vLabel}/3d]`;
+    try {
+      await searchAt(page, '富山駅前', 1200);
+      await waitForAllSpotsPrefetchSettled(page);
+      if (!(await to3d(page))) { record(`${L} 3D化（検証の前提）`, false); continue; }
+      await waitForCircleSettled(page, '3d');
+      await waitForTerrainCameraIdle(page);
+      await page.waitForTimeout(300);
+      const first = await measureCircleState(page, '3d');
+      record(`${L} 初めて3Dにしたとき、円の見た目の上下のすき間がそろう（差4px以内）`, Math.abs(first.edgeGaps.top - first.edgeGaps.bottom) <= 4, centerDetail(first));
+      // 3Dのまま検索し直した直後
+      const prefetchBefore = await page.evaluate(() => window.__maxBudgetPrefetchAppliedCount || 0);
+      await searchKeepingMapVisible(page, '富山駅前', 1200, vLabel !== 'pc');
+      await page.waitForFunction((n) => (window.__maxBudgetPrefetchAppliedCount || 0) > n, prefetchBefore, { timeout: 20000 }).catch(() => {});
+      await waitForCircleSettled(page, '3d');
+      await waitForTerrainCameraIdle(page);
+      await waitForBaseMapLoaded(page, '3d');
+      await page.waitForTimeout(300);
+      const st = await measureCircleState(page, '3d');
+      centerRows.push({ size: `${viewport.width}×${viewport.height}`, gapTop: Math.round(st.edgeGaps.top), gapBottom: Math.round(st.edgeGaps.bottom), gapLeft: Math.round(st.edgeGaps.left), gapRight: Math.round(st.edgeGaps.right), fillW: Math.round(st.fillW * 1000) / 1000, fillH: Math.round(st.fillH * 1000) / 1000, depOffsetPx: Math.round(st.depOffsetPx) });
+      record(`${L} 検索した直後、円の見た目の上下のすき間がそろう（差4px以内）`, Math.abs(st.edgeGaps.top - st.edgeGaps.bottom) <= 4, centerDetail(st));
+      record(`${L} 検索した直後、円の見た目の左右のすき間がそろう（差4px以内）`, Math.abs(st.edgeGaps.left - st.edgeGaps.right) <= 4, centerDetail(st));
+      record(`${L} 検索した直後、円が見えている範囲いっぱい（縦か横が端から8px前後）`, isCircleFilled(st), fillDetail(st));
+      record(`${L} 検索した直後、出発駅は円の中・見えている範囲の中にある`, depInside(st), JSON.stringify({ depPx: st.depPx, bbox: st.bbox, vis: st.vis }));
+      const shot = path.join(screenshotDir, `round66-circle-${vLabel}-3d.png`);
+      await page.screenshot({ path: shot });
+      savedPaths.push(shot);
+      // 最初の見え方に戻るボタンでも同じ置き方
+      await page.evaluate(() => window.__terrainMapForDebug.easeTo({ zoom: window.__terrainMapForDebug.getZoom() + 0.6, duration: 0 }));
+      await page.waitForTimeout(200);
+      await clickElementChecked(page, 'map-reset-view-btn', `${L} 最初の見え方に戻るボタン`);
+      await page.waitForTimeout(1700);
+      await waitForTerrainCameraIdle(page);
+      await page.waitForTimeout(300);
+      const back = await measureCircleState(page, '3d');
+      record(`${L} 最初の見え方に戻るボタンのあとも、円の見た目が真ん中（上下のすき間の差4px以内）・いっぱい`, Math.abs(back.edgeGaps.top - back.edgeGaps.bottom) <= 4 && isCircleFilled(back), centerDetail(back));
+      if (pageErrors.length > 0) record(`${L} ページエラーが発生していない`, false, pageErrors.join('; '));
+    } finally {
+      await context.close();
+    }
+  }
+  console.log('  3Dの円の上下左右のすき間（富山駅前・¥1,200・検索した直後）:');
+  centerRows.forEach((r) => console.log(`    ${JSON.stringify(r)}`));
+
+  // --- 2. 詳細の配置 ---
+  const detailSizes = [
+    ['pc1920', VIEWPORTS.pc, 2], ['pc1366', { width: 1366, height: 768 }, 1], ['pc760', { width: 760, height: 720 }, 1],
+    ['std', MOBILE_FORM_COLLAPSE_VIEWPORTS.std, 2], ['se', MOBILE_FORM_COLLAPSE_VIEWPORTS.se, 1], ['own', MOBILE_FORM_COLLAPSE_VIEWPORTS.own, 1],
+  ];
+  for (const [vLabel, viewport, minLines] of detailSizes) {
+    const { context, page, pageErrors } = await newPage(viewport);
+    const L = `[66/detail/${vLabel}]`;
+    try {
+      await searchAt(page, '富山駅前', 1200);
+      await waitForAllSpotsPrefetchSettled(page);
+      await showLargeListOnMobile(page);
+      await page.evaluate(() => document.querySelector('.spot-card')?.click());
+      await page.waitForFunction(() => document.getElementById('app-layout').getAttribute('data-view') === 'detail', { timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(1200);
+      const m = await page.evaluate(() => {
+        const dc = document.getElementById('detail-container');
+        const cr = dc.getBoundingClientRect();
+        const visBottom = Math.min(cr.bottom, window.innerHeight);
+        const visTop = Math.max(cr.top, 0);
+        const r = (q) => { const el = document.querySelector(q); if (!el) return null; const b = el.getBoundingClientRect(); return b.width > 0 ? { top: b.top, bottom: b.bottom, left: b.left, right: b.right, width: b.width, height: b.height } : null; };
+        const desc = document.querySelector('.detail-description');
+        const lh = desc ? parseFloat(getComputedStyle(desc).lineHeight) : 0;
+        const d = r('.detail-description');
+        const descLines = d && lh > 0 ? Math.floor((Math.min(d.bottom, visBottom) - Math.max(d.top, visTop)) / lh + 0.05) : 0;
+        const title = r('.detail-title');
+        const img = r('.detail-image');
+        const crumb = document.getElementById('detail-breadcrumb');
+        const at = (x, y) => document.elementFromPoint(x, y);
+        return {
+          scrollTop: dc.scrollTop, visTop, visBottom,
+          title, titleVisible: !!title && title.top >= visTop - 0.5 && title.bottom <= visBottom + 0.5 && dc.contains(at(title.left + 4, (title.top + title.bottom) / 2)),
+          img, imgVisiblePx: img ? Math.min(img.bottom, visBottom) - Math.max(img.top, visTop) : 0,
+          descLines, lineHeight: lh,
+          meta: document.querySelector('.detail-meta')?.textContent ?? null,
+          crumbText: crumb?.innerText.replace(/\s+/g, ' ').trim(), crumbHeight: crumb?.getBoundingClientRect().height,
+          fav: r('.detail-favorite-btn'), share: r('.detail-share-btn'),
+        };
+      });
+      record(`${L} スクロールせずに名前が見える`, m.scrollTop === 0 && m.titleVisible, JSON.stringify({ scrollTop: m.scrollTop, title: m.title, visTop: m.visTop, visBottom: m.visBottom }));
+      record(`${L} スクロールせずに写真の一部以上が見える（20px以上）`, m.imgVisiblePx >= 20, `見えている高さ=${Math.round(m.imgVisiblePx)}px`);
+      record(`${L} スクロールせずに紹介文が${minLines}行以上見える`, m.descLines >= minLines, `見えている行数=${m.descLines}（行の高さ${m.lineHeight}px）`);
+      record(`${L} 名前の下に往復の金額・片道の時間・距離の1行がある`, /^往復¥[\d,]+・片道 約\d+分・駅から[\d.]+km$/.test(m.meta || ''), m.meta);
+      record(`${L} 足あとは1行の「← 一覧」だけ（見出し「見てきた場所」・今の名前は出さない）`, m.crumbText === '← 一覧' && m.crumbHeight <= 46, JSON.stringify({ crumbText: m.crumbText, crumbHeight: m.crumbHeight }));
+      record(`${L} マイリスト・共有は名前の行の右の小さなアイコンボタン（44px四方以上、名前と同じ行）`,
+        !!m.fav && !!m.share && !!m.title && isTouchTargetLargeEnough(m.fav) && isTouchTargetLargeEnough(m.share) && m.fav.left >= m.title.right - 0.5 && m.fav.top < m.title.bottom && !rectsOverlap(m.fav, m.share),
+        JSON.stringify({ fav: m.fav, share: m.share, title: m.title }));
+      if (vLabel === 'pc1920' || vLabel === 'std') {
+        const shot = path.join(screenshotDir, `round66-detail-${vLabel}.png`);
+        await page.screenshot({ path: shot });
+        savedPaths.push(shot);
+        console.log(`  保存: round66-detail-${vLabel}.png`);
+      }
+      // 写真を押すと画面いっぱいに大きく見られ、×で閉じる
+      if (m.img && (await page.locator('.detail-image-btn img').count()) > 0) {
+        await clickSelectorChecked(page, '.detail-image-btn', `${L} 詳細の写真`);
+        await page.waitForTimeout(400);
+        const viewer = await page.evaluate(() => {
+          const v = document.getElementById('photo-viewer');
+          if (!v || v.hidden) return null;
+          const b = v.getBoundingClientRect();
+          const img = v.querySelector('.photo-viewer-image');
+          const c = v.querySelector('.photo-viewer-close').getBoundingClientRect();
+          return { full: b.width >= window.innerWidth - 1 && b.height >= window.innerHeight - 1, src: !!img.getAttribute('src'), close: { width: c.width, height: c.height } };
+        });
+        record(`${L} 写真を押すと、画面いっぱいの拡大表示が出る（×は44px四方以上）`, !!viewer && viewer.full && viewer.src && isTouchTargetLargeEnough(viewer.close), JSON.stringify(viewer));
+        if (vLabel === 'std') {
+          const shot = path.join(screenshotDir, 'round66-photo-std.png');
+          await page.screenshot({ path: shot });
+          savedPaths.push(shot);
+        }
+        await clickSelectorChecked(page, '.photo-viewer-close', `${L} 拡大表示の×`);
+        await page.waitForTimeout(200);
+        const closed = await page.evaluate(() => document.getElementById('photo-viewer').hidden && document.getElementById('app-layout').getAttribute('data-view') === 'detail');
+        record(`${L} ×で拡大表示が閉じ、詳細に戻る`, closed);
+      }
+      if (pageErrors.length > 0) record(`${L} ページエラーが発生していない`, false, pageErrors.join('; '));
+    } finally {
+      await context.close();
+    }
+  }
+
+  // --- 3. 低い画面でピンを押すと場所のカード ---
+  const pickPin2d = (page) => page.evaluate(() => {
+    for (const el of document.querySelectorAll('#spots-map .map-pin-spot')) {
+      if (el.classList.contains('map-pin-selected')) continue;
+      const r = el.getBoundingClientRect();
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      const t = document.elementFromPoint(x, y);
+      if (t && (t === el || el.contains(t))) return { x, y };
+    }
+    return null;
+  });
+  const cardShown = (page) => page.evaluate(() => {
+    const c = document.getElementById('sheet-spot-card');
+    const sheet = document.querySelector('.results-sheet').getBoundingClientRect();
+    const b = c.getBoundingClientRect();
+    const name = c.querySelector('.sheet-spot-name')?.getBoundingClientRect();
+    const btn = c.querySelector('.sheet-spot-detail-btn')?.getBoundingClientRect();
+    const inSheet = (x) => !!x && x.height > 0 && x.top >= sheet.top - 0.5 && x.bottom <= sheet.bottom + 0.5 && x.bottom <= window.innerHeight + 0.5;
+    return { shown: !c.hidden && b.height > 0 && inSheet(name) && inSheet(btn), sheetH: Math.round(sheet.height), view: document.getElementById('app-layout').getAttribute('data-view') };
+  });
+  for (const [vLabel, viewport] of [['411x473', { width: 411, height: 473 }], ['own', MOBILE_FORM_COLLAPSE_VIEWPORTS.own]]) {
+    for (const dim of ['2d', '3d']) {
+      const { context, page, pageErrors } = await newPage(viewport);
+      const L = `[66/pin/${vLabel}/${dim}]`;
+      try {
+        await searchAt(page, '仏生山', 800);
+        await waitForAllSpotsPrefetchSettled(page);
+        if (dim === '3d' && !(await to3d(page))) { record(`${L} 3D化（検証の前提）`, false); continue; }
+        await page.waitForTimeout(500);
+        const press = async () => {
+          if (dim === '3d') {
+            await waitForTerrainCameraIdle(page);
+            const pos = await spotScreenPos3d(page, { maxFare: 800 });
+            if (!pos) return false;
+            const box = await page.locator('#map-area').boundingBox();
+            await page.mouse.click(box.x + pos.x, box.y + pos.y);
+          } else {
+            const pt = await pickPin2d(page);
+            if (!pt) return false;
+            await page.mouse.click(pt.x, pt.y);
+          }
+          await page.waitForTimeout(dim === '3d' ? 2000 : 700);
+          return true;
+        };
+        const compact = await page.evaluate(() => document.getElementById('app-layout').classList.contains('sheet-compact'));
+        const p1 = await press();
+        const c1 = await cardShown(page);
+        record(`${L} 下の一覧が見出しだけの画面（.sheet-compact=${compact}）でも、ピンを押すと場所のカード（名前・「詳細を見る」）が出る`, p1 && c1.shown, JSON.stringify({ pressed: p1, ...c1 }));
+        if (vLabel === '411x473' && dim === '2d') {
+          const shot = path.join(screenshotDir, 'round66-pin-411x473-2d.png');
+          await page.screenshot({ path: shot });
+          savedPaths.push(shot);
+        }
+        // 「詳細を見る」→ つまみで小に戻す → 別のピンを押す
+        if (c1.shown) {
+          await clickSelectorChecked(page, '.sheet-spot-detail-btn', `${L} 場所のカードの「詳細を見る」`);
+          await page.waitForTimeout(900);
+          await clickElementChecked(page, 'results-sheet-handle', `${L} 下の一覧のつまみ（小に戻す）`);
+          await page.waitForTimeout(900);
+          const small = await cardShown(page);
+          record(`${L} 詳細を出してから小に戻すと、一覧の表示に戻る（つまみだけにならない）`, small.view === 'results' && small.sheetH > 30, JSON.stringify(small));
+          const p2 = await press();
+          const c2 = await cardShown(page);
+          record(`${L} 詳細を出してから小に戻したあとも、ピンを押すと場所のカードが出る`, p2 && c2.shown, JSON.stringify({ pressed: p2, ...c2 }));
+          if (c2.shown) {
+            await clickSelectorChecked(page, '.sheet-spot-close', `${L} 場所のカードの×`);
+            await page.waitForTimeout(400);
+            const c3 = await cardShown(page);
+            const headingShown = await page.evaluate(() => {
+              const h = document.querySelector('.results-sheet .results-band-heading');
+              return !!h && h.getBoundingClientRect().height > 0;
+            });
+            record(`${L} カードを閉じると元の小（見出し）に戻る`, !c3.shown && headingShown && c3.sheetH === c1.sheetH, JSON.stringify({ ...c3, headingShown, before: c1.sheetH }));
+          }
+        }
+        if (pageErrors.length > 0) record(`${L} ページエラーが発生していない`, false, pageErrors.join('; '));
+      } finally {
+        await context.close();
+      }
+    }
+  }
+
+  // --- 4. 「出発地を変える」で開いたカードの入力欄 ---
+  for (const [vLabel, viewport] of [['411x473', { width: 411, height: 473 }], ['own', MOBILE_FORM_COLLAPSE_VIEWPORTS.own], ['se', MOBILE_FORM_COLLAPSE_VIEWPORTS.se]]) {
+    const { context, page, pageErrors } = await newPage(viewport);
+    const L = `[66/card/${vLabel}]`;
+    try {
+      await searchAt(page, '仏生山', 800);
+      await waitForAllSpotsPrefetchSettled(page);
+      await clickElementChecked(page, 'search-summary-toggle', `${L} 駅名▾（出発地を変える）`);
+      await page.waitForTimeout(700);
+      const m = await page.evaluate(() => {
+        const input = document.getElementById('departure-input');
+        const b = input.getBoundingClientRect();
+        const card = document.getElementById('layout-left').getBoundingClientRect();
+        const sug = document.getElementById('departure-suggestions');
+        const sugShown = getComputedStyle(sug).display !== 'none' && sug.getBoundingClientRect().height > 0;
+        // 入力欄の中の上下の端近く（文字の上下）が、ほかのものに隠れていない
+        const pts = [[b.left + 16, b.top + 4], [b.left + 16, b.bottom - 4], [b.right - 16, b.bottom - 4]];
+        const covered = pts.filter(([x, y]) => document.elementFromPoint(x, y) !== input).length;
+        const legend = document.getElementById('map-legend');
+        const lb = legend.getBoundingClientRect();
+        return {
+          value: input.value, height: b.height, inCard: b.top >= card.top - 0.5 && b.bottom <= card.bottom + 0.5,
+          textFits: input.scrollHeight <= input.clientHeight + 1, covered, sugShown,
+          legendShown: getComputedStyle(legend).display !== 'none' && lb.height > 0,
+          searchBtn: document.getElementById('search-btn').getBoundingClientRect().bottom <= window.innerHeight + 0.5,
+        };
+      });
+      record(`${L} 開いたカードの出発駅の入力欄は44px以上で、文字が切れない`, m.height >= 44 - 0.5 && m.inCard && m.textFits, JSON.stringify(m));
+      record(`${L} 入力欄に線やほかの部品が重ならない（空の候補の枠を出さない）`, m.covered === 0 && !m.sugShown, JSON.stringify({ covered: m.covered, sugShown: m.sugShown }));
+      record(`${L} 「この条件で探す」まで見える`, m.searchBtn);
+      record(`${L} カードを開いている間は、地図の色の説明を出さない`, !m.legendShown);
+      if (vLabel === '411x473') {
+        const shot = path.join(screenshotDir, 'round66-card-411x473.png');
+        await page.screenshot({ path: shot });
+        savedPaths.push(shot);
+      }
+      if (pageErrors.length > 0) record(`${L} ページエラーが発生していない`, false, pageErrors.join('; '));
+    } finally {
+      await context.close();
+    }
+  }
+}
+
 async function main() {
   assertBundleFresh('verify-layout');
   assertSiteDataFresh('verify-layout');
@@ -10869,6 +11177,7 @@ async function main() {
     await runWithFreshBrowser(checkRound62, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound64, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound64Motion, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkRound66, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBreadcrumbTrail, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBudgetSlider, baseUrl, savedPaths);
     await runWithFreshBrowser(checkWaveRevealAndCircleScreenshots, baseUrl, savedPaths);

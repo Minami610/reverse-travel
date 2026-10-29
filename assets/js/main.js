@@ -2779,6 +2779,12 @@ class ReverseTravel {
     // 【64本目】大にするときは場所のカードを閉じる（大では一覧の中のカードで見せる。ピンの選択はそのまま）
     this.changeVisibleArea(() => {
       if (large) this.hideSheetSpotCard();
+      // 【66本目、不具合修正】詳細を出したまま（大）つまみで小に戻すと、詳細は小では出さないため下の一覧がつまみだけ
+      // （22px）になり、そこでピンを押しても場所のカードがその中に隠れて見えなかった（411×473）。小に戻すときは一覧の
+      // 表示へ戻す（ピンの選択・地図の位置はそのまま。「地図で見る」と同じ）。
+      else if (this.elements.appLayout.getAttribute('data-view') === 'detail' && !window.matchMedia('(min-width: 760px)').matches) {
+        this.elements.appLayout.setAttribute('data-view', 'results');
+      }
       return this.layoutController?.setSheetLarge(large);
     });
   }
@@ -2835,7 +2841,7 @@ class ReverseTravel {
     const el = this.elements.detailBreadcrumb;
     if (!el) return;
     const trail = [...this.detailHistory, this._currentDetailSpot]; // 古い順、最後が今の場所
-    const listItem = `<button type="button" class="breadcrumb-item breadcrumb-list-link" data-history-index="-1">一覧</button>`;
+    const listItem = `<button type="button" class="breadcrumb-item breadcrumb-list-link" data-history-index="-1"><span aria-hidden="true">←</span> 一覧</button>`;
     const sep = '<span class="breadcrumb-sep" aria-hidden="true">＞</span>';
 
     // 中間（一覧の直後〜「1つ前」の手前まで）。スマホ幅ではここを省略する。
@@ -2855,12 +2861,9 @@ class ReverseTravel {
       ? `${sep}<button type="button" class="breadcrumb-item" data-history-index="${trail.length - 2}">${trail[trail.length - 2].name}</button>`
       : '';
 
-    const currentItem = `${sep}<span class="breadcrumb-current" aria-current="page">${trail[trail.length - 1].name}</span>`;
-
-    el.innerHTML = `
-      <span class="breadcrumb-label">見てきた場所</span>
-      <div class="breadcrumb-trail">${listItem}${ellipsis}${middleItems.join('')}${prevItem}${currentItem}</div>
-    `;
+    // 【66本目、Minami決定】「見てきた場所」の見出しと今の場所の名前はやめ、1行の小さな「← 一覧」にする（名前はすぐ下の
+    // 見出しで分かるため重ねない）。「この先へ」でたどった前の場所は、今までどおり「＞ 前の場所」として後ろに並べる。
+    el.innerHTML = `<div class="breadcrumb-trail">${listItem}${ellipsis}${middleItems.join('')}${prevItem}</div>`;
   }
 
   /**
@@ -3024,17 +3027,33 @@ class ReverseTravel {
       }
     }
 
+    // 【66本目、Minami決定】スクロールしなくても名前・写真・紹介文の最初の数行が見えるよう詰める：名前の行（右に☆・共有の
+    // 小さなアイコンボタン、44px四方）→ 往復の金額・片道の時間・距離の1行 → 横幅いっぱいで低めの写真（押すと大きく見られる）
+    // → 紹介文 → 「地図で見る」（スマホだけ）・ページビュー・行き方などの残り。
+    const fare = spot.source_round_trip_fare;
+    const metaParts = [
+      typeof fare === 'number' ? `往復¥${formatThousands(fare)}` : null,
+      typeof spot.source_ride_duration_min === 'number' ? `片道 約${spot.source_ride_duration_min}分` : null,
+      isFiniteNumber(spot.distance) ? `駅から${spot.distance.toFixed(1)}km` : null,
+    ].filter(Boolean);
+    const imageHtml = spot.image
+      ? `<button type="button" class="detail-image-btn" aria-label="写真を大きく見る">${renderSpotImageHtml(spot, 'detail-image')}</button>`
+      : renderSpotImageHtml(spot, 'detail-image');
     const html = `
-      <h2>${spot.name}</h2>
-      <div class="detail-actions">
-        <button type="button" class="favorite-btn detail-favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}" aria-label="${fav ? 'マイリストから外す' : 'マイリストに保存'}">${starIconHtml(fav)}<span class="btn-label">${fav ? '保存済み' : 'マイリストに保存'}</span></button>
-        <button type="button" class="share-btn detail-share-btn" data-spot-id="${spot.id}" aria-label="共有">${shareIconHtml()}<span class="btn-label">共有</span></button>
-        <button type="button" class="map-view-btn detail-map-btn" data-spot-id="${spot.id}">地図で見る</button>
+      <div class="detail-head">
+        <div class="detail-head-text">
+          <h2 class="detail-title">${spot.name}</h2>
+          ${metaParts.length ? `<p class="detail-meta">${metaParts.map((t) => `<span>${t}</span>`).join('<span class="detail-meta-sep" aria-hidden="true">・</span>')}</p>` : ''}
+        </div>
+        <div class="detail-actions">
+          <button type="button" class="favorite-btn detail-favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}" aria-label="${fav ? 'マイリストから外す' : 'マイリストに保存'}" title="マイリスト">${starIconHtml(fav)}</button>
+          <button type="button" class="share-btn detail-share-btn" data-spot-id="${spot.id}" aria-label="共有" title="共有">${shareIconHtml()}</button>
+        </div>
       </div>
-      ${renderSpotImageHtml(spot, 'detail-image')}
-      <p>${spot.description || (spot.wikipedia_url ? '詳細はWikipediaの記事を参照してください' : 'より詳しい情報がありません')}</p>
+      ${imageHtml}
+      <p class="detail-description">${spot.description || (spot.wikipedia_url ? '詳細はWikipediaの記事を参照してください' : 'より詳しい情報がありません')}</p>
+      <button type="button" class="map-view-btn detail-map-btn" data-spot-id="${spot.id}">地図で見る</button>
       <p class="spot-pageviews">月間ページビュー数: ${spot.pageviews || 'データなし'}</p>
-      <p class="spot-distance">最寄駅からの距離: ${spot.distance?.toFixed(1) || '不明'}km</p>
       ${routeInfoHtml}
       ${spot.wikipedia_url ? `<a href="${spot.wikipedia_url}" target="_blank" class="detail-wikipedia-btn">Wikipediaで詳しく見る</a>` : ''}
       ${onwardHtml}
@@ -3095,6 +3114,11 @@ class ReverseTravel {
     this.elements.detailContent.querySelector('.detail-share-btn')?.addEventListener('click', () => {
       this.shareSpot(spot);
     });
+    this.elements.detailContent.querySelector('.detail-image-btn')?.addEventListener('click', (ev) => {
+      // 読み込みに失敗して写真の代わりの絵になっていたら開かない
+      if (!ev.currentTarget.querySelector('img')) return;
+      this.openPhotoViewer(spot);
+    });
 
     // 「この先へ」カードのタップ：今のスポットを履歴に積んでから、候補の詳細へ移る
     // （戻るボタンでこのスポットの詳細に1タップで戻れるようにするため）。
@@ -3110,6 +3134,42 @@ class ReverseTravel {
         }
       });
     });
+  }
+
+  /**
+   * 【66本目、Minami決定】詳細の写真を押したとき、画面いっぱいに大きく見せる（×・背景・Escで閉じる）。
+   * 閉じたら写真のボタンへフォーカスを戻す。
+   */
+  openPhotoViewer(spot) {
+    let viewer = document.getElementById('photo-viewer');
+    if (!viewer) {
+      viewer = document.createElement('div');
+      viewer.id = 'photo-viewer';
+      viewer.className = 'photo-viewer';
+      viewer.hidden = true;
+      viewer.setAttribute('role', 'dialog');
+      viewer.setAttribute('aria-modal', 'true');
+      viewer.innerHTML = '<img class="photo-viewer-image" alt=""><button type="button" class="photo-viewer-close" aria-label="閉じる">×</button>';
+      document.body.appendChild(viewer);
+      const close = () => {
+        if (viewer.hidden) return;
+        viewer.hidden = true;
+        viewer.querySelector('.photo-viewer-image').removeAttribute('src');
+        document.removeEventListener('keydown', viewer._onKey);
+        this.elements.detailContent.querySelector('.detail-image-btn')?.focus();
+      };
+      viewer._close = close;
+      viewer._onKey = (ev) => { if (ev.key === 'Escape') close(); };
+      viewer.addEventListener('click', (ev) => { if (ev.target === viewer) close(); });
+      viewer.querySelector('.photo-viewer-close').addEventListener('click', close);
+    }
+    const img = viewer.querySelector('.photo-viewer-image');
+    img.src = spot.image;
+    img.alt = spot.name;
+    viewer.setAttribute('aria-label', `${spot.name}の写真`);
+    viewer.hidden = false;
+    document.addEventListener('keydown', viewer._onKey);
+    viewer.querySelector('.photo-viewer-close').focus();
   }
 
   /**

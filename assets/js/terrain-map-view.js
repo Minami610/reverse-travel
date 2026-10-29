@@ -235,7 +235,7 @@ const CIRCLE_FIT_DURATION_MS = 450;
 // 近づいて確認することになるため、最初からもっと寄る。横方向で測るのは35本目のまま。
 // 【2026-10-27、64本目、Minami決定】0.85・横方向で測るのをやめ、円が見えている範囲いっぱいになるまで寄る。斜めから
 // 見た円は横長の楕円に写るため、楕円の見た目の幅と高さで測り、縦か横のどちらかが見えている範囲の端から
-// CIRCLE_FIT_EDGE_GAP_PX（8px）のところに来るまで寄る（_zoomForCircleFill()）。
+// CIRCLE_FIT_EDGE_GAP_PX（8px）のところに来るまで寄る（_circleFillCamera()）。
 const CIRCLE_FIT_EDGE_GAP_PX = 8;
 // 【2026-10-20、37本目、Minami決定：A】金額操作のあとは、円の直径÷短辺（3Dは35本目と
 // 同じく横方向で測る）が0.9をこえたときだけ0.75へ引き、0.35を下回ったときだけ0.6へ
@@ -877,6 +877,8 @@ export class TerrainMapView {
       // 【51本目】数字の丸に入れて透明にしている点は押せない（丸のほうを押す）。
       const feature = (e.features || []).find((f) => !this._absorbedIds?.has(f.properties.id));
       if (!feature) return;
+      // 【66本目】同じクリックを、下の「地図の何もないところ」の判定で数えないよう覚えておく
+      this._spotClickEvent = e.originalEvent;
       this.setSelectedSpot(feature.properties);
       // 【2026-10-11、5本目】地図の点をタップしたら、その場所へ寄る（Minami指示）。
       this.flyToSpot(feature.properties, this._lastDepartureStation);
@@ -893,6 +895,10 @@ export class TerrainMapView {
     // まとめた丸・選んだピン・出発駅の印（HTMLの印）を押したときは、押した先が地図の絵（canvas）でないため数えない。
     this.map.on('click', (e) => {
       if (e.originalEvent?.target !== this.map.getCanvas()) return;
+      // 【66本目、不具合修正】点を押したクリックは数えない。点を押すとflyToSpot()が中心の高さをその場所の標高にそろえる
+      // ため地図を一瞬で動かし（_alignCenterElevationToSpot()）、そのあとここで押した位置を調べると点が無くなっていて、
+      // 選んだばかりのピンと場所のカードを閉じていた（400×464の3Dで、標高の違う場所へ寄るとき）。
+      if (this._spotClickEvent && this._spotClickEvent === e.originalEvent) return;
       const layers = [SPOTS_LAYER_ID, SPOTS_PLAIN_LAYER_ID].filter((id) => this.map.getLayer(id));
       const hits = this.map.queryRenderedFeatures(e.point, { layers }).filter((ft) => !this._absorbedIds?.has(ft.properties.id));
       if (hits.length === 0) this.onBackgroundClick?.();
@@ -1423,7 +1429,13 @@ export class TerrainMapView {
   /** 【51本目】重なりでまとめ直した丸を押したときは、その場所へ1段寄る（向き・傾きはそのまま）。 */
   _zoomIntoMergedCluster(lngLat) {
     if (!this.map) return;
-    const target = Math.min(PIN_CLUSTER_MAX_ZOOM + 0.1, this.map.getZoom() + 1);
+    // 【66本目、不具合修正】円の見た目を真ん中に置くようになり、PCの検索した直後がまとめる上限（13）を超えることがある
+    // （富山駅前・¥800で13.36）。そのときに上限＋0.1へ「寄る」と逆に引いていたため、上限を超えているときは次の段
+    // （上限＋1.1、まとめない高さ）へ寄る。
+    const zoom = this.map.getZoom();
+    const target = zoom < PIN_CLUSTER_MAX_ZOOM + 0.1 - 0.01
+      ? Math.min(PIN_CLUSTER_MAX_ZOOM + 0.1, zoom + 1)
+      : PIN_CLUSTER_MAX_ZOOM + 1.1;
     // 【57本目】見えている範囲（重ねた入れ物を除く）の真ん中へ寄せる。
     this.map.easeTo({ center: lngLat, zoom: target, duration: prefersReducedMotion() ? 0 : 600, padding: visiblePadding(this.map.getContainer()) });
   }
@@ -1747,10 +1759,10 @@ export class TerrainMapView {
     const pitch = pitchOverride ?? this.map.getPitch();
     const bearing = this.map.getBearing();
     const duration = (prefersReducedMotion() || !animate) ? 0 : durationMs;
-    const fillZoom = this._zoomForCircleFill(dep, radiusKm, pitch, bearing, visPad);
-    if (fillZoom !== null) {
-      this._easeToCircle(dep, fillZoom, pitch, bearing, duration, visPad);
-      return fillZoom;
+    const fill = this._circleFillCamera(dep, radiusKm, pitch, bearing, visPad);
+    if (fill !== null) {
+      this._easeToCircle(fill.center, fill.zoom, pitch, bearing, duration, visPad);
+      return fill.zoom;
     }
     // transformを複製できない版だけ、cameraForBounds()で円の外接四角を見えている範囲に合わせる（見えている範囲は使わない）。
     const north = destinationPoint(dep.stop_lat, dep.stop_lon, 0, radiusKm);
@@ -1764,18 +1776,22 @@ export class TerrainMapView {
     const camera = this.map.cameraForBounds([[west.lon, south.lat], [east.lon, north.lat]], { padding, pitch, bearing });
     if (!camera) return null;
     const zoom = Math.max(camera.zoom, CIRCLE_FIT_MIN_ZOOM);
-    this._easeToCircle(dep, zoom, pitch, bearing, duration, CLEAR_PADDING);
+    this._easeToCircle({ lng: dep.stop_lon, lat: dep.stop_lat }, zoom, pitch, bearing, duration, CLEAR_PADDING);
     return zoom;
   }
 
   /**
-   * 【64本目】出発駅を見えている範囲の真ん中（padding）に置き、傾きpitch・向きbearingにしたとき、半径radiusKmの円の縁
-   * （5°ごとの72点）が、見えている範囲を8px内側に縮めた枠の中に入る
-   * 一番大きいズーム（最低ズーム8.5）。行き先のカメラはtransformの複製で作る（地図そのものは動かさない）。
+   * 【64本目・66本目】傾きpitch・向きbearingで見たとき、半径radiusKmの円の縁（5°ごとの72点）の見た目（楕円の上下左右の
+   * 端）が見えている範囲（padding）の真ん中に来て、見えている範囲を8px内側に縮めた枠に入る一番大きいズーム（最低ズーム
+   * 8.5）と、そのときのカメラの中心。行き先のカメラはtransformの複製で作る（地図そのものは動かさない）。
+   * 【66本目、Minami決定】以前は出発駅を真ん中に置いていたが、斜めから見ると円の奥（上）が小さく手前（下）が大きく
+   * 写るため、円の見た目が下に寄り、上だけが空いていた（富山駅前・PC・¥1,200で上に約150px）。そこで楕円の上下左右の
+   * 端の真ん中を見えている範囲の真ん中にそろえる（出発駅は真ん中より少し下になる。円の中には必ず入る）。
    * ズームを上げるほど円は外へ広がるため、1ずつ上げて入らなくなる段を見つけ、その間を二分して求める。
    * 複製できない版ではnull。
+   * @returns {{zoom:number, center:{lng:number, lat:number}}|null}
    */
-  _zoomForCircleFill(dep, radiusKm, pitch, bearing, padding) {
+  _circleFillCamera(dep, radiusKm, pitch, bearing, padding) {
     let tr;
     try {
       tr = this.map.transform.clone();
@@ -1788,12 +1804,10 @@ export class TerrainMapView {
     }
     const container = this.map.getContainer();
     const g = CIRCLE_FIT_EDGE_GAP_PX;
-    const box = {
-      left: padding.left + g,
-      top: padding.top + g,
-      right: container.clientWidth - padding.right - g,
-      bottom: container.clientHeight - padding.bottom - g,
-    };
+    const boxW = container.clientWidth - padding.left - padding.right - 2 * g;
+    const boxH = container.clientHeight - padding.top - padding.bottom - 2 * g;
+    const cx = padding.left + (container.clientWidth - padding.left - padding.right) / 2;
+    const cy = padding.top + (container.clientHeight - padding.top - padding.bottom) / 2;
     const edge = [];
     for (let i = 0; i < 72; i++) {
       const p = destinationPoint(dep.stop_lat, dep.stop_lon, i * 5, radiusKm);
@@ -1801,18 +1815,49 @@ export class TerrainMapView {
     }
     // 【64本目】地形の上の円の見た目で測る（map.project()と同じく地形の高さを入れて写す）。カメラの中心の高さは今のまま
     // （MapLibreが動き終わりにそろえるとは限らない。出発駅の高さにそろえて測ると、富山駅前・PCで2.4pxはみ出した）。
-    const terrain = this.map.terrain || null;
-    const fits = (z) => {
+    const terrain = this.map.terrain || undefined;
+    const bounds = () => {
+      let minX = Infinity; let maxX = -Infinity; let minY = Infinity; let maxY = -Infinity;
+      for (const ll of edge) {
+        const pt = tr.locationToScreenPoint(ll, terrain);
+        if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return null;
+        if (pt.x < minX) minX = pt.x;
+        if (pt.x > maxX) maxX = pt.x;
+        if (pt.y < minY) minY = pt.y;
+        if (pt.y > maxY) maxY = pt.y;
+      }
+      return { minX, maxX, minY, maxY };
+    };
+    // ズームzで、楕円の見た目の上下左右の端の真ん中が見えている範囲の真ん中に来るよう中心をずらす。斜めから見ると
+    // ずらすほど楕円の形も少し変わるため、3回まで繰り返して0.5px以内にそろえる。
+    const place = (z) => {
+      tr.setCenter(new maplibregl.LngLat(dep.stop_lon, dep.stop_lat));
       tr.setZoom(z);
-      return edge.every((ll) => {
-        const pt = tr.locationToScreenPoint(ll, terrain || undefined);
-        if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return false;
-        return !(pt.x < box.left || pt.x > box.right || pt.y < box.top || pt.y > box.bottom);
-      });
+      let bb = null;
+      for (let i = 0; i < 4; i++) {
+        bb = bounds();
+        if (!bb) return null;
+        const dx = (bb.minX + bb.maxX) / 2 - cx;
+        const dy = (bb.minY + bb.maxY) / 2 - cy;
+        if (i === 3 || Math.hypot(dx, dy) < 0.5) break;
+        const next = tr.screenPointToLocation(new maplibregl.Point(cx + dx, cy + dy));
+        if (!next || !Number.isFinite(next.lng) || !Number.isFinite(next.lat)) return null;
+        tr.setCenter(next);
+      }
+      return bb;
+    };
+    const fits = (z) => {
+      const bb = place(z);
+      return !!bb && bb.maxX - bb.minX <= boxW && bb.maxY - bb.minY <= boxH;
+    };
+    const result = (z) => {
+      place(z);
+      const c = tr.center;
+      return { zoom: z, center: { lng: c.lng, lat: c.lat } };
     };
     const maxZoom = 22;
     let lo = CIRCLE_FIT_MIN_ZOOM;
-    if (!fits(lo)) return lo;
+    if (!fits(lo)) return result(lo);
     while (lo + 1 <= maxZoom && fits(lo + 1)) lo += 1;
     let hi = Math.min(lo + 1, maxZoom);
     for (let i = 0; i < 14; i++) {
@@ -1820,19 +1865,20 @@ export class TerrainMapView {
       if (fits(mid)) lo = mid;
       else hi = mid;
     }
-    return lo;
+    return result(lo);
   }
 
   /** fitCircleToView()の実際のカメラ移動。動いている間は行き先のズームを
    * _circleFitAnimに覚えておき（37本目、途中で次の判断をするときに使う）、止まったら消す。 */
-  _easeToCircle(dep, zoom, pitch, bearing, duration, padding = CLEAR_PADDING) {
+  // 【66本目】centerは円の見た目を見えている範囲の真ん中に置くカメラの中心（_circleFillCamera()、出発駅とは限らない）。
+  _easeToCircle(center, zoom, pitch, bearing, duration, padding = CLEAR_PADDING) {
     this._focusedOnSpot = false;
     this._flyFocusedSpotId = null;
     // 【64本目】もう合わせた位置にいるときは動かさない（同じ場所へ動き直す空の動きを出さない。＋−の波はすぐ出せる）。
     const p = this.map.getPadding();
     const samePadding = ['top', 'right', 'bottom', 'left'].every((k) => Math.abs((p[k] || 0) - (padding[k] || 0)) < 1);
     const a = this.map.project(this.map.getCenter());
-    const b = this.map.project([dep.stop_lon, dep.stop_lat]);
+    const b = this.map.project([center.lng, center.lat]);
     if (!this.map.isMoving() && samePadding && Math.abs(this.map.getZoom() - zoom) < 0.005
       && Math.abs(this.map.getPitch() - pitch) < 0.1 && Math.abs(((this.map.getBearing() - bearing + 540) % 360) - 180) < 0.1
       && Math.hypot(a.x - b.x, a.y - b.y) < 1) {
@@ -1853,12 +1899,12 @@ export class TerrainMapView {
     if (!anim && this.map.isMoving()) this.map.stop();
     if (!anim) this.map.once('moveend', onEnd);
     this.map.easeTo({
-      center: [dep.stop_lon, dep.stop_lat],
+      center: [center.lng, center.lat],
       zoom,
       pitch,
       bearing,
       duration,
-      // 【57本目】出発駅を見えている範囲（重ねた入れ物を除く）の真ん中に置く。
+      // 【57本目】見えている範囲（重ねた入れ物を除く）をpaddingで渡す。【66本目】その真ん中に円の見た目が来る。
       padding,
     });
     if (anim) this.map.once('moveend', onEnd);
@@ -2013,9 +2059,12 @@ export class TerrainMapView {
       const pad = visiblePadding(container);
       const pitch = this.map.getPitch();
       const bearing = this.map.getBearing();
-      const zoom = this._zoomForCircleFill(dep, radiusKm, pitch, bearing, pad);
-      if (zoom === null || Math.abs(zoom - this.map.getZoom()) < 0.005) return;
-      this._easeToCircle(dep, zoom, pitch, bearing, prefersReducedMotion() ? 0 : 250, pad);
+      const fill = this._circleFillCamera(dep, radiusKm, pitch, bearing, pad);
+      if (fill === null) return;
+      const a = this.map.project(this.map.getCenter());
+      const b = this.map.project([fill.center.lng, fill.center.lat]);
+      if (Math.abs(fill.zoom - this.map.getZoom()) < 0.005 && Math.hypot(a.x - b.x, a.y - b.y) < 1) return;
+      this._easeToCircle(fill.center, fill.zoom, pitch, bearing, prefersReducedMotion() ? 0 : 250, pad);
     };
     setTimeout(check, 150);
   }

@@ -887,8 +887,12 @@ body {
   color: var(--color-text);
 }
 
+/* 【66本目】入力欄は44px以上（押しやすさ）。低い画面で検索カードを詰めるときもここは削らない（fitSearchCard()は
+   ほかの部分で詰める） */
 .form-group input[type="text"] {
   width: 100%;
+  min-height: 44px;
+  line-height: 1.4;
   padding: 0.55rem 0.75rem;
   border: 1px solid var(--color-border);
   border-radius: 4px;
@@ -983,6 +987,11 @@ body {
    position:fixedはoverflow:autoな祖先の影響を受けないため、
    表示位置はJS側（main.jsのpositionDepartureSuggestions）で
    入力欄のgetBoundingClientRect()から都度計算する。 */
+/* 【66本目、不具合修正】候補が無いときは出さない（空のまま枠線だけが、低い画面で入力欄の上に1本の線として重なっていた） */
+#departure-suggestions:empty {
+  display: none;
+}
+
 #departure-suggestions {
   position: fixed;
   max-height: 300px;
@@ -2147,48 +2156,155 @@ body {
 #detail-container {
   background: white;
   border-radius: 8px;
-  padding: 1.5rem;
+  padding: 12px 16px; /* 【66本目】1.5remから詰めた */
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   overflow-y: auto;
 }
 
-.detail-image {
-  width: 100%;
-  max-height: 400px;
-  object-fit: cover;
-  border-radius: 8px;
-  margin-bottom: 1.5rem;
+/* 【66本目、Minami決定】詳細は、スクロールしなくても名前・写真・紹介文の最初の数行が見えるよう詰める。
+   名前の行（右に☆・共有の小さなアイコンボタン。一覧のカードと同じ44px四方の丸）→ 往復の金額・片道の時間・距離の1行
+   → 横幅いっぱいで低めの写真（PC 180px・スマホ 140px、切り抜く。押すと大きく見られる）→ 紹介文。 */
+.detail-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 8px;
 }
 
-.detail-image.spot-image-placeholder {
-  height: 240px;
-  font-size: 5rem;
+.detail-head-text {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-/* 詳細画面の☆（マイリスト）・共有ボタン。カード側の丸アイコンと違い、
-   文言付きの横長ボタンにする（タイトル直下、画像の前）。高さ44px以上を確保する。 */
-.detail-actions {
+#detail-content .detail-title {
+  margin: 0;
+  font-size: 1.15rem;
+  line-height: 1.35;
+  font-weight: 800;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.detail-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.6rem;
-  margin: 0.5rem 0 1rem;
+  margin: 2px 0 0;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--color-text-sub);
+}
+
+.detail-meta > span:first-child {
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.detail-meta-sep {
+  margin: 0 0.15em;
+}
+
+.detail-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
 }
 
 .detail-actions .favorite-btn,
-.detail-actions .share-btn,
-.detail-actions .map-view-btn {
-  width: auto;
-  height: auto;
-  min-height: 44px;
+.detail-actions .share-btn {
+  box-shadow: none;
+  border: 1px solid var(--color-border);
+  background: white;
+}
+
+.detail-image-btn {
+  display: block;
+  width: 100%;
+  padding: 0;
+  margin: 0 0 8px;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+}
+
+.detail-image {
+  display: block;
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
   border-radius: 6px;
+  margin: 0 0 8px;
+}
+
+.detail-image-btn .detail-image {
+  margin: 0;
+}
+
+.detail-image.spot-image-placeholder {
+  height: 120px;
+  font-size: 3rem;
+}
+
+#detail-content .detail-description {
+  margin: 0 0 10px;
+  line-height: 1.6;
+}
+
+.detail-map-btn {
+  min-height: 44px;
+  margin: 0 0 10px;
   padding: 0.5rem 1rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--color-main-light);
+  color: var(--color-text);
   font-size: 0.9rem;
   font-weight: 600;
-  gap: 0.4rem;
-  color: var(--color-text);
-  background: var(--color-main-light);
-  border: 1px solid transparent;
-  box-shadow: none;
+}
+
+@media (max-width: 759px) {
+  .detail-image {
+    height: 140px;
+  }
+  #detail-content .detail-title {
+    font-size: 1.05rem;
+  }
+}
+
+/* 写真を大きく見る（画面いっぱい、× で閉じる） */
+.photo-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 56px 12px 12px;
+  background: rgba(0, 0, 0, 0.88);
+}
+
+.photo-viewer[hidden] {
+  display: none;
+}
+
+.photo-viewer-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.photo-viewer-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  color: #222;
+  font-size: 1.6rem;
+  line-height: 1;
+  cursor: pointer;
 }
 
 /* 【2026-10-11、5本目】「地図で見る」はスマホ幅専用（Minami指示）。PCは
@@ -2204,43 +2320,24 @@ body {
   }
 }
 
-/* 未保存＝目立つオレンジ塗り（保存を促すCTA）。2026-10-09、Minamiさんの指示で
-   保存済み/未保存の強調を入れ替えた（以前は保存済みをオレンジにしていたが、
-   「まだ押していない」方を目立たせる方が自然なため）。 */
-.detail-actions .favorite-btn:not(.favorite-btn-active) {
-  background: var(--color-accent);
-  color: white;
-}
-
-/* 保存済み＝白地に枠線（既にやったことを示す、控えめな見た目）。
-   ☆アイコン自体は.icon-star-filledが独立して黄色を保つ（ボタンの文字色とは
-   別のcolorプロパティのため、ここでボタン文字色を変えても影響しない）。 */
-.detail-actions .favorite-btn.favorite-btn-active {
-  background: white;
-  color: var(--color-text);
-  border-color: var(--color-border);
-}
-
 /* 【2026-10-11、6本目E】「見てきた場所」の足あと（旧「← 一覧に戻る」の
    置き換え）。見出しは小さく控えめに（旅の行程ではなく、戻るための導線で
    あることが伝わるよう、Minami指示で「見てきた場所」という文言にした）。 */
+/* 【66本目、Minami決定】見出し「見てきた場所」と今の場所の名前はやめ、1行の小さな「← 一覧」（前の場所があれば
+   「＞ 前の場所」が続く）にした。押せる高さ44pxは残し、上下の余白は詰める。 */
 #detail-breadcrumb {
-  margin-bottom: 1.25rem;
-}
-
-.breadcrumb-label {
-  display: block;
-  font-size: 0.75rem;
-  color: var(--color-text-sub);
-  margin-bottom: 0.25rem;
+  margin: -8px 0 0;
 }
 
 .breadcrumb-trail {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 0.15rem;
-  font-size: 0.95rem;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 0.85rem;
 }
 
 .breadcrumb-sep {
@@ -2257,7 +2354,12 @@ body {
   color: var(--color-main-deep);
   text-decoration: underline;
   cursor: pointer;
-  font-size: 0.95rem;
+  font-size: 0.85rem;
+  max-width: 12em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
   padding: 0.6rem 0.3rem;
   min-height: 44px;
   display: inline-flex;
@@ -2271,12 +2373,9 @@ body {
 
 .breadcrumb-list-link {
   padding-left: 0;
-}
-
-.breadcrumb-current {
+  flex: 0 0 auto;
+  text-decoration: none;
   font-weight: 700;
-  color: var(--color-text);
-  padding: 0.6rem 0.3rem;
 }
 
 .breadcrumb-ellipsis {
@@ -4044,6 +4143,14 @@ body {
   display: none;
 }
 
+/* 【66本目、Minami指摘】スマホで「出発地を変える」のカードを開いている間は、地図の色の説明を出さない（カードの上に
+   浮いて見えたため）。PCはカードが左に並ぶため、今までどおり地図の上に出す。 */
+@media (max-width: 759px) {
+  #app-layout.has-results:not(.form-collapsed) .map-legend {
+    display: none;
+  }
+}
+
 @media (max-width: 759px) {
   #app-layout.has-results.form-collapsed .results-panel {
     display: contents;
@@ -4577,6 +4684,47 @@ body {
     margin: 0 0 2px;
   }
 
+  /* 【66本目】詳細（大）：下の一覧そのものが白い入れ物なので、詳細の中の箱（余白・影）はやめて詰める。色の説明は
+     足あと「← 一覧」と同じ行の右に置く（1行ぶん縦を空ける） */
+  #app-layout[data-view="detail"] .results-sheet #detail-container {
+    padding: 0 2px 8px;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  #app-layout[data-view="detail"] .results-sheet #detail-breadcrumb {
+    margin: 0;
+    padding-right: 150px;
+  }
+
+  #app-layout.sheet-large[data-view="detail"] .results-sheet .results-legend {
+    position: absolute;
+    top: 36px;
+    right: 14px;
+    margin: 0;
+  }
+
+  /* 【66本目】低い画面（.sheet-compact、400×464など）の詳細：横幅いっぱいの写真では紹介文まで入らないため、写真は左に
+     小さく置き、紹介文を横に回り込ませる（スクロールせずに名前・写真・紹介文の1行目が見える） */
+  #app-layout.sheet-compact .results-sheet .detail-image-btn,
+  #app-layout.sheet-compact .results-sheet .detail-image.spot-image-placeholder {
+    float: left;
+    width: 112px;
+    margin: 4px 10px 4px 0;
+  }
+
+  #app-layout.sheet-compact .results-sheet .detail-image {
+    height: 84px;
+  }
+
+  #app-layout.sheet-compact .results-sheet .detail-image.spot-image-placeholder {
+    font-size: 2rem;
+  }
+
+  #app-layout.sheet-compact .results-sheet .detail-description + * {
+    clear: both;
+  }
+
   #app-layout.sheet-large .results-sheet .results-band-heading {
     display: flex;
     justify-content: space-between;
@@ -4974,8 +5122,8 @@ body {
 
           <!-- スポット詳細表示エリア（data-view="detail"のときだけ、一覧の代わりに出す） -->
           <div id="detail-container">
-            <!-- 「見てきた場所」の足あと（6本目E、Minami決定）。 -->
-            <nav id="detail-breadcrumb" aria-label="見てきた場所"></nav>
+            <!-- 足あと（6本目E、Minami決定。66本目から1行の「← 一覧」）。 -->
+            <nav id="detail-breadcrumb" aria-label="一覧へ戻る"></nav>
             <div id="detail-content"></div>
           </div>
 
@@ -5019,6 +5167,7 @@ body {
         「NEW」は、検索した金額（検索し直したときは前の検索の金額）より高く、今の金額で新しく行けるようになった場所です。
         近くにたくさんある場所は数字の丸にまとまり、押すと近づいて分かれます。
         ピンを押すと、パソコンでは左の一覧にその場所の詳しい情報（行きかた・運賃など）が出ます。スマートフォンでは下にその場所のカードが出て、「詳細を見る」で詳しい情報が見られます（×か、地図の何もないところを押すと元に戻ります）。
+        詳しい情報の写真を押すと、画面いっぱいに大きく見られます。
       </p>
 
       <h3>金額を変える</h3>
@@ -11751,6 +11900,12 @@ class ReverseTravel {
     // 【64本目】大にするときは場所のカードを閉じる（大では一覧の中のカードで見せる。ピンの選択はそのまま）
     this.changeVisibleArea(() => {
       if (large) this.hideSheetSpotCard();
+      // 【66本目、不具合修正】詳細を出したまま（大）つまみで小に戻すと、詳細は小では出さないため下の一覧がつまみだけ
+      // （22px）になり、そこでピンを押しても場所のカードがその中に隠れて見えなかった（411×473）。小に戻すときは一覧の
+      // 表示へ戻す（ピンの選択・地図の位置はそのまま。「地図で見る」と同じ）。
+      else if (this.elements.appLayout.getAttribute('data-view') === 'detail' && !window.matchMedia('(min-width: 760px)').matches) {
+        this.elements.appLayout.setAttribute('data-view', 'results');
+      }
       return this.layoutController?.setSheetLarge(large);
     });
   }
@@ -11807,7 +11962,7 @@ class ReverseTravel {
     const el = this.elements.detailBreadcrumb;
     if (!el) return;
     const trail = [...this.detailHistory, this._currentDetailSpot]; // 古い順、最後が今の場所
-    const listItem = `<button type="button" class="breadcrumb-item breadcrumb-list-link" data-history-index="-1">一覧</button>`;
+    const listItem = `<button type="button" class="breadcrumb-item breadcrumb-list-link" data-history-index="-1"><span aria-hidden="true">←</span> 一覧</button>`;
     const sep = '<span class="breadcrumb-sep" aria-hidden="true">＞</span>';
 
     // 中間（一覧の直後〜「1つ前」の手前まで）。スマホ幅ではここを省略する。
@@ -11827,12 +11982,9 @@ class ReverseTravel {
       ? `${sep}<button type="button" class="breadcrumb-item" data-history-index="${trail.length - 2}">${trail[trail.length - 2].name}</button>`
       : '';
 
-    const currentItem = `${sep}<span class="breadcrumb-current" aria-current="page">${trail[trail.length - 1].name}</span>`;
-
-    el.innerHTML = `
-      <span class="breadcrumb-label">見てきた場所</span>
-      <div class="breadcrumb-trail">${listItem}${ellipsis}${middleItems.join('')}${prevItem}${currentItem}</div>
-    `;
+    // 【66本目、Minami決定】「見てきた場所」の見出しと今の場所の名前はやめ、1行の小さな「← 一覧」にする（名前はすぐ下の
+    // 見出しで分かるため重ねない）。「この先へ」でたどった前の場所は、今までどおり「＞ 前の場所」として後ろに並べる。
+    el.innerHTML = `<div class="breadcrumb-trail">${listItem}${ellipsis}${middleItems.join('')}${prevItem}</div>`;
   }
 
   /**
@@ -11996,17 +12148,33 @@ class ReverseTravel {
       }
     }
 
+    // 【66本目、Minami決定】スクロールしなくても名前・写真・紹介文の最初の数行が見えるよう詰める：名前の行（右に☆・共有の
+    // 小さなアイコンボタン、44px四方）→ 往復の金額・片道の時間・距離の1行 → 横幅いっぱいで低めの写真（押すと大きく見られる）
+    // → 紹介文 → 「地図で見る」（スマホだけ）・ページビュー・行き方などの残り。
+    const fare = spot.source_round_trip_fare;
+    const metaParts = [
+      typeof fare === 'number' ? `往復¥${formatThousands(fare)}` : null,
+      typeof spot.source_ride_duration_min === 'number' ? `片道 約${spot.source_ride_duration_min}分` : null,
+      isFiniteNumber(spot.distance) ? `駅から${spot.distance.toFixed(1)}km` : null,
+    ].filter(Boolean);
+    const imageHtml = spot.image
+      ? `<button type="button" class="detail-image-btn" aria-label="写真を大きく見る">${renderSpotImageHtml(spot, 'detail-image')}</button>`
+      : renderSpotImageHtml(spot, 'detail-image');
     const html = `
-      <h2>${spot.name}</h2>
-      <div class="detail-actions">
-        <button type="button" class="favorite-btn detail-favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}" aria-label="${fav ? 'マイリストから外す' : 'マイリストに保存'}">${starIconHtml(fav)}<span class="btn-label">${fav ? '保存済み' : 'マイリストに保存'}</span></button>
-        <button type="button" class="share-btn detail-share-btn" data-spot-id="${spot.id}" aria-label="共有">${shareIconHtml()}<span class="btn-label">共有</span></button>
-        <button type="button" class="map-view-btn detail-map-btn" data-spot-id="${spot.id}">地図で見る</button>
+      <div class="detail-head">
+        <div class="detail-head-text">
+          <h2 class="detail-title">${spot.name}</h2>
+          ${metaParts.length ? `<p class="detail-meta">${metaParts.map((t) => `<span>${t}</span>`).join('<span class="detail-meta-sep" aria-hidden="true">・</span>')}</p>` : ''}
+        </div>
+        <div class="detail-actions">
+          <button type="button" class="favorite-btn detail-favorite-btn${fav ? ' favorite-btn-active' : ''}" data-spot-id="${spot.id}" aria-pressed="${fav}" aria-label="${fav ? 'マイリストから外す' : 'マイリストに保存'}" title="マイリスト">${starIconHtml(fav)}</button>
+          <button type="button" class="share-btn detail-share-btn" data-spot-id="${spot.id}" aria-label="共有" title="共有">${shareIconHtml()}</button>
+        </div>
       </div>
-      ${renderSpotImageHtml(spot, 'detail-image')}
-      <p>${spot.description || (spot.wikipedia_url ? '詳細はWikipediaの記事を参照してください' : 'より詳しい情報がありません')}</p>
+      ${imageHtml}
+      <p class="detail-description">${spot.description || (spot.wikipedia_url ? '詳細はWikipediaの記事を参照してください' : 'より詳しい情報がありません')}</p>
+      <button type="button" class="map-view-btn detail-map-btn" data-spot-id="${spot.id}">地図で見る</button>
       <p class="spot-pageviews">月間ページビュー数: ${spot.pageviews || 'データなし'}</p>
-      <p class="spot-distance">最寄駅からの距離: ${spot.distance?.toFixed(1) || '不明'}km</p>
       ${routeInfoHtml}
       ${spot.wikipedia_url ? `<a href="${spot.wikipedia_url}" target="_blank" class="detail-wikipedia-btn">Wikipediaで詳しく見る</a>` : ''}
       ${onwardHtml}
@@ -12067,6 +12235,11 @@ class ReverseTravel {
     this.elements.detailContent.querySelector('.detail-share-btn')?.addEventListener('click', () => {
       this.shareSpot(spot);
     });
+    this.elements.detailContent.querySelector('.detail-image-btn')?.addEventListener('click', (ev) => {
+      // 読み込みに失敗して写真の代わりの絵になっていたら開かない
+      if (!ev.currentTarget.querySelector('img')) return;
+      this.openPhotoViewer(spot);
+    });
 
     // 「この先へ」カードのタップ：今のスポットを履歴に積んでから、候補の詳細へ移る
     // （戻るボタンでこのスポットの詳細に1タップで戻れるようにするため）。
@@ -12082,6 +12255,42 @@ class ReverseTravel {
         }
       });
     });
+  }
+
+  /**
+   * 【66本目、Minami決定】詳細の写真を押したとき、画面いっぱいに大きく見せる（×・背景・Escで閉じる）。
+   * 閉じたら写真のボタンへフォーカスを戻す。
+   */
+  openPhotoViewer(spot) {
+    let viewer = document.getElementById('photo-viewer');
+    if (!viewer) {
+      viewer = document.createElement('div');
+      viewer.id = 'photo-viewer';
+      viewer.className = 'photo-viewer';
+      viewer.hidden = true;
+      viewer.setAttribute('role', 'dialog');
+      viewer.setAttribute('aria-modal', 'true');
+      viewer.innerHTML = '<img class="photo-viewer-image" alt=""><button type="button" class="photo-viewer-close" aria-label="閉じる">×</button>';
+      document.body.appendChild(viewer);
+      const close = () => {
+        if (viewer.hidden) return;
+        viewer.hidden = true;
+        viewer.querySelector('.photo-viewer-image').removeAttribute('src');
+        document.removeEventListener('keydown', viewer._onKey);
+        this.elements.detailContent.querySelector('.detail-image-btn')?.focus();
+      };
+      viewer._close = close;
+      viewer._onKey = (ev) => { if (ev.key === 'Escape') close(); };
+      viewer.addEventListener('click', (ev) => { if (ev.target === viewer) close(); });
+      viewer.querySelector('.photo-viewer-close').addEventListener('click', close);
+    }
+    const img = viewer.querySelector('.photo-viewer-image');
+    img.src = spot.image;
+    img.alt = spot.name;
+    viewer.setAttribute('aria-label', `${spot.name}の写真`);
+    viewer.hidden = false;
+    document.addEventListener('keydown', viewer._onKey);
+    viewer.querySelector('.photo-viewer-close').focus();
   }
 
   /**
