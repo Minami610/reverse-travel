@@ -31,6 +31,7 @@ const distIndexPath = path.join(rootDir, 'dist/index.html');
 // bundle-html.js が実際に埋め込んでいる入力ファイル一覧と一致させること
 // （bundle-html.js自体を変更したときはこちらも見直す）
 const JS_FILES = [
+  'debug-log.js',
   'gtfs-loader.js',
   'route-duration.js',
   'fare-calculator.js',

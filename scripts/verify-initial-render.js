@@ -449,7 +449,7 @@ async function checkResultCards(html) {
   virtualConsole.forwardTo(console);
 
   const dom = new JSDOM(html, {
-    url: 'http://localhost/',
+    url: 'http://localhost/?debug=1',
     runScripts: 'dangerously',
     pretendToBeVisual: true,
     virtualConsole,

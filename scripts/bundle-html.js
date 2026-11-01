@@ -169,6 +169,7 @@ async function bundleHTML() {
  */
 async function generateInlineJSScript(jsDir) {
   const jsFiles = [
+    'debug-log.js',
     'gtfs-loader.js',
     'route-duration.js',
     'fare-calculator.js',

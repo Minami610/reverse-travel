@@ -22,6 +22,7 @@
  * フェーズ2以降：汎用グラフ探索（ダイクストラ法）へ移行予定
  */
 
+import { debugLog } from './debug-log.js';
 import { estimateSelectionMinutes, estimateRideMinutes } from './route-duration.js';
 
 function isBusEligible(mode) {
@@ -109,7 +110,7 @@ export class FareCalculator {
       }
 
       const directCount = reachable.size;
-      console.log(`✅ 直接到達駅: ${directCount}駅`);
+      debugLog(`✅ 直接到達駅: ${directCount}駅`);
 
       // ステップ2：直接到達した駅（鉄道・バスいずれでも可）から、併設するバス系
       // 停留所経由でラストワンマイルを1回だけ乗り継ぐ。
@@ -187,12 +188,12 @@ export class FareCalculator {
           reachable.delete(stationId);
         }
       }
-      console.log(`✅ 往復予算内（片道総額×2 ≦ ¥${budget}）: ${reachable.size}駅`);
+      debugLog(`✅ 往復予算内（片道総額×2 ≦ ¥${budget}）: ${reachable.size}駅`);
 
       const finalTransferCount = Array.from(reachable.values()).filter(
         (info) => info.reachBy === 'transfer'
       ).length;
-      console.log(`✅ 乗り継ぎ到達駅: ${finalTransferCount}駅`);
+      debugLog(`✅ 乗り継ぎ到達駅: ${finalTransferCount}駅`);
 
       // 結果をリスト化（各駅IDに属する全stop_idを付与＝スポット検索用）
       // selectionTimeMin は「乗車時間＋期待待ち時間」（分）。アクセス駅選定（SpotFinder）で

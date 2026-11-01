@@ -3,6 +3,8 @@
  * 到達可能な駅から周辺スポットを検索、知名度順にソート
  */
 
+import { debugLog } from './debug-log.js';
+
 // 徒歩速度（分速80m）。徒歩時間 = 距離(km) * 1000 / WALK_SPEED_M_PER_MIN
 const WALK_SPEED_M_PER_MIN = 80;
 
@@ -121,11 +123,11 @@ export class SpotFinder {
       }
 
       const allSpots = Array.from(bestSpotByQid.values());
-      console.log(`📍 収集スポット数（QID重複排除後）: ${allSpots.length}`);
+      debugLog(`📍 収集スポット数（QID重複排除後）: ${allSpots.length}`);
 
       // フィルタリング：知名度が高すぎるものを除外
       const filtered = this.filterBySitelinks(allSpots);
-      console.log(`✂️ フィルタ後: ${filtered.length}スポット`);
+      debugLog(`✂️ フィルタ後: ${filtered.length}スポット`);
 
       // 情報充実度（説明文の長さ・画像有無）順にソート
       const sorted = this.sortByInformativeness(filtered);

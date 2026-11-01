@@ -1382,7 +1382,6 @@ class ReverseTravel {
 
     // 到達可能な駅を計算（予算以下すべて）。
     const reachableStations = await this.fareCalc.calculateReachable(stationId, budget);
-    console.log('到達可能駅:', reachableStations);
 
     // 【2026-10-07修正】帯の判定は「駅単位」ではなく「スポット単位」で行う。
     // 以前は駅を先に帯（予算−¥200より高く、予算以下）で絞り込んでから
@@ -1394,10 +1393,8 @@ class ReverseTravel {
     // 一番安い往復運賃を決めてから、その運賃で帯判定する」こと
     // （spotFinder.findSpots()側の優劣判定もこれに合わせて運賃優先に変更済み）。
     const allSpots = await this.spotFinder.findSpots(reachableStations);
-    console.log('発見スポット（予算以下すべて、各スポットの最安運賃を採用）:', allSpots);
 
     const bandSpots = allSpots.filter((s) => s.source_round_trip_fare > budget - BAND_WIDTH);
-    console.log(`帯（¥${budget - BAND_WIDTH + 1}〜¥${budget}）内のスポット:`, bandSpots);
 
     // 【2026-10-07追加】帯が0件のときの案内文を出し分けるため、「予算以下には
     // 何かあるが、この帯には無い」のか「予算以下に何も無い」のかを覚えておく

@@ -293,7 +293,7 @@ async function searchFromFirstStation(prefCode, dataRoot = previewDir, budget = 
   const alerts = [];
 
   const dom = new JSDOM(html, {
-    url: 'http://localhost/',
+    url: 'http://localhost/?debug=1',
     runScripts: 'dangerously',
     pretendToBeVisual: true,
     virtualConsole,

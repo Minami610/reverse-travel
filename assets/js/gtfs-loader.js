@@ -17,6 +17,8 @@
  *    これまでのloadAll()と同じ形のデータにまとめて返す。
  */
 
+import { debugLog } from './debug-log.js';
+
 /**
  * 1つ以上の地域（都道府県）のインデックス化済みスポットデータ
  * （{spotsIndex, spots, stations}、generate-spots-by-region.jsのbuildIndexedSpotsOutput参照）を
@@ -138,7 +140,7 @@ export class GTFSLoader {
     if (supportBadgeConfig) {
       window.EMBEDDED_SUPPORT_BADGE_CONFIG = supportBadgeConfig;
     }
-    console.log(`✅ 駅一覧をロード（${stationIndex.length}駅、公開中${publishedPrefectures.length}都道府県分）`);
+    debugLog(`✅ 駅一覧をロード（${stationIndex.length}駅、公開中${publishedPrefectures.length}都道府県分）`);
     return { stationIndex, adjacency, publishedPrefectures };
   }
 
@@ -243,12 +245,12 @@ export class GTFSLoader {
     this.spots = merged.spots;
     this.spotsByStation = merged.spotsByStation;
 
-    console.log(`✅ ${codesToFetch.length}都道府県分のデータをロード（累計: ${[...this.loadedPrefCodes].join(', ')}）`);
-    console.log(`  - ${this.stopsMetadata.length} 駅のメタデータ`);
-    console.log(`  - ${Object.keys(this.stations).length} 駅（クラスタリング後）`);
-    console.log(`  - ${Object.keys(this.routeInfo).length} 路線の情報`);
-    console.log(`  - ${Object.keys(this.spots).length} 件のスポット辞書`);
-    console.log(`  - ${Object.keys(this.spotsByStation).length} 駅のスポット参照`);
+    debugLog(`✅ ${codesToFetch.length}都道府県分のデータをロード（累計: ${[...this.loadedPrefCodes].join(', ')}）`);
+    debugLog(`  - ${this.stopsMetadata.length} 駅のメタデータ`);
+    debugLog(`  - ${Object.keys(this.stations).length} 駅（クラスタリング後）`);
+    debugLog(`  - ${Object.keys(this.routeInfo).length} 路線の情報`);
+    debugLog(`  - ${Object.keys(this.spots).length} 件のスポット辞書`);
+    debugLog(`  - ${Object.keys(this.spotsByStation).length} 駅のスポット参照`);
 
     return {
       fareData: this.fareData,
