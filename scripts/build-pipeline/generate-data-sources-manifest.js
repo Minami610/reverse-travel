@@ -109,7 +109,7 @@ export function generateDataSourcesManifest(options = {}) {
   }, {});
   const odptOrGtfsDataJpCount = feeds.filter((f) => ODPT_OR_GTFS_DATA_JP.has(f.source_category)).length;
 
-  // 対応地域（アプリ内マニュアルの「現在の対応地域」表示用）。build-prefecture.js
+  // 対応地域（アプリ内マニュアルの「出発地として対応している地域」表示用）。build-prefecture.js
   // 経由ではoptions.coverageで都道府県ごとの値を渡す。省略時は従来どおり
   // target-operators.json の phase1_region（香川県）をそのまま反映する。
   const coverage = options.coverage || {
