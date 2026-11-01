@@ -37,8 +37,10 @@ const JS_FILES = [
   'spot-finder.js',
   'route-formatter.js',
   'map-view.js',
+  'terrain-loader.js',
   'layout-controller.js',
   'favorites.js',
+  'onward-candidates.js',
   'main.js',
 ].map((f) => path.join(rootDir, 'assets/js', f));
 
@@ -78,6 +80,62 @@ export function assertBundleFresh(callerLabel) {
       `先に npm run bundle を実行してから再実行してください。`
     );
     process.exit(1);
+  }
+}
+
+/**
+ * dist/vendor/maplibre/・docs/vendor/maplibre/（bundle-html.jsがコピーした
+ * MapLibre GL JS本体と、3D地図の遅延読込モジュール3つ。インライン化せず
+ * 別ファイルとして遅延読込するため、dist/index.html自体の鮮度チェックでは
+ * 検出できない）が、それぞれのコピー元より古くないかを確認する
+ * （4本目①で追加、4本目②でgsi-dem-protocol.js等3ファイルを追加）。
+ * コピー先が存在しない（npm run bundleを一度も実行していない）場合は
+ * assertBundleFreshの「dist/index.htmlが無い」で先に止まるため、ここでは
+ * 存在するのに古い場合だけを見る。
+ *
+ * 【注意】ファイルごとに対応するコピー元とだけ比較すること（複数ファイル中の
+ * 最新mtimeとまとめて比較しない）。fs.copyFileSyncはコピー元ごとの個別の
+ * mtimeをそのまま引き継ぐため、取得・編集時刻が複数ファイル間でわずかでも
+ * ずれていると、片方のコピーが「もう片方の時刻」より古いというだけで
+ * 誤って「古い」と判定してしまう不具合が実際にあった
+ * （2026-10-10、ビルド直後のverify-layoutで発覚）。
+ */
+export function assertMaplibreVendorFresh(callerLabel) {
+  const maplibreSrcDir = path.join(rootDir, 'assets/vendor/maplibre');
+  const jsSrcDir = path.join(rootDir, 'assets/js');
+
+  // [コピー元ディレクトリ, [ファイル名...]] の組。ファイルごとに自分の
+  // コピー元とだけ比較する。
+  const groups = [
+    [maplibreSrcDir, ['maplibre-gl.js', 'maplibre-gl.css']],
+    [jsSrcDir, ['gsi-dem-protocol.js', 'terrain-map-view.js', 'gsi-dem-worker.js']],
+    [path.join(rootDir, 'assets/vendor/maplibre-gl-leaflet'), ['leaflet-maplibre-gl.js']], // 【43本目D】
+  ];
+
+  for (const outRoot of ['dist', 'docs']) {
+    const outDir = path.join(rootDir, outRoot, 'vendor/maplibre');
+    for (const [srcDir, files] of groups) {
+      for (const file of files) {
+        const srcPath = path.join(srcDir, file);
+        if (!fs.existsSync(srcPath)) continue;
+        const srcMtime = fs.statSync(srcPath).mtimeMs;
+        const outPath = path.join(outDir, file);
+        if (!fs.existsSync(outPath) || fs.statSync(outPath).mtimeMs < srcMtime) {
+          console.error(
+            `❌ ${callerLabel}: ${outRoot}/vendor/maplibre/${file} が無いか古い可能性があります。` +
+            `先に npm run bundle を実行してから再実行してください。`
+          );
+          process.exit(1);
+        }
+      }
+    }
+    // 【43本目D】下地の地図のスタイル
+    const styleSrc = path.join(rootDir, 'assets/vendor/gsi-vector/app-style.json');
+    const styleOut = path.join(rootDir, outRoot, 'vendor/gsi-vector/app-style.json');
+    if (fs.existsSync(styleSrc) && (!fs.existsSync(styleOut) || fs.statSync(styleOut).mtimeMs < fs.statSync(styleSrc).mtimeMs)) {
+      console.error(`❌ ${callerLabel}: ${outRoot}/vendor/gsi-vector/app-style.json が無いか古い可能性があります。先に npm run bundle を実行してください。`);
+      process.exit(1);
+    }
   }
 }
 

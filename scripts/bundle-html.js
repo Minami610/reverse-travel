@@ -35,6 +35,7 @@ const cssPath = path.join(rootDir, 'assets/css/style.css');
 const jsDir = path.join(rootDir, 'assets/js');
 const leafletCssPath = path.join(rootDir, 'assets/vendor/leaflet/leaflet.css');
 const leafletJsPath = path.join(rootDir, 'assets/vendor/leaflet/leaflet.js');
+const maplibreVendorDir = path.join(rootDir, 'assets/vendor/maplibre');
 const distDir = path.join(rootDir, 'dist');
 const distIndexPath = path.join(distDir, 'index.html');
 const docsDir = path.join(rootDir, 'docs');
@@ -110,6 +111,43 @@ async function bundleHTML() {
     fs.copyFileSync(distIndexPath, docsIndexPath);
     console.log(`✅ docs/index.html にコピー完了（GitHub Pages 配信用）`);
 
+    // 10. MapLibre GL JS（4本目①「3D地図の土台」）はLeafletと違いインライン化せず、
+    //    3D切替時だけ別の<script>/<link>として動的読み込みする（遅延読込、
+    //    3Dを使わない利用者のバンドルサイズを増やさないため）。そのため
+    //    dist/・docs/の両方にvendor/maplibre/としてそのままコピーする。
+    //    【2026-10-10、4本目②】gsi-dem-protocol.js・terrain-map-view.js・
+    //    gsi-dem-worker.jsも同様の理由（2Dの人のページを重くしない）で
+    //    インライン化をやめ、MapLibre本体と同じフォルダにそのままコピーする
+    //    （terrain-loader.jsがimport()で、gsi-dem-protocol.jsがWorker生成で、
+    //    それぞれ相対パスで参照するため同じフォルダに置く必要がある）。
+    //    この3ファイルは他のアプリJSと違い、importもexportも削除しない
+    //    （本物のESモジュールとしてそのまま動的importされるため）。
+    const maplibreOutDirs = [path.join(distDir, 'vendor/maplibre'), path.join(docsDir, 'vendor/maplibre')];
+    for (const outDir of maplibreOutDirs) {
+      fs.mkdirSync(outDir, { recursive: true });
+      for (const file of ['maplibre-gl.js', 'maplibre-gl.css']) {
+        fs.copyFileSync(path.join(maplibreVendorDir, file), path.join(outDir, file));
+      }
+      for (const file of ['gsi-dem-protocol.js', 'terrain-map-view.js', 'gsi-dem-worker.js']) {
+        fs.copyFileSync(path.join(jsDir, file), path.join(outDir, file));
+      }
+      // 【2026-10-21、43本目D】2DでもMapLibreで国土地理院のベクトル地図を描くための、Leaflet用の
+      // 橋渡し（@maplibre/maplibre-gl-leaflet 0.1.4、ISCライセンス、assets/vendor/maplibre-gl-leaflet/
+      // LICENSE）。MapLibre本体と同じく遅延読込のため、同じフォルダにコピーする。
+      fs.copyFileSync(path.join(rootDir, 'assets/vendor/maplibre-gl-leaflet/leaflet-maplibre-gl.js'), path.join(outDir, 'leaflet-maplibre-gl.js'));
+    }
+    // 【43本目D】下地の地図のスタイル（scripts/build-map-style.jsが作る、国土地理院のベクトル地図・
+    // 地図記号なし・アプリの色）。2D・3Dとも、地図を出すときに読み込む。
+    const mapStyleSrc = path.join(rootDir, 'assets/vendor/gsi-vector/app-style.json');
+    if (!fs.existsSync(mapStyleSrc)) throw new Error('assets/vendor/gsi-vector/app-style.json がありません（node scripts/build-map-style.js を実行してください）');
+    for (const outRoot of [distDir, docsDir]) {
+      const outDir = path.join(outRoot, 'vendor/gsi-vector');
+      fs.mkdirSync(outDir, { recursive: true });
+      fs.copyFileSync(mapStyleSrc, path.join(outDir, 'app-style.json'));
+    }
+    console.log('✅ 下地の地図のスタイル（vendor/gsi-vector/app-style.json）を dist/・docs/ にコピー完了');
+    console.log(`✅ MapLibre GL JS・3D地図の遅延読込モジュールを dist/・docs/ の vendor/maplibre/ にコピー完了（インライン化はしない）`);
+
     console.log(
       `\n📤 デプロイ準備完了:`
     );
@@ -137,8 +175,10 @@ async function generateInlineJSScript(jsDir) {
     'spot-finder.js',
     'route-formatter.js',
     'map-view.js',
+    'terrain-loader.js',
     'layout-controller.js',
     'favorites.js',
+    'onward-candidates.js',
     'main.js',
   ];
 

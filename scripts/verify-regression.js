@@ -41,7 +41,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { pathToFileURL } from 'url';
-import { assertBundleFresh } from './check-bundle-freshness.js';
+import { assertBundleFresh, assertMaplibreVendorFresh } from './check-bundle-freshness.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -159,6 +159,7 @@ async function main() {
   // dist/index.htmlの古さには影響されないが、「これが通ったから実際に
   // デプロイされるdist/index.htmlも最新」と誤解しないよう、ここでも確認する。
   assertBundleFresh('verify-regression');
+  assertMaplibreVendorFresh('verify-regression');
 
   if (!fs.existsSync(publishedConfigPath)) {
     throw new Error(`公開都道府県の一覧が見つかりません: ${publishedConfigPath}`);
