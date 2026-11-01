@@ -529,12 +529,15 @@ async function fetchWikipediaPageBatch(titles, titleToSpot) {
     pithumbsize: 300,
   });
 
-  const response = await fetchWithTimeout(`${WIKIPEDIA_API}?${params}`, {
+  // 【2026-11-02修正】POSTで送る。node-fetchのGETはWikimediaに403で拒まれるようになった（同じ内容でもPOST・
+  // Node標準のfetchは200）。失敗を警告だけで続けると紹介文0件のまま「ビルド完了」になるため、ビルドを止める。
+  const response = await fetchWithTimeout(WIKIPEDIA_API, {
+    method: 'POST',
     headers: { 'User-Agent': WIKIDATA_USER_AGENT },
+    body: params,
   }, REQUEST_TIMEOUT_MS, 'Wikipedia API(バッチ)');
   if (!response.ok) {
-    console.warn(`    ⚠️  Wikipediaバッチ取得失敗: HTTP ${response.status}`);
-    return;
+    throw new Error(`Wikipediaバッチ取得失敗: HTTP ${response.status}`);
   }
 
   const data = await response.json();
