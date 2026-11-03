@@ -81,8 +81,8 @@ const suspiciousConfirmedQidSet = new Set(
 );
 
 const WIKIDATA_SPARQL = 'https://query.wikidata.org/sparql';
-const WIKIDATA_USER_AGENT =
-  'reverse-travel/0.1.0 (contact: reverse-travel-maintainer)';
+// Wikimediaの決まりで、User-Agentにはアプリ名と連絡先（リポジトリのURL）を入れる（generate-spots.json.jsと同じ）。
+const WIKIDATA_USER_AGENT = 'michidokoro/1.0 (https://github.com/minami610/reverse-travel)';
 
 // 市区町村→都道府県 対応表（scripts/build-pipeline/generate-municipality-table.js で生成）。
 // 未生成の場合はnullのまま扱い、resolvePrefecture()は常にフォールバックを返す。

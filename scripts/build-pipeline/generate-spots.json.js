@@ -33,8 +33,10 @@ const excludedClassQids = spotConfig.excluded_classes.qids
 const WIKIDATA_SPARQL = 'https://query.wikidata.org/sparql';
 const WIKIPEDIA_API = 'https://ja.wikipedia.org/w/api.php';
 const PAGEVIEWS_API = 'https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/ja.wikipedia';
-const WIKIDATA_USER_AGENT =
-  'reverse-travel/0.1.0 (contact: reverse-travel-maintainer)';
+// Wikimediaの決まりで、User-Agentにはアプリ名と連絡先（ここではリポジトリのURL）を入れる。
+// 【2026-11-04】連絡先の無い旧UAは、node-fetchのGETでWikipediaに403で断られた。
+const WIKIMEDIA_USER_AGENT = 'michidokoro/1.0 (https://github.com/minami610/reverse-travel)';
+const WIKIDATA_USER_AGENT = WIKIMEDIA_USER_AGENT;
 const REQUEST_TIMEOUT_MS = 10000;
 export const REQUEST_INTERVAL_MS = 1100;
 const MAX_RETRIES = 4;
@@ -501,6 +503,8 @@ export async function enrichSpotWithWikipedia(spot) {
 
 // MediaWiki API の titles= パラメータは1リクエストで最大50件までまとめられる
 const WIKIPEDIA_BATCH_SIZE = 50;
+// extractsは1回20件までのため、50件なら3回で終わる。続きが止まらない異常に備えた上限。
+const MAX_WIKIPEDIA_CONTINUE_ROUNDS = 10;
 // pageviews API はバッチ非対応のため1件ずつ呼ぶ。バーストで429を連発すると
 // Retry-Afterの待機（実測30秒前後）が総時間を支配してしまうため、
 // あらかじめ429が出ない程度の定速（1件/秒強）で流す。
@@ -517,9 +521,14 @@ function extractPageTitle(spot) {
 /**
  * ページ本文・画像（extracts|pageimages|pageprops）を最大50件ずつまとめて取得する。
  * pageviewsはここでは取得しない（バッチ非対応のため別関数で定速取得する）。
+ *
+ * 【2026-11-04修正】extracts（exintro付き）は1回の応答で20件までしか本文を返さず、残りは続き（continue）に回る。
+ * 以前は続きをたどらず50件中20件にしか紹介文が付かなかったうえ、どの20件になるかがまとめる順番で変わり、
+ * 作り直すたびに紹介文の付く場所が入れ替わっていた（屋島・屋島寺の紹介文が消えた）。続きを最後まで
+ * たどり、全件の本文を取る。
  */
 async function fetchWikipediaPageBatch(titles, titleToSpot) {
-  const params = new URLSearchParams({
+  const baseParams = {
     action: 'query',
     format: 'json',
     titles: titles.join('|'),
@@ -527,39 +536,61 @@ async function fetchWikipediaPageBatch(titles, titleToSpot) {
     exintro: 1,
     explaintext: 1,
     pithumbsize: 300,
-  });
+  };
 
-  // 【2026-11-02修正】POSTで送る。node-fetchのGETはWikimediaに403で拒まれるようになった（同じ内容でもPOST・
-  // Node標準のfetchは200）。失敗を警告だけで続けると紹介文0件のまま「ビルド完了」になるため、ビルドを止める。
-  const response = await fetchWithTimeout(WIKIPEDIA_API, {
-    method: 'POST',
-    headers: { 'User-Agent': WIKIDATA_USER_AGENT },
-    body: params,
-  }, REQUEST_TIMEOUT_MS, 'Wikipedia API(バッチ)');
-  if (!response.ok) {
-    throw new Error(`Wikipediaバッチ取得失敗: HTTP ${response.status}`);
-  }
-
-  const data = await response.json();
-  // MediaWikiがタイトルを正規化する場合があるため、正規化前タイトルへ引き戻す対応表を作る
   const normalizedToOriginal = new Map();
-  for (const n of data.query?.normalized || []) {
-    normalizedToOriginal.set(n.to, n.from);
+  const extracts = new Map(); // 元のタイトル → 本文
+  const thumbnails = new Map(); // 元のタイトル → 画像のURL
+  const disambiguations = new Set();
+  let continueParams = {};
+
+  for (let round = 0; round < MAX_WIKIPEDIA_CONTINUE_ROUNDS; round += 1) {
+    // POSTで送る（50件分のタイトルでURLが長くなるため）。【2026-11-02】node-fetchのGETが403で拒まれた原因は
+    // User-Agent（連絡先の無い旧UA）で、WIKIMEDIA_USER_AGENTならGET・POSTとも通ることを確かめた。
+    // 失敗を警告だけで続けると紹介文0件のまま「ビルド完了」になるため、ビルドを止める。
+    const response = await fetchWithTimeout(WIKIPEDIA_API, {
+      method: 'POST',
+      headers: { 'User-Agent': WIKIMEDIA_USER_AGENT },
+      body: new URLSearchParams({ ...baseParams, ...continueParams }),
+    }, REQUEST_TIMEOUT_MS, 'Wikipedia API(バッチ)');
+    if (!response.ok) {
+      throw new Error(`Wikipediaバッチ取得失敗: HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (data.error) {
+      throw new Error(`Wikipediaバッチ取得失敗: ${data.error.code} ${data.error.info}`);
+    }
+    // MediaWikiがタイトルを正規化する場合があるため、正規化前タイトルへ引き戻す対応表を作る
+    for (const n of data.query?.normalized || []) {
+      normalizedToOriginal.set(n.to, n.from);
+    }
+    for (const page of Object.values(data.query?.pages || {})) {
+      const originalTitle = normalizedToOriginal.get(page.title) || page.title;
+      if (page.pageprops && 'disambiguation' in page.pageprops) disambiguations.add(originalTitle);
+      if (typeof page.extract === 'string') extracts.set(originalTitle, page.extract);
+      if (page.thumbnail?.source) thumbnails.set(originalTitle, page.thumbnail.source);
+    }
+
+    if (!data.continue) break;
+    if (round === MAX_WIKIPEDIA_CONTINUE_ROUNDS - 1) {
+      throw new Error(`Wikipediaバッチ取得失敗: 続き（continue）が${MAX_WIKIPEDIA_CONTINUE_ROUNDS}回で終わりませんでした`);
+    }
+    continueParams = data.continue;
+    await sleep(REQUEST_INTERVAL_MS);
   }
 
-  for (const page of Object.values(data.query?.pages || {})) {
-    const originalTitle = normalizedToOriginal.get(page.title) || page.title;
-    const spot = titleToSpot.get(originalTitle);
-    if (!spot) continue;
-
-    if (page.pageprops && 'disambiguation' in page.pageprops) {
-      console.warn(`    ⚠️  曖昧さ回避ページを検出、スキップ: ${spot.name} → ${originalTitle}`);
+  for (const [title, spot] of titleToSpot) {
+    if (!titles.includes(title)) continue;
+    if (disambiguations.has(title)) {
+      console.warn(`    ⚠️  曖昧さ回避ページを検出、スキップ: ${spot.name} → ${title}`);
       spot.is_disambiguation = true;
       continue;
     }
-    spot.description = page.extract || '';
-    if (page.thumbnail?.source && !isProblematicImage(page.thumbnail.source)) {
-      spot.image = page.thumbnail.source;
+    spot.description = extracts.get(title) || '';
+    const thumbnail = thumbnails.get(title);
+    if (thumbnail && !isProblematicImage(thumbnail)) {
+      spot.image = thumbnail;
     }
   }
 }
@@ -618,6 +649,13 @@ export async function enrichSpotsBatchWithWikipedia(spots, { fetchPageviews = fa
     const batch = titles.slice(i, i + WIKIPEDIA_BATCH_SIZE);
     await fetchWikipediaPageBatch(batch, titleToSpot);
     if (i + WIKIPEDIA_BATCH_SIZE < titles.length) await sleep(REQUEST_INTERVAL_MS);
+  }
+
+  // 紹介文が1件も取れないのは取得の失敗（2026-11-02、403で0件なのに「ビルド完了」になった）。
+  const describedCount = withArticle.filter((s) => s.description).length;
+  console.log(`  → 紹介文あり: ${describedCount}/${withArticle.length}件`);
+  if (withArticle.length > 0 && describedCount === 0) {
+    throw new Error(`Wikipediaの紹介文が${withArticle.length}件中0件です（取得の失敗として止めます）`);
   }
 
   if (!fetchPageviews) {
