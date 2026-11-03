@@ -807,15 +807,17 @@ async function captureMylistScreen(page, viewportLabel) {
 
 /**
  * ①応援マークありのカード全体・③曜日限定のカード全体（2026-10-10、2本目
- * 「便の少ない路線を応援」）。富山駅前→伏木万葉大橋（往復¥1600、2便/日・
+ * 「便の少ない路線を応援」）。富山駅前→伏木万葉大橋（往復¥2000、2便/日・
  * 月・金のみ、実データから確認済み）は応援マーク対象かつ曜日限定の両方を
  * 満たすため、①③は同一カードで兼ねる（Minami報告：撮るスポットと一致させる）。
+ * 【69】地鉄バスの2026-10-22版で小杉からの運賃が直り、往復¥1600→¥2000になったため、
+ * 検索する金額を¥2000にした（¥2000の帯でも1件目がこの場所で、曜日限定の文言・応援マークとも同じ）。
  * カード要素そのものをscreenshot()する（scrollIntoViewIfNeededしてから）。
  * 写真より下（マーク・説明枠・便数）まで写るようにするため、ページ全体ではなく
  * 要素単位のスクリーンショットにした。
  */
 async function captureSupportBadgeCardScreen(page, viewportLabel) {
-  await searchAt(page, '富山駅前', 1600);
+  await searchAt(page, '富山駅前', 2000);
   await showLargeListOnMobile(page); // 【59本目】スマホの小の一覧は横のカード（☆・共有・説明を出さない）。今までのカードの検証は大で行う
   const card = page.locator('.spot-card.spot-card-supported').first();
   const screenshotPath = path.join(screenshotDir, `support-badge-card-${viewportLabel}.png`);
@@ -937,11 +939,12 @@ async function captureOnwardSectionScreen(page, viewportLabel) {
 
 /**
  * 応援マーク（ハート）付きの「この先へ」候補の例（Minami指示8番）。
- * 富山駅前・往復¥1600・1件目の詳細（伏木万葉大橋）は、実データ確認済みで
- * 3件とも応援マーク対象（.onward-heart）が付く「すぐ近く」候補になる。
+ * 富山駅前・往復¥2000・1件目の詳細（伏木万葉大橋）は、実データ確認済みで
+ * 3件とも応援マーク対象（.onward-heart）が付く「すぐ近く」候補になる
+ * （【69】地鉄バスの運賃の修正で¥1600→¥2000に変えた）。
  */
 async function captureOnwardBadgeScreen(page, viewportLabel) {
-  await searchAt(page, '富山駅前', 1600);
+  await searchAt(page, '富山駅前', 2000);
   await showLargeListOnMobile(page); // 【59本目】スマホの小の一覧は横のカード（☆・共有・説明を出さない）。今までのカードの検証は大で行う
   await page.locator('.spot-card').first().click();
   await page.waitForSelector('#detail-content h2', { timeout: 15000 });
