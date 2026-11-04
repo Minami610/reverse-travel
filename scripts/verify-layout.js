@@ -8116,6 +8116,10 @@ async function checkRound56(browser, baseUrl, savedPaths) {
         await notCovered('#map-zoom-out', '地図の−', 'トップ画面');
         await notCovered('#about-data-btn', '「データ出典・免責」', 'トップ画面');
         // 出典（ⓘ）を開くと必須の表示3点（2D）
+        // 【69】ベクトル地図を描き終わるまでは淡色地図の画像タイルとその出典（「国土地理院」）を出す決まり。
+        // 開いて0.5秒で見ると、読み込みが遅いとき画像タイルの出典のままで落ちていた（2026-11-04の通しで3回）。
+        // 画像タイルが外れる（ベクトル地図に差し替わる）まで待ってから見る。
+        await page.waitForFunction(() => window.__mapViewForDebug && !window.__mapViewForDebug._rasterBaseLayer, { timeout: 15000 }).catch(() => {});
         const attrib = await page.evaluate(async () => {
           const el = document.querySelector('#spots-map .leaflet-control-attribution');
           if (!el) return { found: false };
