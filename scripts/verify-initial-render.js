@@ -32,7 +32,7 @@ import fs from 'fs';
 import path from 'path';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { fileURLToPath, pathToFileURL } from 'url';
-import { assertBundleFresh, assertSiteDataFresh } from './check-bundle-freshness.js';
+import { assertBundleFresh, assertSiteDataFresh, assertMaplibreVendorFresh } from './check-bundle-freshness.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, '..');
@@ -146,10 +146,10 @@ function buildExpectedCoverageText() {
   const manifest = JSON.parse(fs.readFileSync(dataSourcesPath, 'utf-8'));
   const prefectures = manifest.coverage?.prefectures;
   if (!Array.isArray(prefectures) || prefectures.length === 0) return null;
-  return `現在は${prefectures.join('・')}に対応しています。対応している路線は「出典の詳細」で確認できます。`;
+  return `出発地に選べるのは${prefectures.join('・')}の駅・停留所です。行き先は県外になることもあります。対応している路線は「データ出典・免責」で確認できます。`;
 }
 
-function stubFetch(window, { delayMsForPrefData = 0 } = {}) {
+function stubFetch(window, { delayMsForPrefData = 0, failPaths = [] } = {}) {
   window.fetch = async (url) => {
     const relPath = String(url).replace(/^\//, '');
     // 県データ（data/pref/配下）の読み込み中表示を検証するため、意図的に
@@ -157,6 +157,11 @@ function stubFetch(window, { delayMsForPrefData = 0 } = {}) {
     // 駅一覧（national/配下）は遅延させない＝オートコンプリート自体の検証を妨げない。
     if (delayMsForPrefData > 0 && /^data\/pref\//.test(relPath)) {
       await new Promise((r) => setTimeout(r, delayMsForPrefData));
+    }
+    // 特定ファイルだけをわざと404にする（failPaths、checkOptionalFileFailure参照）。
+    // 必須ファイルと追加機能用ファイルの切り分けを検証するために使う。
+    if (failPaths.some((pattern) => pattern.test(relPath))) {
+      return { ok: false, status: 404, json: async () => { throw new Error(`stubFetch(failPaths指定): ${relPath}`); } };
     }
     const filePath = path.join(docsDir, relPath);
     if (!fs.existsSync(filePath)) {
@@ -196,6 +201,10 @@ const MAX_BUDGET_FOR_CHECK = 2000;
 function formatBandLabel(budget) {
   return `¥${budget - BAND_WIDTH + 1}〜¥${budget}`;
 }
+/** 【51本目】main.jsのformatBandHeading()と同じ規則（例: budget=800・12件 → "¥601〜¥800 の場所　12か所"） */
+function formatBandHeading(budget, count) {
+  return `¥${(budget - BAND_WIDTH + 1).toLocaleString('ja-JP')}〜¥${budget.toLocaleString('ja-JP')} の場所　${count}か所`;
+}
 
 function stubMatchMedia(window, matches) {
   window.matchMedia = (query) => ({
@@ -210,6 +219,21 @@ function stubMatchMedia(window, matches) {
       return false;
     },
   });
+
+  // 【2026-10-11、6本目E】jsdomはscrollIntoView()を実装していない
+  // （レイアウトエンジンが無いため未実装。verify-layout.jsがPlaywrightを
+  // 使う理由と同じ制約）。showSpotDetail()の「この先への位置に戻る」で
+  // 呼んでおり、無いとTypeErrorでscriptエラーになる。本番のブラウザには
+  // 実装があるため、本番コード側で存在チェックを足す必要はなく、jsdom側の
+  // 環境の欠落をここで補う。実際のピクセル位置はjsdomでは検証できない
+  // （verify-layout.jsのPlaywright検証が担当）ため、「呼ばれた回数」を
+  // window.__scrollIntoViewCallsに記録し、scrollTo:'onward'の分岐が実際に
+  // 実行されたかどうかだけをjsdom側のテストで確認できるようにする。
+  if (typeof window.Element.prototype.scrollIntoView !== 'function') {
+    window.Element.prototype.scrollIntoView = function scrollIntoViewStub() {
+      window.__scrollIntoViewCalls = (window.__scrollIntoViewCalls || 0) + 1;
+    };
+  }
 }
 
 /** #search-form およびその祖先要素をルートまで辿り、display:noneのものを探す */
@@ -259,7 +283,8 @@ async function checkVisible(html, matches, label) {
   });
 
   const doc = window.document;
-  await waitFor(() => !/読み込み中/.test(doc.getElementById('app-footer')?.textContent || ''), 5000);
+  // 【56本目】フッターはやめた。出典の描画は、出典画面の件数の行（#about-feed-summary）が描画されるのを待つ。
+  await waitFor(() => !/読み込み中/.test(doc.getElementById('about-feed-summary')?.textContent || '読み込み中'), 5000);
 
   const searchForm = doc.getElementById('search-form');
 
@@ -288,35 +313,26 @@ async function checkVisible(html, matches, label) {
   const formOk = searchFormDisplay !== 'none' && hiddenAncestors.length === 0;
   console.log(formOk ? '✅ #search-form は表示状態です' : '❌ #search-form は非表示になっています');
 
-  // 応募条件で必須の表示3点（フッター）が、このレイアウト幅で実際に見える状態か。
-  // 「構文が通っても画面は壊れる」ため、DOM存在だけでなく祖先のdisplay:noneも辿る。
-  const footer = doc.getElementById('app-footer');
+  // 応募条件で必須の表示3点（出典・正確性の非保証・問い合わせ先）への入り口が、このレイアウト幅で実際に見える状態か。
+  // 【56本目、Minami決定：A'】フッターをやめ、トップの検索カードの下に「データ出典・免責」の1行をいつも置く
+  // （押すと出典画面。3点の中身は下の出典画面の検証で見る）。「構文が通っても画面は壊れる」ため、
+  // DOM存在だけでなく祖先のdisplay:noneも辿る。
+  const aboutLine = doc.getElementById('about-data-btn');
   let footerOk = false;
-  if (!footer) {
-    console.log('❌ #app-footer（必須表示3点）がDOM上に見つかりません');
+  if (!aboutLine) {
+    console.log('❌ 検索カードの「データ出典・免責」（#about-data-btn）がDOM上に見つかりません');
   } else {
-    const footerDisplay = window.getComputedStyle(footer).display;
-    const footerHiddenAncestors = findHiddenAncestors(window, footer);
-    const aboutBtn = doc.getElementById('about-data-btn');
-    // データ出典部分（#footer-data-sources）はマニフェストからJSが描画するため、
-    // 初期HTMLの「読み込み中…」プレースホルダーのまま残っていないかも確認する
-    // （残っていれば描画が走らなかった、または失敗した証拠）。
-    const footerSourcesRendered = !/読み込み中/.test(footer.textContent);
-    footerOk =
-      footerDisplay !== 'none' &&
-      footerHiddenAncestors.length === 0 &&
-      !!aboutBtn &&
-      /出典/.test(footer.textContent) &&
-      /保証されません/.test(footer.textContent) &&
-      footerSourcesRendered;
-    if (footerHiddenAncestors.length > 0) {
-      console.log('❌ #app-footer の非表示の祖先要素:');
-      footerHiddenAncestors.forEach((i) => console.log('  - ' + i));
+    const lineDisplay = window.getComputedStyle(aboutLine).display;
+    const lineHiddenAncestors = findHiddenAncestors(window, aboutLine);
+    footerOk = lineDisplay !== 'none' && lineHiddenAncestors.length === 0 && aboutLine.textContent.trim() === 'データ出典・免責';
+    if (lineHiddenAncestors.length > 0) {
+      console.log('❌ 「データ出典・免責」の非表示の祖先要素:');
+      lineHiddenAncestors.forEach((i) => console.log('  - ' + i));
     }
     console.log(
       footerOk
-        ? `✅ #app-footer（出典・免責・問い合わせ導線）は表示状態です: 「${footer.textContent.replace(/\s+/g, ' ').trim()}」`
-        : `❌ #app-footer が要件を満たしません（display=${footerDisplay}, about-btn=${!!aboutBtn}, 出典描画=${footerSourcesRendered}）`
+        ? `✅ トップの検索カードに「データ出典・免責」の1行が見えています（出典・免責・問い合わせへの入り口）`
+        : `❌ 「データ出典・免責」の1行が要件を満たしません（display=${lineDisplay}, 文言="${aboutLine.textContent.trim()}"）`
     );
   }
 
@@ -433,7 +449,7 @@ async function checkResultCards(html) {
   virtualConsole.forwardTo(console);
 
   const dom = new JSDOM(html, {
-    url: 'http://localhost/',
+    url: 'http://localhost/?debug=1',
     runScripts: 'dangerously',
     pretendToBeVisual: true,
     virtualConsole,
@@ -559,10 +575,11 @@ async function checkResultCards(html) {
 
   // 【2026-10-06 帯表示】結果の見出し（#results-band-heading）が
   // 「往復¥801〜¥1000で行ける場所」の形式で表示されているかを確認する。
+  // 【51本目】見出しを「¥801〜¥1,000 の場所　12か所」（金額帯と、一覧に出ているカードの数）に変えた。
   const searchedBudget = 1000; // この検索で使った予算（budget-input.valueと一致させること）
   const bandHeadingEl = doc.getElementById('results-band-heading');
   const bandHeadingText = bandHeadingEl?.textContent || '';
-  const expectedBandHeading = `往復${formatBandLabel(searchedBudget)}で行ける場所`;
+  const expectedBandHeading = formatBandHeading(searchedBudget, cards.length);
   const bandHeadingOk = !bandHeadingEl?.hidden && bandHeadingText === expectedBandHeading;
   console.log(
     bandHeadingOk
@@ -594,10 +611,32 @@ async function checkResultCards(html) {
   // 見つかりません」とだけ出て終わる画面は不親切なため、「ここからは往復¥Xから
   // 行けます」という案内を出すようにした（main.jsのbuildNoResultsMessage()）。
   // この組み合わせで実際に案内文が出ることを常設検証する。
+  // 【2026-10-24、51本目】アプリの名前「みちどころ」（見出し・副題・タブ・説明文）と、地図の色の説明
+  // （「● みちどころ」「● NEW」）・「NEW +◯」の札。検索した直後は今の金額＝検索した金額のため、
+  // オレンジ（NEW）は0か所で札は出ない（初めての検索）。
+  const nameChecks = {
+    h1: doc.querySelector('header h1')?.textContent.trim() === 'みちどころ',
+    subtitle: doc.querySelector('header .app-subtitle')?.textContent.trim() === '―近くの未知の場所を探そう―',
+    title: doc.title === 'みちどころ ―近くの未知の場所を探そう―',
+    description: (doc.querySelector('meta[name="description"]')?.getAttribute('content') || '').startsWith('みちどころ ―近くの未知の場所を探そう―'),
+    ogTitle: doc.querySelector('meta[property="og:title"]')?.getAttribute('content') === 'みちどころ ―近くの未知の場所を探そう―',
+    legendShown: doc.getElementById('map-legend')?.hidden === false,
+    legendText: (doc.getElementById('map-legend')?.textContent || '').replace(/\s+/g, '').startsWith('みちどころNEW'),
+    newTagHidden: doc.getElementById('map-new-count')?.hidden === true,
+    cardsNewHidden: [...doc.querySelectorAll('.spot-card .spot-card-new')].length === cards.length
+      && [...doc.querySelectorAll('.spot-card .spot-card-new')].every((el) => el.hidden),
+  };
+  const nameOk = Object.values(nameChecks).every(Boolean);
+  console.log(
+    nameOk
+      ? `✅ 名前「みちどころ」（見出し・副題・タブ・説明文）と、地図の色の説明（みちどころ／NEW）が出ています（検索直後のNEWは0か所で札なし）`
+      : `❌ 名前・色の説明の表示が想定と異なります: ${JSON.stringify(nameChecks)}`
+  );
+
   const noResultsOk = await checkNoResultsMessage(doc, window);
 
   window.close();
-  return ok && bandHeadingOk && bandRangeOk && noResultsOk;
+  return ok && bandHeadingOk && bandRangeOk && nameOk && noResultsOk;
 }
 
 /**
@@ -605,8 +644,8 @@ async function checkResultCards(html) {
  * 帯0件になる組み合わせ）で検索し、以下を確認する（2026-10-06、帯表示への変更に
  * 伴い全面的に書き換え）：
  * 1. 帯の見出し・0件の案内文が、どちらも想定どおりの帯（¥201〜¥400）を表すこと
- * 2. 「往復¥Xで探す」ボタンが1件以上出ること
- * 3. そのボタンを実際にクリックして検索すると、スポットが1件以上出ること
+ * 2. 【67本目】「往復¥Xで探す」ボタンは出ず、文で−・＋のどちらへ変えればよいかを伝えること
+ * 3. 文が案内した向きへ＋（または−）を押していくと、スポットが1件以上出ること
  *    （findNearestBudgetsWithResults()が「言うだけ」の案内をしていないことの確認）
  * 対象駅が見つからない、または（データ側の変化で）たまたま0件でなくなっていた場合は
  * このチェック自体をスキップする（0件になる特定の組み合わせに依存しすぎないため）。
@@ -652,50 +691,43 @@ async function checkNoResultsMessage(doc, window) {
 
   // 帯の見出しは0件でも表示されたままのはず
   const bandHeadingText = doc.getElementById('results-band-heading')?.textContent || '';
-  const expectedBandHeading = `往復${formatBandLabel(noResultsBudget)}で行ける場所`;
+  const expectedBandHeading = formatBandHeading(noResultsBudget, 0); // 【51本目】新しい見出しの形
   const bandHeadingOk = bandHeadingText === expectedBandHeading;
 
+  // 【67本目】「往復¥Xで探す」ボタンはやめ、−・＋のどちらへ変えればよいかを文で伝える
   const noResultsText = resultsList.querySelector('.no-results')?.textContent || '';
-  const expectedMessage = `往復${formatBandLabel(noResultsBudget)}で行ける場所は見つかりませんでした。`;
-  const messageOk = noResultsText === expectedMessage;
+  const band = formatBandLabel(noResultsBudget);
+  const hints = {
+    both: '−で金額を下げるか、＋で上げてみてください。',
+    down: '−で金額を下げてみてください。',
+    up: '＋で金額を上げてみてください。',
+  };
+  const dir = Object.keys(hints).find((k) => noResultsText === `${band} で行ける場所はありません。${hints[k]}`) || null;
+  const noButtons = resultsList.querySelectorAll('.budget-retry-btn, .no-results-actions').length === 0;
 
   console.log(
-    bandHeadingOk && messageOk
-      ? `✅ 0件案内文チェック: 見出し「${bandHeadingText}」・本文「${noResultsText}」とも想定どおりです`
-      : `❌ 0件案内文チェック: 見出し=${bandHeadingOk}["${bandHeadingText}"／期待"${expectedBandHeading}"] 本文=${messageOk}["${noResultsText}"／期待"${expectedMessage}"]`
+    bandHeadingOk && dir && noButtons
+      ? `✅ 0件案内文チェック: 見出し「${bandHeadingText}」・本文「${noResultsText}」とも想定どおりで、「往復¥Xで探す」ボタンは出ていません`
+      : `❌ 0件案内文チェック: 見出し=${bandHeadingOk}["${bandHeadingText}"／期待"${expectedBandHeading}"] 本文=${!!dir}["${noResultsText}"] ボタンなし=${noButtons}`
   );
-  if (!bandHeadingOk || !messageOk) return false;
+  if (!bandHeadingOk || !dir || !noButtons) return false;
 
-  // 上下いずれか近い「結果がある帯」のボタン（往復¥Xで探す）が出ているか
-  const retryButtons = [...resultsList.querySelectorAll('.budget-retry-btn')];
-  if (retryButtons.length === 0) {
-    console.log('❌ 0件案内文チェック: 「往復¥Xで探す」ボタンが1つも出ていません');
+  // 文が案内した向き（＋か−。両方なら＋）へ金額を変えていくと、実際に場所が出る（「言うだけ」になっていない）。
+  // ＋−は裏取得（¥2,000分）が終わってから一覧に効くため、押すたびに一覧が変わるまで待つ。
+  const btnId = dir === 'down' ? 'mobile-budget-decrement' : 'mobile-budget-increment';
+  let found = 0;
+  let pressed = 0;
+  for (; pressed < 18 && found === 0; pressed++) {
+    const before = resultsList.innerHTML;
+    doc.getElementById(btnId).dispatchEvent(new window.Event('click', { bubbles: true }));
+    await waitFor(() => doc.getElementById('results-list').innerHTML !== before && resultsSettled(doc), 4000);
+    found = resultsList.querySelectorAll('.spot-card').length;
+  }
+  if (found === 0) {
+    console.log(`❌ 0件案内文チェック: 文が案内した向き（${btnId}）へ${pressed}回変えても場所が出ませんでした（案内が実態と合っていません）`);
     return false;
   }
-  console.log(
-    `✅ 0件案内文チェック: 「往復¥Xで探す」ボタンが${retryButtons.length}件出ています` +
-    `（${retryButtons.map((b) => b.textContent).join('、')}）`
-  );
-
-  // ボタンが案内した予算が「言うだけ」になっていないか、実際にそのボタンを
-  // クリックして検索し、スポットが1件以上出ることを確認する（最初のボタンを使う）。
-  const retryBudget = retryButtons[0].getAttribute('data-budget');
-  const beforeHtml2 = resultsList.innerHTML;
-  retryButtons[0].dispatchEvent(new window.Event('click', { bubbles: true }));
-  const rendered2 = await waitFor(
-    () => doc.getElementById('results-list').innerHTML !== beforeHtml2 && resultsSettled(doc),
-    8000
-  );
-  if (!rendered2) {
-    console.log('❌ 0件案内文チェック: ボタン押下後も #results-list の内容が更新されませんでした（タイムアウト）');
-    return false;
-  }
-  const cardsAfterRetry = resultsList.querySelectorAll('.spot-card').length;
-  if (cardsAfterRetry === 0) {
-    console.log(`❌ 0件案内文チェック: ボタンが案内した往復¥${retryBudget}で実際に検索してもスポットが0件でした（案内が実態と合っていません）`);
-    return false;
-  }
-  console.log(`✅ 0件案内文チェック: ボタンが案内した往復¥${retryBudget}で実際に検索すると${cardsAfterRetry}件のスポットが出ました`);
+  console.log(`✅ 0件案内文チェック: 文が案内した向き（${btnId}）へ${pressed}回変えると${found}件の場所が出ました`);
   return true;
 }
 
@@ -775,6 +807,158 @@ async function checkLoadingState(html) {
 }
 
 /**
+ * 【2026-10-11追加】route-sequences.json（「この先へ」の「同じ路線の先」専用、
+ * 検索そのものには不要）が404でも、検索自体は通ることを確認する。
+ * 実際にdocs/への書き出し漏れで、この1ファイルの404のせいで県まるごと
+ * スキップされ検索が全滅する事故があった（gtfs-loader.jsのloadPrefectures()が
+ * 7ファイルをPromise.allで並行fetchしており、1つでも404だと県ごとcatchされて
+ * いたため）。必須ファイルと追加機能用ファイルを分離した修正の回帰防止。
+ */
+async function checkOptionalFileFailureStillSearches(html) {
+  console.log('\n=== route-sequences.json（追加機能用）が404でも検索が通るかのチェック ===');
+  const errors = [];
+  const alerts = [];
+
+  const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'dangerously', pretendToBeVisual: true });
+  const { window } = dom;
+  stubMatchMedia(window, true);
+  stubFetch(window, { failPaths: [/route-sequences\.json$/] });
+  window.alert = (msg) => alerts.push(msg);
+  window.addEventListener('error', (e) => errors.push(e.error ? (e.error.stack || e.error.message) : e.message));
+
+  await new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 50);
+    if (window.document.readyState === 'complete') done();
+    else window.addEventListener('load', done);
+  });
+  const doc = window.document;
+
+  const item = await waitForSuggestion(doc, window, '高松築港', '高松築港');
+  if (!item) {
+    console.log('❌ 検証用の出発駅「高松築港」の候補が見つかりません');
+    window.close();
+    return false;
+  }
+  item.dispatchEvent(new window.Event('click', { bubbles: true }));
+  doc.getElementById('budget-input').value = '1000';
+  doc.getElementById('search-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+
+  const rendered = await waitFor(
+    () => doc.getElementById('results-list').querySelectorAll('.spot-card').length > 0,
+    10000
+  );
+  const cardCount = doc.getElementById('results-list').querySelectorAll('.spot-card').length;
+  console.log(
+    rendered
+      ? `✅ route-sequences.jsonが404でも検索が通り、カードが表示されました（${cardCount}件）`
+      : '❌ route-sequences.jsonが404のとき検索結果が表示されませんでした'
+  );
+  console.log(
+    alerts.length === 0
+      ? '✅ route-sequences.json失敗時にアラートは出ていません'
+      : `❌ アラートが出ました: ${JSON.stringify(alerts)}`
+  );
+
+  if (errors.length > 0) {
+    console.log('⚠️  ページ実行中に発生したエラー:');
+    errors.forEach((e) => console.log('  - ' + e));
+  }
+
+  window.close();
+  return rendered && alerts.length === 0 && errors.length === 0;
+}
+
+/**
+ * 【2026-10-11追加】検索に必須のファイル（例: stations.json）が404のとき、
+ * ブラウザのalert()を出さず、結果欄に穏やかな文言＋再試行ボタンを出すことを
+ * 確認する（Minami指示：alertをやめる。以前はalert('データの読み込みに
+ * 失敗しました。ページを再読み込みしてください。')を出していた）。
+ * 再試行ボタンを押すと（必須ファイルの404が解消していれば）検索が成功することも
+ * あわせて確認する。
+ */
+async function checkRequiredFileFailureShowsGentleMessage(html) {
+  console.log('\n=== 必須ファイルが404のときアラートを出さず穏やかな文言＋再試行ボタンを出すかのチェック ===');
+  const errors = [];
+  const alerts = [];
+  let failStations = true;
+
+  const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'dangerously', pretendToBeVisual: true });
+  const { window } = dom;
+  stubMatchMedia(window, true);
+  window.fetch = async (url) => {
+    const relPath = String(url).replace(/^\//, '');
+    if (failStations && /^data\/pref\/.*\/stations\.json$/.test(relPath)) {
+      return { ok: false, status: 404, json: async () => { throw new Error(`stubFetch(わざと404): ${relPath}`); } };
+    }
+    const filePath = path.join(docsDir, relPath);
+    if (!fs.existsSync(filePath)) {
+      return { ok: false, status: 404, json: async () => { throw new Error(`stubFetch: ${relPath} not found`); } };
+    }
+    const text = fs.readFileSync(filePath, 'utf-8');
+    return { ok: true, status: 200, json: async () => JSON.parse(text) };
+  };
+  window.alert = (msg) => alerts.push(msg);
+  window.addEventListener('error', (e) => errors.push(e.error ? (e.error.stack || e.error.message) : e.message));
+
+  await new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 50);
+    if (window.document.readyState === 'complete') done();
+    else window.addEventListener('load', done);
+  });
+  const doc = window.document;
+
+  const item = await waitForSuggestion(doc, window, '高松築港', '高松築港');
+  if (!item) {
+    console.log('❌ 検証用の出発駅「高松築港」の候補が見つかりません');
+    window.close();
+    return false;
+  }
+  item.dispatchEvent(new window.Event('click', { bubbles: true }));
+  doc.getElementById('budget-input').value = '1000';
+  doc.getElementById('search-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+
+  const gentleMessageShown = await waitFor(
+    () => /うまく読み込めませんでした/.test(doc.getElementById('results-list').textContent),
+    10000
+  );
+  const retryBtn = doc.querySelector('.search-retry-btn');
+  console.log(
+    gentleMessageShown && retryBtn
+      ? '✅ 必須ファイル404時、結果欄に穏やかな文言と再試行ボタンが表示されました'
+      : `❌ 想定と異なります（文言表示=${gentleMessageShown}, 再試行ボタン=${!!retryBtn}）`
+  );
+  console.log(
+    alerts.length === 0
+      ? '✅ 必須ファイル404時もアラートは出ていません'
+      : `❌ アラートが出ました: ${JSON.stringify(alerts)}`
+  );
+
+  // 再試行：404を解消してからボタンを押すと検索が成功することを確認する
+  let retrySucceeded = false;
+  if (retryBtn) {
+    failStations = false;
+    retryBtn.dispatchEvent(new window.Event('click', { bubbles: true }));
+    retrySucceeded = await waitFor(
+      () => doc.getElementById('results-list').querySelectorAll('.spot-card').length > 0,
+      10000
+    );
+  }
+  console.log(
+    retrySucceeded
+      ? '✅ 再試行ボタンを押すと（404解消後）検索が成功しました'
+      : '❌ 再試行ボタンを押しても検索が成功しませんでした'
+  );
+
+  if (errors.length > 0) {
+    console.log('⚠️  ページ実行中に発生したエラー:');
+    errors.forEach((e) => console.log('  - ' + e));
+  }
+
+  window.close();
+  return gentleMessageShown && !!retryBtn && alerts.length === 0 && retrySucceeded && errors.length === 0;
+}
+
+/**
  * 乗換の表示が事実に合っているかを確認する（2026-10-05追加）：
  * 1. 乗換の注記が「※乗り換えの待ち時間は、運行本数から見積もった目安です」に
  *    なっていること（以前の「※乗換の待ち時間は考慮していません」は、選定ロジック
@@ -824,7 +1008,13 @@ async function checkTransferDisplay(html) {
   let distanceExampleText = null;
 
   for (const card of cards) {
+    const cardSpotName = card.querySelector('h3')?.textContent || '';
     card.dispatchEvent(new window.Event('click', { bubbles: true }));
+    // 【2026-10-10追記】showSpotDetail()が「この先へ」候補の計算のため非同期になった
+    // （3本目）。クリック直後に同期でinnerHTMLを読むと、非同期処理が終わる前の
+    // 古い内容（前のカードの詳細、または空）を読んでしまうため、このカード自身の
+    // 名前が見出しに現れるまで待つ。
+    await waitFor(() => doc.getElementById('detail-content').querySelector('h2')?.textContent === cardSpotName, 3000);
     const detailHtml = doc.getElementById('detail-content').innerHTML;
     if (/乗り換えの待ち時間は、運行本数から見積もった目安です/.test(detailHtml)) {
       disclaimerFound = true;
@@ -1276,7 +1466,8 @@ async function checkDepartureMismatchGuard(html) {
  * 0件のときも「見つかりませんでした」と出ると「どこにも行けない」と誤読される）。
  * 魚津駅前は、行ける範囲の運賃がすべて¥800以下に収まる既知の基準駅
  * （config/regression-baseline.json参照）のため、往復¥1000で検索すると
- * 「この駅からは、往復¥800以下で行ける場所しかありません。」が出るはず。
+ * 「この駅からは、往復¥800以下で行ける場所しかありません。」が出るはず（67本目から「¥801〜¥1,000 で行ける
+ * 場所はありません。−で金額を下げてみてください。」）。
  */
 /**
  * 【2026-10-07拡張】Cowork（Minamiさん）が公開ページで確認した事例は「電鉄魚津駅前」
@@ -1326,7 +1517,9 @@ async function checkPartialBandMessage(html, stationName = '魚津駅前') {
   }
 
   const noResultsText = resultsList.querySelector('.no-results')?.textContent || '';
-  const expectedText = 'この駅からは、往復¥800以下で行ける場所しかありません。';
+  // 【67本目】文を「−・＋のどちらへ変えればよいか」に変えた。安い方にだけ場所があるので「−で下げて」と出る
+  // （「どこにも行けない」と読まれないという10-07の狙いは、この文でも守る）
+  const expectedText = '¥801〜¥1,000 で行ける場所はありません。−で金額を下げてみてください。';
   const ok = noResultsText === expectedText;
   console.log(
     ok
@@ -1370,8 +1563,12 @@ async function checkSearchButtonState(html) {
   });
   const doc = window.document;
   const searchBtn = doc.getElementById('search-btn');
-  const isPending = () => searchBtn.classList.contains('search-btn-pending') && searchBtn.textContent === 'この条件で検索';
-  const isDefault = () => !searchBtn.classList.contains('search-btn-pending') && searchBtn.textContent === '検索';
+  // 【56本目】文言は見本どおりいつも「この条件で探す」。まだこの条件で検索していないことは色（.search-btn-pending）で伝える。
+  // 【57本目】色だけで伝えないよう、ボタンのすぐ上の「条件が変わりました」（#search-pending-note）も一緒に出し入れする。
+  const note = doc.getElementById('search-pending-note');
+  const noteShown = () => !!note && !note.hidden && note.textContent.trim() === '条件が変わりました';
+  const isPending = () => searchBtn.classList.contains('search-btn-pending') && searchBtn.textContent === 'この条件で探す' && noteShown();
+  const isDefault = () => !searchBtn.classList.contains('search-btn-pending') && searchBtn.textContent === 'この条件で探す' && !!note && note.hidden;
 
   const item = await waitForSuggestion(doc, window, '高松築港', '高松築港');
   if (!item) {
@@ -1388,7 +1585,7 @@ async function checkSearchButtonState(html) {
   console.log(
     initialOk
       ? '✅ 検索直後はボタンが既定の見た目（「検索」）です'
-      : `❌ 検索直後のボタンの見た目が想定と異なります（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}）`
+      : `❌ 検索直後のボタンの見た目が想定と異なります（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}, 条件が変わりました=${noteShown()}）`
   );
 
   // 1. 予算を変える（検索はしない）→ 強調表示になること
@@ -1397,7 +1594,7 @@ async function checkSearchButtonState(html) {
   console.log(
     pendingAfterBudgetChange
       ? '✅ 予算を変えて検索せずにいると、ボタンが「この条件で検索」（強調表示）になりました'
-      : `❌ 予算を変えてもボタンが強調表示になりません（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}）`
+      : `❌ 予算を変えてもボタンが強調表示になりません（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}, 条件が変わりました=${noteShown()}）`
   );
 
   // 2. その状態で検索する → 既定の見た目に戻ること
@@ -1407,7 +1604,7 @@ async function checkSearchButtonState(html) {
   console.log(
     revertedAfterSearch
       ? '✅ 検索すると、ボタンが既定の見た目（「検索」）に戻りました'
-      : `❌ 検索してもボタンが既定の見た目に戻りません（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}）`
+      : `❌ 検索してもボタンが既定の見た目に戻りません（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}, 条件が変わりました=${noteShown()}）`
   );
 
   // 3. 予算を変えてから、最後に検索した値（¥1000）に戻す → 既定のままであること
@@ -1417,7 +1614,7 @@ async function checkSearchButtonState(html) {
   console.log(
     revertedAfterUndo
       ? '✅ 予算を変えても、最後に検索した値に戻すとボタンは既定のままです'
-      : `❌ 最後に検索した値に戻してもボタンが強調表示のままです（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}）`
+      : `❌ 最後に検索した値に戻してもボタンが強調表示のままです（文言="${searchBtn.textContent}", pending=${searchBtn.classList.contains('search-btn-pending')}, 条件が変わりました=${noteShown()}）`
   );
 
   if (errors.length > 0) {
@@ -1483,25 +1680,30 @@ async function checkFavoriteCardToggle(html) {
   // マイリスト画面の×ボタンだけに使うため、詳細画面は「保存済み」「マイリストに保存」
   // （aria-labelは「マイリストから外す」）を使う。
   firstCard.dispatchEvent(new window.Event('click', { bubbles: true }));
+  // 【2026-10-10追記】showSpotDetail()が「この先へ」候補計算のため非同期になった
+  // （3本目）。クリック直後の同期読み取りだと描画前（ボタン未生成）を読んでしまうため待つ。
+  await waitFor(() => !!doc.querySelector('.detail-favorite-btn'), 3000);
   const detailFavBtn = doc.querySelector('.detail-favorite-btn');
+  // 【66本目】詳細の☆は名前の行の右の小さなアイコンボタンになり、文言は出さない（状態はaria-label・aria-pressedで伝える）
   const detailShowsActive = !!detailFavBtn?.classList.contains('favorite-btn-active') &&
-    detailFavBtn?.textContent.trim() === '保存済み' &&
+    detailFavBtn?.getAttribute('aria-pressed') === 'true' &&
     detailFavBtn?.getAttribute('aria-label') === 'マイリストから外す';
   console.log(
     detailShowsActive
       ? '✅ 詳細画面でも同じスポットが「保存済み」として表示されます（aria-labelは「マイリストから外す」）'
-      : `❌ 詳細画面の☆ボタンに保存状態が反映されていません（文言="${detailFavBtn?.textContent.trim()}", aria-label="${detailFavBtn?.getAttribute('aria-label')}"）`
+      : `❌ 詳細画面の☆ボタンに保存状態が反映されていません（aria-pressed="${detailFavBtn?.getAttribute('aria-pressed')}", aria-label="${detailFavBtn?.getAttribute('aria-label')}"）`
   );
 
   // 詳細画面の☆を押して解除
   detailFavBtn.dispatchEvent(new window.Event('click', { bubbles: true }));
   const countAfterRemove = doc.getElementById('mylist-count')?.textContent;
-  const detailShowsInactive = detailFavBtn.textContent.trim() === 'マイリストに保存' &&
+  const detailShowsInactive = !detailFavBtn.classList.contains('favorite-btn-active') &&
+    detailFavBtn.getAttribute('aria-pressed') === 'false' &&
     detailFavBtn.getAttribute('aria-label') === 'マイリストに保存';
   console.log(
     countAfterRemove === '0' && detailShowsInactive
-      ? '✅ 詳細画面から解除すると、件数が0に戻り文言も「マイリストに保存」に戻ります'
-      : `❌ 詳細画面からの解除が反映されません（count=${countAfterRemove}, 文言="${detailFavBtn.textContent.trim()}"）`
+      ? '✅ 詳細画面から解除すると、件数が0に戻りaria-labelも「マイリストに保存」に戻ります'
+      : `❌ 詳細画面からの解除が反映されません（count=${countAfterRemove}, aria-label="${detailFavBtn.getAttribute('aria-label')}"）`
   );
 
   const allOk = activeAfterFirstClick && countAfterFirstClick === '1' && detailShowsActive &&
@@ -1568,13 +1770,24 @@ async function checkSharedSpotBandBypass(html) {
       : `❌ 予算欄が想定と異なります（実際: ¥${budgetValue} / 期待: ¥1800）`
   );
 
-  // 「← 一覧に戻る」で、このスポットを含む一覧に戻れること
-  doc.getElementById('back-btn').dispatchEvent(new window.Event('click', { bubbles: true }));
-  const backToList = doc.getElementById('app-layout')?.getAttribute('data-view') === 'results';
+  // 【2026-10-11、6本目E】旧「← 一覧に戻る」ボタンは「見てきた場所」の足あと
+  // 表示に置き換わった。共有リンクから開いた詳細は履歴が空のため、足あとは
+  // 「一覧 ＞ その場所」の2項目のみになる（Minami決定：共有リンク・マイリスト
+  // から開いたときは「一覧 ＞ その場所」から始める）。
+  const breadcrumbItemCount = doc.querySelectorAll('#detail-breadcrumb [data-history-index], #detail-breadcrumb .breadcrumb-current').length;
+  const breadcrumbFresh = breadcrumbItemCount === 1; // 【66本目】今の場所の名前は足あとに出さない（「← 一覧」だけ）
+  console.log(
+    breadcrumbFresh
+      ? '✅ 共有リンクから開いた詳細の足あとは「← 一覧」の1項目のみでした'
+      : `❌ 共有リンクから開いた詳細の足あとの項目数が想定と異なります（実際 ${breadcrumbItemCount}件、期待1件）`
+  );
+
+  doc.querySelector('.breadcrumb-list-link').dispatchEvent(new window.Event('click', { bubbles: true }));
+  const backToList = await waitFor(() => doc.getElementById('app-layout')?.getAttribute('data-view') === 'results', 3000);
   const cardIncluded = !!doc.querySelector(`.spot-card[data-spot-id="${qid}"]`);
   console.log(
     backToList && cardIncluded
-      ? '✅ 「← 一覧に戻る」で、このスポットを含む一覧に戻れました'
+      ? '✅ 足あとの「一覧」で、このスポットを含む一覧に戻れました'
       : `❌ 一覧に戻ってもこのスポットが含まれていません（戻った=${backToList}, 含まれる=${cardIncluded}）`
   );
 
@@ -2059,7 +2272,8 @@ async function checkFeedVersionShortening(html) {
     else window.addEventListener('load', done);
   });
   const doc = window.document;
-  await waitFor(() => !/読み込み中/.test(doc.getElementById('app-footer')?.textContent || ''), 5000);
+  // 【56本目】フッターはやめた。出典の描画は、出典画面の件数の行（#about-feed-summary）が描画されるのを待つ。
+  await waitFor(() => !/読み込み中/.test(doc.getElementById('about-feed-summary')?.textContent || '読み込み中'), 5000);
   doc.getElementById('about-data-btn')?.dispatchEvent(new window.Event('click', { bubbles: true }));
   await waitFor(() => (doc.getElementById('about-feed-list')?.querySelectorAll('li').length || 0) > 0, 5000);
 
@@ -2273,6 +2487,388 @@ async function checkOperatorClassification() {
   return ok;
 }
 
+/**
+ * 「この先へ」機能（2026-10-10、3本目。feature/kono-sakiブランチ）を検証する。
+ * 構造的な検証にとどめる（特定のスポット名をハードコードしない）。今後データが
+ * 作り直されても通り続けるようにするため。
+ * 1. 詳細画面に.onward-cardが0〜3件表示され、運賃表記が「+¥数字」の形になっている
+ * 2. 候補をクリックすると、その候補の詳細画面に切り替わる
+ * 3. 戻るボタンで、一覧にではなく元のスポットの詳細画面に1回で戻る（履歴スタック）
+ * 4. その状態でもう一度戻るボタンを押すと、一覧に戻る（履歴が空になった後の通常動作）
+ */
+/**
+ * 「この先へ」候補選定ロジック（onward-candidates.js）の合成データ検証（2026-10-10、
+ * Minami指摘の修正指示6番）。実データ・DOMを使わず、関数を直接呼ぶ。
+ * - 循環線・枝分かれで方向を誤判定しないこと（同じ路線の手前の駅を「先」としない。
+ *   1つの停車パターンに無くても別パターンにあれば「先」と判定できること）
+ * - 合計運賃が常に¥2000（ONWARD_MAX_FARE）以下であること（呼び出し元がより大きい
+ *   maxBudgetを渡しても、ここで明示的に上限を適用すること）
+ * - 「すぐ近く」は徒歩20分以内のみであること
+ */
+/**
+ * 地理院標高タイルのデコード・terrarium再エンコード（gsi-dem-protocol.js）を
+ * 合成データで検証する（2026-10-10、4本目①「3D地図の土台」。最重要項目）。
+ * ブラウザ・WebGL不要の純粋関数テストのため、ネットワーク・GPUが無い環境でも
+ * 実行できる（verify-layout.js側のPlaywrightテストとは独立した二重の安全網）。
+ */
+async function checkGsiDemProtocolMath() {
+  console.log('\n=== 地理院標高タイルのデコード・terrarium再エンコード（合成データ）の検証 ===');
+  const { decodeGsiElevation, encodeTerrariumElevation } = await import(toEngineModuleUrl('assets/js/gsi-dem-protocol.js'));
+  let ok = true;
+
+  // 1) データなし（R=128,G=0,B=0、x=2^23）は0mとして扱う
+  const nodataOk = decodeGsiElevation(128, 0, 0) === 0;
+  ok = ok && nodataOk;
+  console.log(nodataOk ? '✅ データなし(R=128,G=0,B=0)は0mとして扱われる' : `❌ データなしの扱いに失敗（結果=${decodeGsiElevation(128, 0, 0)}）`);
+
+  // 2) 代表的な標高の符号化→復号の往復チェック（0m・正の標高・負の標高・3003m級）
+  const encodeGsi = (h) => {
+    const x = h >= 0 ? Math.round(h / 0.01) : Math.round(h / 0.01) + 16777216;
+    return [Math.floor(x / 65536), Math.floor((x % 65536) / 256), x % 256];
+  };
+  const roundTripCases = [0, 10, 100, -5, -0.01, 3003];
+  const roundTripOk = roundTripCases.every((h) => {
+    const [r, g, b] = encodeGsi(h);
+    const decoded = decodeGsiElevation(r, g, b);
+    return Math.abs(decoded - h) < 0.01;
+  });
+  ok = ok && roundTripOk;
+  console.log(roundTripOk
+    ? `✅ 地理院符号化の往復チェックが一致する（${roundTripCases.join('m, ')}m）`
+    : '❌ 地理院符号化の往復チェックに失敗した組み合わせがある');
+
+  // 3) 負の標高が「2^23を境にした折り返し」で正しく復元できる（旧実装のバグ：
+  //    223/224という桁の並びを閾値と誤認しており、この折り返し自体が無かった）
+  const negativeOk = Math.abs(decodeGsiElevation(255, 254, 12) - -5) < 0.01;
+  ok = ok && negativeOk;
+  console.log(negativeOk
+    ? '✅ 負の標高（海面下）が2^23を境にした折り返しで正しく復元される'
+    : `❌ 負の標高の復元に失敗（結果=${decodeGsiElevation(255, 254, 12)}、期待値=-5）`);
+
+  // 4) terrarium再エンコードの往復チェック（MapLibreのencoding:'terrarium'が
+  //    復号する式 h=R*256+G+B/256-32768 の逆関数として正しいか）
+  const terrariumOk = [0, 10, -5, 3003, -0.01].every((h) => {
+    const [r, g, b] = encodeTerrariumElevation(h);
+    const back = (r * 256 + g + b / 256) - 32768;
+    return Math.abs(back - h) < 0.01;
+  });
+  ok = ok && terrariumOk;
+  console.log(terrariumOk
+    ? '✅ terrarium再エンコードの往復チェックが一致する'
+    : '❌ terrarium再エンコードの往復チェックに失敗した組み合わせがある');
+
+  return ok;
+}
+
+async function checkOnwardCandidateSynthetic() {
+  console.log('\n=== 「この先へ」候補選定ロジック（onward-candidates.js）の合成データ検証 ===');
+  const { buildOnwardCandidates } = await import(toEngineModuleUrl('assets/js/onward-candidates.js'));
+  let ok = true;
+
+  const mkSpot = (id, stationId, lat, lon, fare = 400) => ({
+    id, name: id, source_station_id: stationId, source_round_trip_fare: fare,
+    source_reach_by: 'direct', source_via_operator: 'op', latitude: lat, longitude: lon,
+  });
+
+  // --- 1a) 枝分かれ（複数の停車パターン）で、別パターンにしかない先の駅を
+  //     誤って除外しないこと（この回の本題：旧方式「代表1本だけ採用」が持っていた
+  //     誤除外リスクの回帰確認）---
+  // 路線'op:BRANCH'に2つの停車パターン：S1→S2→S3（系統1）、S1→S2→S4（系統2、S3を通らない分岐）
+  const routeSequencesBranch = {
+    'op:BRANCH': [
+      ['op:S1', 'op:S2', 'op:S3'],
+      ['op:S1', 'op:S2', 'op:S4'],
+    ],
+  };
+  // routeDetailsは実データ同様、出発駅から「現在地」だけでなく各候補駅への
+  // エントリも持つ（resolveLastLegは候補側の「最後の区間」も検証するため必要）
+  const routeDetailsBranch = {
+    'op:S1': {
+      'op:S2': { op: ['op:BRANCH', 10, 5, 31, 0] },
+      'op:S3': { op: ['op:BRANCH', 15, 5, 31, 0] },
+      'op:S4': { op: ['op:BRANCH', 18, 5, 31, 0] },
+    },
+  };
+  const curBranch = mkSpot('cur-branch', 'op:S2', 34.0, 134.0);
+  const aheadS3 = mkSpot('ahead-s3', 'op:S3', 35.0, 135.0); // 系統1だけに登場
+  const aheadS4 = mkSpot('ahead-s4', 'op:S4', 35.1, 135.1); // 系統2だけに登場
+  const branchCandidates = buildOnwardCandidates(
+    { routeDetails: routeDetailsBranch, routeSequences: routeSequencesBranch, departureStationId: 'op:S1', allSpots: [curBranch, aheadS3, aheadS4], maxBudget: 2000 },
+    curBranch
+  );
+  const branchIds = branchCandidates.map((c) => c.spot.id).sort();
+  const branchOk = ['ahead-s3', 'ahead-s4'].every((id) => branchIds.includes(id)) && branchCandidates.every((c) => c.type === 'same-route');
+  ok = ok && branchOk;
+  console.log(branchOk
+    ? '✅ 枝分かれ（系統違い）でも、別パターンにしかない先の駅を正しく「同じ路線の先」として拾います'
+    : `❌ 枝分かれパターンの統合に失敗（候補=${JSON.stringify(branchIds)}）`);
+
+  // --- 1b) 循環線・双方向路線（同じroute_idを両方向が使う）で、手前の駅を
+  //     「先」と誤判定しないこと（実際に香川・高松築港→大麻山で見つかった実バグの再現：
+  //     手前の「仏生山」が「+¥-740」＝運賃が今より安いのに「先」と表示された）---
+  const routeSequencesBidir = {
+    'rail:LINE': [
+      ['st:TAKAMATSU', 'st:BUSSHOZAN', 'st:OOMASAN'], // 上り
+      ['st:OOMASAN', 'st:BUSSHOZAN', 'st:TAKAMATSU'], // 下り（同じroute_id）
+    ],
+  };
+  const routeDetailsBidir = {
+    'st:TAKAMATSU': {
+      'st:BUSSHOZAN': { rail: ['rail:LINE', 10, 5, 31, 0] },
+      'st:OOMASAN': { rail: ['rail:LINE', 20, 5, 31, 0] },
+    },
+  };
+  const curBidir = { id: 'cur-bidir', name: '仏生山相当', source_station_id: 'st:BUSSHOZAN', source_round_trip_fare: 400, source_reach_by: 'direct', source_via_operator: 'rail', latitude: 34.3, longitude: 134.0 };
+  const aheadOomasan = { id: 'ahead-oomasan', name: '大麻山相当', source_station_id: 'st:OOMASAN', source_round_trip_fare: 740, source_reach_by: 'direct', source_via_operator: 'rail', latitude: 34.4, longitude: 134.1 };
+  const behindTakamatsu = { id: 'behind-takamatsu', name: '高松築港相当', source_station_id: 'st:TAKAMATSU', source_round_trip_fare: 200, source_reach_by: 'direct', source_via_operator: 'rail', latitude: 34.3, longitude: 134.05 };
+  const bidirCandidates = buildOnwardCandidates(
+    { routeDetails: routeDetailsBidir, routeSequences: routeSequencesBidir, departureStationId: 'st:TAKAMATSU', allSpots: [curBidir, aheadOomasan, behindTakamatsu], maxBudget: 2000 },
+    curBidir
+  );
+  const bidirIds = bidirCandidates.map((c) => c.spot.id);
+  const aheadIncluded = bidirIds.includes('ahead-oomasan');
+  const behindExcluded = !bidirIds.includes('behind-takamatsu');
+  const bidirOk = aheadIncluded && behindExcluded;
+  ok = ok && bidirOk;
+  console.log(bidirOk
+    ? '✅ 双方向路線（同じroute_idを両方向が使う）でも、手前の駅を「先」と誤判定しません'
+    : `❌ 双方向路線での方向判定に失敗（候補=${JSON.stringify(bidirIds)}）`);
+
+  // --- 1c) 循環線（2026-10-10、Minami指摘で追加）：1つの停車パターンの中で
+  //     「最初と最後の停留所が同じ」または「同じ停留所を2回通る」場合でも、
+  //     一周して再登場する手前の停留所（＝利用者が実際に乗った場所）を
+  //     「先」と誤判定しないこと ---
+  // L1) 最初と最後の停留所が同じ（L1→L2→L3→L4→L1、1周して出発地に戻る）
+  const routeSequencesLoopClosed = { 'loop:A': [['loop:L1', 'loop:L2', 'loop:L3', 'loop:L4', 'loop:L1']] };
+  const routeDetailsLoopClosed = {
+    'loop:L1': {
+      'loop:L2': { op: ['loop:A', 10, 5, 31, 0] },
+      'loop:L3': { op: ['loop:A', 20, 5, 31, 0] },
+      'loop:L4': { op: ['loop:A', 30, 5, 31, 0] },
+    },
+  };
+  const curLoopClosed = { id: 'cur-loop-closed', name: 'x', source_station_id: 'loop:L2', source_round_trip_fare: 400, source_reach_by: 'direct', source_via_operator: 'op', latitude: 34.0, longitude: 134.0 };
+  const aheadL3 = mkSpot('ahead-l3', 'loop:L3', 35.0, 135.0);
+  const aheadL4 = mkSpot('ahead-l4', 'loop:L4', 35.1, 135.1);
+  const behindL1 = mkSpot('behind-l1', 'loop:L1', 30.0, 130.0); // 一周後に再登場する出発地。遠方・同額にしてnearby/stretchにも入らないようにする
+  const loopClosedCandidates = buildOnwardCandidates(
+    { routeDetails: routeDetailsLoopClosed, routeSequences: routeSequencesLoopClosed, departureStationId: 'loop:L1', allSpots: [curLoopClosed, aheadL3, aheadL4, behindL1], maxBudget: 2000 },
+    curLoopClosed
+  );
+  const loopClosedIds = loopClosedCandidates.map((c) => c.spot.id);
+  const loopClosedOk = loopClosedIds.includes('ahead-l3') && loopClosedIds.includes('ahead-l4') && !loopClosedIds.includes('behind-l1');
+  ok = ok && loopClosedOk;
+  console.log(loopClosedOk
+    ? '✅ 循環線（最初と最後の停留所が同じ）でも、一周後に再登場する出発地を「先」と誤判定しません'
+    : `❌ 循環線（始点=終点）での方向判定に失敗（候補=${JSON.stringify(loopClosedIds)}）`);
+
+  // L2) 同じ停留所を2回通る（最初と最後は別の停留所。K1→K2→K3→K1→K4で、
+  //     K1が経路の途中で再登場し、その先のK4は「一周後」なので対象外とする）
+  const routeSequencesLoopRevisit = { 'loop:B': [['loop:K1', 'loop:K2', 'loop:K3', 'loop:K1', 'loop:K4']] };
+  const routeDetailsLoopRevisit = {
+    'loop:K1': {
+      'loop:K2': { op: ['loop:B', 10, 5, 31, 0] },
+      'loop:K3': { op: ['loop:B', 20, 5, 31, 0] },
+    },
+  };
+  const curLoopRevisit = { id: 'cur-loop-revisit', name: 'x', source_station_id: 'loop:K2', source_round_trip_fare: 400, source_reach_by: 'direct', source_via_operator: 'op', latitude: 34.0, longitude: 134.0 };
+  const aheadK3 = mkSpot('ahead-k3', 'loop:K3', 35.0, 135.0);
+  const behindK1 = mkSpot('behind-k1', 'loop:K1', 30.0, 130.0); // 経路の途中で再登場する手前の停留所
+  const loopRevisitCandidates = buildOnwardCandidates(
+    { routeDetails: routeDetailsLoopRevisit, routeSequences: routeSequencesLoopRevisit, departureStationId: 'loop:K1', allSpots: [curLoopRevisit, aheadK3, behindK1], maxBudget: 2000 },
+    curLoopRevisit
+  );
+  const loopRevisitIds = loopRevisitCandidates.map((c) => c.spot.id);
+  const loopRevisitOk = loopRevisitIds.includes('ahead-k3') && !loopRevisitIds.includes('behind-k1');
+  ok = ok && loopRevisitOk;
+  console.log(loopRevisitOk
+    ? '✅ 循環線（同じ停留所を2回通る）でも、手前の停留所を「先」と誤判定しません'
+    : `❌ 循環線（同一停留所を2回通る）での方向判定に失敗（候補=${JSON.stringify(loopRevisitIds)}）`);
+
+  // --- 2) 合計運賃は常に¥2000以下（呼び出し元がより大きいmaxBudgetを渡しても） ---
+  const currentSpotBudget = mkSpot('cur-b', 'op:X', 34.0, 134.0, 400);
+  const overBudgetSpot = mkSpot('over-budget', 'op:X', 34.0001, 134.0001, 2500); // 同駅・徒歩圏内だが運賃超過
+  const withinBudgetSpot = mkSpot('within-budget', 'op:X', 34.0002, 134.0002, 2000); // 上限ちょうど
+  const budgetCandidates = buildOnwardCandidates(
+    { routeDetails: {}, routeSequences: {}, departureStationId: 'op:DEP', allSpots: [currentSpotBudget, overBudgetSpot, withinBudgetSpot], maxBudget: 5000 },
+    currentSpotBudget
+  );
+  const noOverBudget = !budgetCandidates.some((c) => c.spot.id === 'over-budget');
+  const allUnder2000 = budgetCandidates.every((c) => c.spot.source_round_trip_fare <= 2000);
+  const cappedAt2000 = noOverBudget && allUnder2000;
+  ok = ok && cappedAt2000;
+  console.log(cappedAt2000
+    ? '✅ 呼び出し元がより大きいmaxBudgetを渡しても、運賃¥2000超の候補は出ません'
+    : `❌ ¥2000の上限が効いていません（候補=${JSON.stringify(budgetCandidates.map((c) => ({ id: c.spot.id, fare: c.spot.source_round_trip_fare })))}）`);
+
+  // --- 3) 「すぐ近く」は徒歩20分以内のみ ---
+  // 時速4km換算：15分=1.0km（緯度0.009度相当）、25分=1.667km（緯度0.015度相当）
+  const currentSpotWalk = mkSpot('cur-w', 'op:Y', 34.0, 134.0, 400);
+  const near15 = mkSpot('near-15min', 'op:Y', 34.009009, 134.0, 400);
+  const near25 = mkSpot('near-25min', 'op:Y', 34.015015, 134.0, 400);
+  const walkCandidates = buildOnwardCandidates(
+    { routeDetails: {}, routeSequences: {}, departureStationId: 'op:DEP', allSpots: [currentSpotWalk, near15, near25], maxBudget: 2000 },
+    currentSpotWalk
+  );
+  const near15Entry = walkCandidates.find((c) => c.spot.id === 'near-15min');
+  const near15Ok = !!near15Entry && near15Entry.type === 'nearby' && near15Entry.walkMinutes <= 20;
+  const near25Excluded = !walkCandidates.some((c) => c.spot.id === 'near-25min');
+  const walkCapOk = near15Ok && near25Excluded;
+  ok = ok && walkCapOk;
+  console.log(walkCapOk
+    ? `✅ 「すぐ近く」は徒歩20分以内のみ含まれます（約15分=含む、約25分=除外）`
+    : `❌ 徒歩時間の上限判定に失敗（15分候補=${JSON.stringify(near15Entry)}, 25分候補の有無=${walkCandidates.some((c) => c.spot.id === 'near-25min')}）`);
+
+  return ok;
+}
+
+async function checkOnwardNavigation(html) {
+  console.log('\n=== 「この先へ」機能の検証 ===');
+  const errors = [];
+  const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'dangerously', pretendToBeVisual: true });
+  const { window } = dom;
+  stubMatchMedia(window, true);
+  stubFetch(window);
+  window.addEventListener('error', (e) => errors.push(e.error ? (e.error.stack || e.error.message) : e.message));
+
+  await new Promise((resolve) => {
+    const done = () => setTimeout(resolve, 50);
+    if (window.document.readyState === 'complete') done();
+    else window.addEventListener('load', done);
+  });
+  const doc = window.document;
+
+  const item = await waitForSuggestion(doc, window, '高松築港', '高松築港');
+  if (!item) {
+    console.log('❌ 検証用の出発駅「高松築港」の候補が見つかりません');
+    window.close();
+    return false;
+  }
+  item.dispatchEvent(new window.Event('click', { bubbles: true }));
+  // 【注意】予算は「帯」表示（予算-200より高く予算以下）のため、¥2000にすると
+  // 高額帯（¥1801〜¥2000）だけになり0件になりうる。帯内に確実にカードがある
+  // ことが分かっている¥1000を使う（「この先へ」自体の候補計算は内部で
+  // MAX_BUDGET=2000のallSpotsを使うため、帯を絞っても候補の母集団は変わらない）。
+  doc.getElementById('budget-input').value = '1000';
+  doc.getElementById('search-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+
+  const rendered = await waitFor(() => resultsSettled(doc), 8000);
+  if (!rendered) {
+    console.log('❌ 検索結果が表示されませんでした（タイムアウト）');
+    window.close();
+    return false;
+  }
+
+  const firstCard = doc.querySelector('.spot-card');
+  if (!firstCard) {
+    console.log('❌ 結果カードが1件もありません');
+    window.close();
+    return false;
+  }
+  const originalSpotName = firstCard.querySelector('h3')?.textContent;
+  firstCard.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await waitFor(() => doc.getElementById('detail-content')?.querySelector('h2')?.textContent === originalSpotName, 5000);
+
+  const onwardCards = [...doc.querySelectorAll('.onward-card')];
+  const countOk = onwardCards.length >= 0 && onwardCards.length <= 3;
+  console.log(countOk
+    ? `✅ 「この先へ」候補が${onwardCards.length}件表示されています（0〜3件の範囲内）`
+    : `❌ 「この先へ」候補の件数が想定外です（${onwardCards.length}件）`);
+
+  if (onwardCards.length === 0) {
+    console.log('ℹ️  この出発駅・予算では候補が無かったため、クリック遷移・履歴の検証はスキップします');
+    window.close();
+    return countOk && errors.length === 0;
+  }
+
+  // 運賃表記：「往復¥1,234（+¥120）」または差0のとき「往復¥1,234（追加なし）」
+  // （Minami指示：「+¥0」という表記をやめる。2026-10-10修正）
+  const fareTexts = onwardCards.map((c) => c.querySelector('.onward-fare')?.textContent || '');
+  const fareFormatOk = fareTexts.every((t) => /^往復¥[\d,]+（(追加なし|\+¥[\d,]+)）$/.test(t));
+  console.log(fareFormatOk
+    ? `✅ 各候補の運賃が「往復¥1,234（+¥120 または 追加なし）」の形式で表示されています（${fareTexts.join(', ')}）`
+    : `❌ 運賃の表記が想定外です（${fareTexts.join(', ')}）`);
+
+  // 一言：種類ごとの文言（同じバスで約◯分先／ここから歩いて約◯分／ここから約◯km）が
+  // 空でないこと（Minami指示：先頭30文字の説明文をやめ、種類別の一言にする。2026-10-10）
+  const blurbTexts = onwardCards.map((c) => c.querySelector('.onward-blurb')?.textContent || '');
+  // 「同じ電車/バス/便で」はroute_type（0・1・2=電車、3=バス、それ以外=便）で言い分ける
+  const blurbFormatOk = blurbTexts.every((t) => /^(同じ(電車|バス|便)で(約\d+分先|その先)|ここから歩いて約\d+分|ここから約[\d.]+km)$/.test(t));
+  console.log(blurbFormatOk
+    ? `✅ 各候補の一言が種類別の文言で表示されています（${blurbTexts.join(' / ')}）`
+    : `❌ 一言の文言が想定外です（${blurbTexts.join(' / ')}）`);
+
+  const candidateName = onwardCards[0].querySelector('.onward-name')?.textContent?.trim();
+  // 【2026-10-11、5本目】スクロール位置の回帰チェック用に、遷移前にわざと
+  // 詳細欄を下までスクロールさせておく（Minami指示：「この先へ」で別の場所を
+  // 開いたら一番上から見せる）。jsdomはレイアウトを計算しないため、scrollTopは
+  // 単純な書き込み可能プロパティとして扱える（実ブラウザのスクロール挙動の
+  // 再現ではなく、「遷移時にscrollTop=0を代入しているか」のロジックを見る）。
+  const detailContainer = doc.getElementById('detail-container');
+  if (detailContainer) detailContainer.scrollTop = 500;
+  onwardCards[0].dispatchEvent(new window.Event('click', { bubbles: true }));
+  const movedToCandidate = await waitFor(
+    () => {
+      const h2 = doc.getElementById('detail-content')?.querySelector('h2')?.textContent;
+      return !!h2 && h2 !== originalSpotName;
+    },
+    5000
+  );
+  const candidateHeading = doc.getElementById('detail-content')?.querySelector('h2')?.textContent;
+  console.log(movedToCandidate
+    ? `✅ 「この先へ」カードをクリックすると候補の詳細画面に切り替わりました（"${candidateHeading}"）`
+    : `❌ 候補クリックでの詳細画面の切り替えに失敗しました（見出し="${candidateHeading}"）`);
+
+  const scrollResetOnForward = detailContainer?.scrollTop === 0;
+  console.log(scrollResetOnForward
+    ? '✅ 「この先へ」で新しい場所を開いたとき、詳細画面が一番上から始まります'
+    : `❌ 「この先へ」で開いた直後のスクロール位置が一番上ではありません（scrollTop=${detailContainer?.scrollTop}）`);
+
+  // スマホ本体の戻る操作（popstate）だけで、「この先へ」で開いた候補の詳細 →
+  // 1つ前の詳細 → 一覧の順に戻れること（Minami指示：前回の指示で抜けていたテスト。
+  // UIの「← 戻る」ボタンには一切触れず、window.history.back()を直接呼んで
+  // OS/スマホの戻るジェスチャーを模す。ボタン自体の動作はcheckSharedSpotBandBypass等
+  // 別のテストで確認済み）。
+  if (detailContainer) detailContainer.scrollTop = 500; // 戻る前にもわざとスクロールさせておく
+  const scrollIntoViewCallsBeforeBack = window.__scrollIntoViewCalls || 0;
+  window.history.back(); // 1回目：候補の詳細 → 元のスポットの詳細
+  const backToOriginalDetail = await waitFor(() => {
+    const view = doc.getElementById('app-layout')?.getAttribute('data-view');
+    const h2 = doc.getElementById('detail-content')?.querySelector('h2')?.textContent;
+    return view === 'detail' && h2 === originalSpotName;
+  }, 3000);
+  console.log(backToOriginalDetail
+    ? '✅ スマホ本体の戻る操作（popstate）1回目：候補の詳細から、一覧にではなく元のスポットの詳細画面に戻りました（履歴スタック）'
+    : `❌ popstateでの戻る動作（1回目）が想定と異なります（data-view="${doc.getElementById('app-layout')?.getAttribute('data-view')}", h2="${doc.getElementById('detail-content')?.querySelector('h2')?.textContent}"）`);
+
+  // 【2026-10-11、6本目E、Minami決定で仕様変更】以前は「戻ったときも一番上」
+  // だったが、今回から「前の場所に戻ったら、その場所の『この先へ』の位置まで
+  // スクロールした状態で見せる」に変わった（新しい場所を開いたときだけ一番上）。
+  // jsdomはレイアウトを持たずscrollIntoView()を実際には動かせない（スタブは
+  // no-op、上のstubMatchMedia参照）ため、ピクセル位置そのものではなく
+  // 「scrollIntoView()がonwardセクションに対して呼ばれたか」を見る。
+  // ピクセル単位の実際の見た目はverify-layout.js（Playwright）側で検証する。
+  const onwardScrollCalledOnBack = (window.__scrollIntoViewCalls || 0) > scrollIntoViewCallsBeforeBack;
+  console.log(onwardScrollCalledOnBack
+    ? '✅ 前の場所に戻ったとき、その場所の「この先へ」の位置へのスクロールが実行されます（scrollIntoView呼び出しを確認）'
+    : '❌ 前の場所に戻ったときに「この先へ」の位置へスクロールする処理が実行されませんでした');
+
+  window.history.back(); // 2回目：元のスポットの詳細 → 一覧
+  const backToList = await waitFor(() => doc.getElementById('app-layout')?.getAttribute('data-view') === 'results', 3000);
+  console.log(backToList
+    ? '✅ スマホ本体の戻る操作（popstate）2回目：履歴が空になった後、一覧に戻りました（候補の詳細→1つ前の詳細→一覧の順を確認）'
+    : `❌ popstateでの戻る動作（2回目）が想定と異なります（data-view="${doc.getElementById('app-layout')?.getAttribute('data-view')}"）`);
+
+  if (errors.length > 0) {
+    console.log('⚠️  ページ実行中に発生したエラー:');
+    errors.forEach((e) => console.log('  - ' + e));
+  }
+
+  window.close();
+  return countOk && fareFormatOk && blurbFormatOk && movedToCandidate && scrollResetOnForward &&
+    backToOriginalDetail && onwardScrollCalledOnBack && backToList && errors.length === 0;
+}
+
 async function main() {
   if (!fs.existsSync(distIndexPath)) {
     console.error('dist/index.html が見つかりません。先に npm run bundle を実行してください');
@@ -2280,6 +2876,7 @@ async function main() {
   }
   assertBundleFresh('verify-render');
   assertSiteDataFresh('verify-render');
+  assertMaplibreVendorFresh('verify-render');
   const publishedOk = checkPublishedPrefecturesConsistency();
   const html = fs.readFileSync(distIndexPath, 'utf-8');
 
@@ -2287,6 +2884,8 @@ async function main() {
   const mobileOk = await checkVisible(html, false, 'スマホ幅相当');
   const cardsOk = await checkResultCards(html);
   const loadingStateOk = await checkLoadingState(html);
+  const optionalFileFailureOk = await checkOptionalFileFailureStillSearches(html);
+  const requiredFileFailureGentleOk = await checkRequiredFileFailureShowsGentleMessage(html);
   const transferDisplayOk = await checkTransferDisplay(html);
   const spotLevelBandingOk = await checkSpotLevelBanding(html);
   const departureMismatchOk = await checkDepartureMismatchGuard(html);
@@ -2303,16 +2902,21 @@ async function main() {
   const frequencyDisplayLogicOk = await checkFrequencyDisplayLogic();
   const shareTextMunicipalityOk = await checkShareTextMunicipalityAndFrequency();
   const operatorClassificationOk = await checkOperatorClassification();
+  const onwardCandidateSyntheticOk = await checkOnwardCandidateSynthetic();
+  const onwardNavigationOk = await checkOnwardNavigation(html);
+  const gsiDemProtocolMathOk = await checkGsiDemProtocolMath();
   const feedVersionShorteningOk = await checkFeedVersionShortening(html);
   const imageLoadFailureFallbackOk = await checkImageLoadFailureFallback(html);
 
   if (
-    publishedOk && desktopOk && mobileOk && cardsOk && loadingStateOk && transferDisplayOk &&
+    publishedOk && desktopOk && mobileOk && cardsOk && loadingStateOk &&
+    optionalFileFailureOk && requiredFileFailureGentleOk && transferDisplayOk &&
     spotLevelBandingOk && departureMismatchOk && partialBandMessageOk && partialBandMessageUozuEkiOk &&
     searchButtonStateOk && favoritesStorageOk && favoriteCardToggleOk && sharedSpotBandBypassOk &&
     sharedSpotSidMismatchOk && sharedSpotAmbiguousNameOk && sharedListMixedDepartureOk &&
     serviceFrequencyComputationOk && frequencyDisplayLogicOk && shareTextMunicipalityOk &&
-    operatorClassificationOk && feedVersionShorteningOk && imageLoadFailureFallbackOk
+    operatorClassificationOk && onwardCandidateSyntheticOk && onwardNavigationOk && gsiDemProtocolMathOk &&
+    feedVersionShorteningOk && imageLoadFailureFallbackOk
   ) {
     console.log('\n✅ 検証成功: 初期表示・検索結果カードともに想定通りです');
   } else {

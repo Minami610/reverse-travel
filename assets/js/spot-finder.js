@@ -3,6 +3,8 @@
  * 到達可能な駅から周辺スポットを検索、知名度順にソート
  */
 
+import { debugLog } from './debug-log.js';
+
 // 徒歩速度（分速80m）。徒歩時間 = 距離(km) * 1000 / WALK_SPEED_M_PER_MIN
 const WALK_SPEED_M_PER_MIN = 80;
 
@@ -121,11 +123,11 @@ export class SpotFinder {
       }
 
       const allSpots = Array.from(bestSpotByQid.values());
-      console.log(`📍 収集スポット数（QID重複排除後）: ${allSpots.length}`);
+      debugLog(`📍 収集スポット数（QID重複排除後）: ${allSpots.length}`);
 
       // フィルタリング：知名度が高すぎるものを除外
       const filtered = this.filterBySitelinks(allSpots);
-      console.log(`✂️ フィルタ後: ${filtered.length}スポット`);
+      debugLog(`✂️ フィルタ後: ${filtered.length}スポット`);
 
       // 情報充実度（説明文の長さ・画像有無）順にソート
       const sorted = this.sortByInformativeness(filtered);
@@ -173,7 +175,10 @@ export class SpotFinder {
       const bHasImage = hasImage(b);
       if (aHasImage !== bHasImage) return aHasImage ? -1 : 1;
 
-      return 0;
+      // 【2026-10-26、59本目】それでも同じときは場所のID（QID）順。以前は0（元の並びのまま）だったため、同じ金額帯でも
+      // 「その金額で検索した一覧」と「¥2,000分から金額帯を絞った一覧」（結果画面の＋−、main.jsのsyncListToBudget()）とで、
+      // 同点の場所の順が入れ替わっていた（元の並びは、どの駅まで行けるかで変わるため）。主軸（本文の文字数→画像の有無）は変えない。
+      return String(a.id).localeCompare(String(b.id));
     });
   }
 

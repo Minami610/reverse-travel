@@ -1,84 +1,327 @@
 /**
- * layout-controller.js - PC二段組（sticky）⇔ スマホタブ切替のレイアウト制御
+ * layout-controller.js - 地図を画面いっぱいに出すレイアウトの制御（56本目で作り直し）
  *
- * #spots-map（Leaflet地図の実体）は単一のDOMノードとして保持し、
- * 画面幅に応じてPC用スロット（左カラム内、sticky）とスマホ用スロット
- * （「地図」タブパネル内）の間で付け替える。地図インスタンスは
- * 再生成せず、ノードを移動してから invalidateSize() でサイズ再計算するだけ
- * にすることで、マーカーや選択状態を保持したまま切り替えられる。
+ * 【2026-10-25、56本目、Minami決定】ヘッダーの下はすべて地図（#map-area）にし、検索カード（#layout-left）と
+ * 結果の入れ物（.layout-right）を地図の上に重ねる。以前の「PCは二段組・スマホは一覧／地図タブ」と、
+ * #map-areaをPC用・スマホ用の置き場所の間で付け替える仕組みはやめた（地図はいつも同じ場所にある）。
  *
- * ブレークポイントは assets/css/style.css の `@media (min-width: 760px)` と
- * 必ず一致させること（ズレるとCSSとJSで二段組/タブ切替の判定が食い違う）。
+ * ここでやること：
+ * - 地図の上に重ねている入れ物（data-map-overlayの付いた要素のうち、見えているもの）の画面上の四角を
+ *   1か所で返す（getMapOverlayRects()）。57本目の円の合わせ方（ア：重ねた入れ物を除いた見えている範囲で
+ *   円を合わせる）で使う。
+ * - スマホで地図の下側に重なっている入れ物の高さを、CSSの変数（#app-layoutの--map-inset-bottom）に入れる。
+ *   右下の部品の列・出典・名前の帯が、その上に出るようにするため。
+ * - 画面の大きさが変わったら、地図の大きさを測り直す。
+ *
+ * ブレークポイントは assets/css/style.css の `@media (min-width: 760px)` と必ず一致させること。
  */
 
 const DESKTOP_QUERY = '(min-width: 760px)';
+const OVERLAY_SELECTOR = '[data-map-overlay]';
+// 【59本目】スマホで、地図の高さがこれより低い画面（400×464の地図は416px）では、下の一覧の小を見出しの1行だけにする
+// （横のカードを出すと見えている範囲が狭くなりすぎるため。375×667の地図は619px、390×844は796px）。
+const SHEET_COMPACT_MAX_MAP_HEIGHT = 560;
+// 【59本目】下の一覧の大の高さ（地図の高さに対する比）。上の＋−カードの下までは伸ばさない。
+const SHEET_LARGE_RATIO = 0.6;
+const SHEET_LARGE_MIN_VISIBLE_MAP = 150;
+const SHEET_LARGE_MIN_HEIGHT = 160;
+// 右下の部品の列と出典が入るのに、部品の列の高さに足す余地（出典の行と上下のすき間。--map-controls-roomと同じ）
+const CONTROLS_EXTRA_ROOM = 52;
+
+/**
+ * 地図の上に重ねている入れ物（見えているものだけ）の、画面上の四角（getBoundingClientRect()の値）。
+ * @returns {Array<{el: Element, left: number, top: number, right: number, bottom: number, width: number, height: number}>}
+ */
+export function getMapOverlayRects() {
+  const out = [];
+  document.querySelectorAll(OVERLAY_SELECTOR).forEach((el) => {
+    if (el.hidden) return;
+    // 【58本目】PCで一覧を閉じたときの細いバー（data-map-overlay="bar"）は、地図を覆う入れ物として数えない（65本目から円も避けない）
+    if (el.getAttribute('data-map-overlay') === 'bar') return;
+    // 【59本目】入れ物の中の入れ物（PCの一覧パネルの中の上の部分・下の部分）は、外の入れ物で数える
+    const outer = el.parentElement && el.parentElement.closest(OVERLAY_SELECTOR);
+    if (outer && getComputedStyle(outer).display !== 'contents') return;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return;
+    const r = el.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return;
+    out.push({ el, left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height });
+  });
+  return out;
+}
 
 export class LayoutController {
-  constructor({ mapEl, desktopSlot, mobileSlot, tabButtons, tabPanels, mapView, onListTabActivated }) {
+  constructor({ mapEl, layoutEl, mapView, terrainMapView, onListTabActivated }) {
     this.mapEl = mapEl;
-    this.desktopSlot = desktopSlot;
-    this.mobileSlot = mobileSlot;
-    this.tabButtons = Array.from(tabButtons || []);
-    this.tabPanels = Array.from(tabPanels || []);
+    this.layoutEl = layoutEl;
     this.mapView = mapView;
+    // 3DのMapLibreインスタンス自体は3D切替が実際に行われるまで生成されない（main.jsが生成後に差し替える）。
+    this.terrainMapView = terrainMapView;
     this.onListTabActivated = onListTabActivated || null;
     this.mediaQuery = window.matchMedia(DESKTOP_QUERY);
-    this.currentTab = 'list';
 
-    // ブラウザの拡大率変更もmatchMediaのchangeとして発火する。
-    // 地図のスロット移動だけでなく、タブの表示状態（一覧⇔地図）も
-    // CSSの再評価だけに委ねず明示的に再同期し、どちらのレイアウトにも
-    // 属さない中途半端な表示（タブが出ないまま縦積みになる等）を防ぐ。
     this.mediaQuery.addEventListener('change', () => {
-      this.applyMapSlot();
-      this.activateTab(this.currentTab);
+      this._applyResultsListState();
+      this.updateInsets();
+      this.invalidateMapSize();
     });
-    this.tabButtons.forEach((btn) => {
-      btn.addEventListener('click', () => this.activateTab(btn.dataset.tab));
-    });
-
-    this.applyMapSlot();
-    this.activateTab('list');
+    // 【58本目】PCの結果画面で、左の一覧パネルを開いているか（閉じると地図の左上の細いバーになる）。
+    // ＋−・検索し直し・「条件を変える」をまたいで覚えておく。スマホには関係しない（59本目）。
+    this._resultsListOpen = true;
+    this._resultsPanel = document.querySelector('.results-panel');
+    // 【59本目】スマホの結果画面で、下の一覧が大か（小⇔大）。開け閉めと同じく、＋−・検索し直しをまたいで覚えておく。
+    this._sheetLarge = false;
+    window.addEventListener('resize', () => this.updateInsets());
+    // 入れ物の大きさ・出し入れが変わったら、地図の下側の余白を測り直す。
+    if (typeof ResizeObserver === 'function') {
+      this._resizeObserver = new ResizeObserver(() => this.updateInsets());
+      document.querySelectorAll(OVERLAY_SELECTOR).forEach((el) => this._resizeObserver.observe(el));
+      // 部品の列の高さ（2D/3Dの切り替え・戻るボタンの出し入れで変わる）も見る
+      const cluster = document.getElementById('map-controls-cluster');
+      if (cluster) this._resizeObserver.observe(cluster);
+      // 【57本目】検索カードの中身の高さ（金額帯の案内・「条件が変わりました」の出し入れ）が変わったら、入りきるか測り直す
+      const form = document.getElementById('search-form');
+      if (form) this._resizeObserver.observe(form);
+    }
+    if (typeof MutationObserver === 'function' && this.layoutEl) {
+      // 検索カード⇔結果の入れ物の切り替え（#app-layoutのクラス・hidden属性）でも測り直す。
+      // 地図のピン（#map-areaの中）のクラスは頻繁に変わるため、subtreeは見ない（#app-layout自身と入れ物だけ）。
+      this._mutationObserver = new MutationObserver(() => this.updateInsets());
+      const opts = { attributes: true, attributeFilter: ['class', 'hidden', 'data-view'] };
+      this._mutationObserver.observe(this.layoutEl, opts);
+      document.querySelectorAll(OVERLAY_SELECTOR).forEach((el) => this._mutationObserver.observe(el, opts));
+    }
+    this.updateInsets();
   }
 
   isDesktop() {
     return this.mediaQuery.matches;
   }
 
-  applyMapSlot() {
-    const targetSlot = this.isDesktop() ? this.desktopSlot : this.mobileSlot;
-    if (this.mapEl.parentElement !== targetSlot) {
-      targetSlot.appendChild(this.mapEl);
-    }
-    this.invalidateMapSize();
+  /** 【58本目】PCの結果画面で、左の一覧パネルを開いているか。 */
+  isResultsListOpen() {
+    return this._resultsListOpen;
   }
 
-  activateTab(tabName) {
-    this.currentTab = tabName;
-    this.tabButtons.forEach((btn) => {
-      btn.classList.toggle('active', btn.dataset.tab === tabName);
-    });
-    this.tabPanels.forEach((panel) => {
-      panel.classList.toggle('active', panel.dataset.tabPanel === tabName);
-    });
+  /**
+   * 【58本目】PCの結果画面で、左の一覧パネルを開く・閉じる（#app-layoutの.results-list-closed）。
+   * 閉じている間、パネルは地図の左上の細いバーになり、地図を覆う入れ物（見えている範囲から除く）ではなく、
+   * 地図の上に載る部品になる（data-map-overlay="bar"。map-view.js・terrain-map-view.jsのvisibleMapRect()）。
+   * 65本目から円の縁はこのバーの下を通ってよい。
+   * @param {boolean} open
+   * @returns {boolean} 変わったか
+   */
+  setResultsListOpen(open) {
+    if (this._resultsListOpen === open) return false;
+    this._resultsListOpen = open;
+    this._applyResultsListState();
+    this.updateInsets();
+    return true;
+  }
 
-    if (tabName === 'map') {
-      this.invalidateMapSize();
-    } else if (tabName === 'list' && this.onListTabActivated) {
-      // display:none → 表示への切り替え直後はまだレイアウトが確定していないため、
-      // 次フレームで（＝表示が反映された後に）呼び出す
-      requestAnimationFrame(() => this.onListTabActivated());
+  /** 【59本目】スマホの結果画面で、下の一覧が大か。 */
+  isSheetLarge() {
+    return this._sheetLarge;
+  }
+
+  /**
+   * 【59本目】スマホの結果画面で、下の一覧を大・小にする（#app-layoutの.sheet-large）。PCでは見た目は変わらない。
+   * @param {boolean} large
+   * @returns {boolean} 変わったか（スマホのときだけ）
+   */
+  setSheetLarge(large) {
+    if (this._sheetLarge === large) return false;
+    this._sheetLarge = large;
+    this.layoutEl?.classList.toggle('sheet-large', large);
+    const handle = document.getElementById('results-sheet-handle');
+    if (handle) {
+      handle.setAttribute('aria-expanded', String(large));
+      handle.setAttribute('aria-label', large ? '一覧を小さくする' : '一覧を大きくする');
     }
+    this.updateInsets();
+    return !this.isDesktop();
+  }
+
+  _applyResultsListState() {
+    const closed = !this._resultsListOpen && this.isDesktop();
+    this.layoutEl?.classList.toggle('results-list-closed', closed);
+    if (this._resultsPanel) this._resultsPanel.setAttribute('data-map-overlay', closed ? 'bar' : '');
+    if (this._mutationObserver) this._mutationObserver.takeRecords();
+  }
+
+  /** 地図の上に重ねている入れ物の四角（getMapOverlayRects()と同じ）。 */
+  overlayRects() {
+    return getMapOverlayRects();
+  }
+
+  /**
+   * スマホで、地図の下側に重なっている入れ物（地図の下の端に接しているもの）の高さを
+   * #app-layoutの--map-inset-bottomに入れる。PCは0（入れ物は左上・左に浮かせるため）。
+   */
+  updateInsets() {
+    if (!this.layoutEl || !this.mapEl) return;
+    this.updateSheetLayout();
+    let insetBottom = 0;
+    if (!this.isDesktop()) {
+      const map = this.mapEl.getBoundingClientRect();
+      getMapOverlayRects().forEach((r) => {
+        // 下の端から少し浮かせて置いている入れ物（スマホの検索カードは下に8pxのすき間）も、下側に重なっているものとして数える。
+        if (r.bottom >= map.bottom - 24) insetBottom = Math.max(insetBottom, map.bottom - r.top);
+      });
+    }
+    const value = `${Math.max(0, Math.round(insetBottom))}px`;
+    if (this.layoutEl.style.getPropertyValue('--map-inset-bottom') !== value) {
+      this.layoutEl.style.setProperty('--map-inset-bottom', value);
+    }
+    // 右下の部品の列（ズーム＋−・方位磁針・戻るボタン・ハンドル）と出典が入るのに要る高さ。スマホでは、地図の下に
+    // 重ねる入れ物がこの分を空けて縮む（style.cssの--map-controls-room）。部品の列の高さは2D/3D・検索の前後で変わる。
+    const cluster = document.getElementById('map-controls-cluster');
+    const room = cluster ? Math.round(cluster.getBoundingClientRect().height + CONTROLS_EXTRA_ROOM) : 120;
+    const roomValue = `${room}px`;
+    if (this.layoutEl.style.getPropertyValue('--map-controls-room') !== roomValue) {
+      this.layoutEl.style.setProperty('--map-controls-room', roomValue);
+    }
+    this.fitControlsCluster(insetBottom);
+    this.fitSearchCard();
+    this.placeMapDataLine();
+    if (this._mutationObserver) this._mutationObserver.takeRecords();
+  }
+
+  /**
+   * 【59本目】スマホの結果画面の下の一覧：低い画面では小を見出しだけにし（.sheet-compact）、大の高さ
+   * （--sheet-large-h）を地図の高さから決める。上の＋−カードの下の端（--results-head-bottom）も測る
+   * （名前の帯をそのすぐ下に出す・下の一覧が上の＋−カードにかからないようにするため）。
+   */
+  updateSheetLayout() {
+    const map = this.mapEl.getBoundingClientRect();
+    const mobile = !this.isDesktop();
+    this.layoutEl.classList.toggle('sheet-compact', mobile && map.height < SHEET_COMPACT_MAX_MAP_HEIGHT);
+    const head = document.querySelector('.results-head');
+    // 【64本目】上の1行のカードで駅名が入りきらない（…で省略される）ときは、「予算（往復）」の小さな見出しを省いて
+    // 幅を空ける（見出しは金額の上に重ねているため、金額より幅が広いときだけ効く）。いったん出してから測る。
+    this.layoutEl.classList.remove('results-head-no-label');
+    const station = mobile ? head?.querySelector('.summary-toggle-station') : null;
+    if (station && station.clientWidth > 0 && station.scrollWidth > station.clientWidth) {
+      this.layoutEl.classList.add('results-head-no-label');
+    }
+    const hb = head?.getBoundingClientRect();
+    const headBottom = mobile && hb && hb.height > 0 ? Math.round(hb.bottom - map.top) : 0;
+    const setVar = (name, value) => {
+      if (this.layoutEl.style.getPropertyValue(name) !== value) this.layoutEl.style.setProperty(name, value);
+    };
+    setVar('--results-head-bottom', `${headBottom}px`);
+    const avail = Math.max(0, map.height - headBottom - 8);
+    // 大でも、地図の見えている範囲を少なくともSHEET_LARGE_MIN_VISIBLE_MAPは残す（400×464では、地図の60%まで伸ばすと
+    // 見えている範囲が81pxしか残らず、円が最低ズームでも入りきらなかった）。ただし大の一覧が低くなりすぎないよう、
+    // SHEET_LARGE_MIN_HEIGHTより低くはしない。
+    const large = Math.max(Math.min(map.height * SHEET_LARGE_RATIO, avail - SHEET_LARGE_MIN_VISIBLE_MAP), Math.min(avail, SHEET_LARGE_MIN_HEIGHT));
+    setVar('--sheet-large-h', `${Math.round(large)}px`);
+  }
+
+  /**
+   * 【59本目】スマホで、右下の部品の列（ズーム＋−・方位磁針・戻るボタン・ハンドル）と出典が、上の＋−カードと
+   * 下の一覧の間に入りきらないときは、まずズーム＋−を隠し（指でつまんで拡大・縮小できるため）、それでも
+   * 入らなければ部品の列ごと隠す（見本⑥の大きい一覧には部品の列が無い）。PCでは何も隠さない。
+   * 入りきるかは、いったんすべて出してから測る（大きさが変わったときに戻すため）。
+   * @param {number} insetBottom 地図の下側に重なっている入れ物の高さ
+   */
+  fitControlsCluster(insetBottom) {
+    const cluster = document.getElementById('map-controls-cluster');
+    if (!cluster) return;
+    cluster.classList.remove('cluster-no-zoom', 'cluster-hidden');
+    if (this.isDesktop()) return;
+    const map = this.mapEl.getBoundingClientRect();
+    const head = document.querySelector('.results-head');
+    const hb = head?.getBoundingClientRect();
+    const top = hb && hb.height > 0 ? hb.bottom - map.top : 0;
+    const space = map.height - insetBottom - top;
+    if (cluster.getBoundingClientRect().height + CONTROLS_EXTRA_ROOM <= space) return;
+    cluster.classList.add('cluster-no-zoom');
+    if (cluster.getBoundingClientRect().height + CONTROLS_EXTRA_ROOM <= space) return;
+    cluster.classList.add('cluster-hidden');
+  }
+
+  /**
+   * 【58本目】PCで一覧を閉じている間の「データ出典・免責」（#map-data-line）を、地図の右下の出典の文字の
+   * すぐ左に置く（出典は開くと横に広がるため、出典の左の端から測る。#app-layoutの--map-attrib-room）。
+   */
+  placeMapDataLine() {
+    if (!this.layoutEl || !this.mapEl) return;
+    const mode3d = this.mapEl.classList.contains('mode-3d');
+    const attrib = this.mapEl.querySelector(mode3d ? '#spots-map-3d .maplibregl-ctrl-attrib' : '#spots-map .leaflet-control-attribution');
+    if (attrib && this._resizeObserver && !attrib.dataset.layoutObserved) {
+      // 出典を開く・閉じると幅が変わる。そのたびに置き直す。
+      attrib.dataset.layoutObserved = '1';
+      this._resizeObserver.observe(attrib);
+    }
+    const map = this.mapEl.getBoundingClientRect();
+    const b = attrib?.getBoundingClientRect();
+    const room = b && b.width > 0 ? Math.round(map.right - b.left + 8) : 40;
+    const value = `${Math.max(0, room)}px`;
+    if (this.layoutEl.style.getPropertyValue('--map-attrib-room') !== value) {
+      this.layoutEl.style.setProperty('--map-attrib-room', value);
+    }
+  }
+
+  /**
+   * 【2026-10-25、57本目、Minami指示】検索カードが低い画面（400×464など）でも、カードの中をスクロールせずに
+   * 出発駅・予算・スライダー・「この条件で探す」・「データ出典・免責」が見えるようにする。入りきらないときは、
+   * 説明文（.search-card-lead）→ 例のボタン（.search-examples）の順に外し、それでも入らなければ
+   * 行の間を詰める（.search-card-tight）。それでも入らないときは、今までどおりカードの中をスクロールする。
+   * いったんすべて外してから測り直す（画面が広くなったときに戻すため）。
+   */
+  fitSearchCard() {
+    const card = document.getElementById('layout-left');
+    if (!card) return;
+    const steps = ['search-card-no-lead', 'search-card-no-examples', 'search-card-tight', 'search-card-no-brand'];
+    steps.forEach((c) => card.classList.remove(c));
+    if (getComputedStyle(card).display !== 'none') {
+      const fits = () => card.scrollHeight <= card.clientHeight + 1;
+      // 【2026-10-26、61本目、Minami決定：B】「条件を変える」で開いたカード（「▲閉じる」・「条件が変わりました」が
+      // 増える）も、スクロールせずに「この条件で探す」まで見えるようにする。トップ画面と同じ順に外したうえで、
+      // 開いたカードだけは、副題の1行（.search-card-brand）も外す。それでも入らなければ、右下の部品の列に
+      // 残している高さ（--map-controls-room）を、59本目の結果画面と同じ順（ズーム＋−→部品の列ごと）に
+      // 部品を隠して空ける。400×464では、検索したあとは戻るボタン（3Dは方位磁針・ハンドルも）が増えて
+      // 部品の列が高くなり、トップ画面の外し方だけでは、開いたカードの中身（2Dで約330px）が
+      // カード（2Dで244px、3Dで196px）に入らなかったため。開いている間は地図を触ると閉じるので、
+      // 部品が隠れても困らない。トップ画面（検索する前）は57本目のまま（副題・部品は外さない）。
+      const reopened = !this.isDesktop() && this.layoutEl.classList.contains('has-results');
+      const cluster = document.getElementById('map-controls-cluster');
+      if (reopened && cluster) {
+        // 前に測ったときに隠した部品を出し、部品の列がすべて入る高さを残した状態から測り直す
+        // （updateInsets()の最初に測った--map-controls-roomは、隠したままの高さのことがあるため）。
+        cluster.classList.remove('cluster-no-zoom', 'cluster-hidden');
+        this.layoutEl.style.setProperty('--map-controls-room', `${Math.round(cluster.getBoundingClientRect().height + CONTROLS_EXTRA_ROOM)}px`);
+      }
+      for (const c of steps) {
+        if (fits()) break;
+        if (c === 'search-card-no-brand' && !reopened) break;
+        card.classList.add(c);
+      }
+      if (reopened && cluster && !fits()) {
+        for (const c of ['cluster-no-zoom', 'cluster-hidden']) {
+          cluster.classList.add(c);
+          const room = c === 'cluster-hidden' ? CONTROLS_EXTRA_ROOM : Math.round(cluster.getBoundingClientRect().height + CONTROLS_EXTRA_ROOM);
+          this.layoutEl.style.setProperty('--map-controls-room', `${room}px`);
+          if (fits()) break;
+        }
+      }
+    }
+    // 自分でクラスを付け外しした分の変化は、測り直しのきっかけにしない（付け外しのたびに呼ばれ続けないため。
+    // ここはupdateInsets()の中なので、それまでに来ていた変化はもう測り終えている）。
+    if (this._mutationObserver) this._mutationObserver.takeRecords();
+  }
+
+  /** 以前の「一覧／地図」タブの切り替え。タブはやめたため、地図の大きさを測り直すだけ。 */
+  activateTab(tabName) {
+    if (tabName === 'map') this.invalidateMapSize();
+    else if (tabName === 'list' && this.onListTabActivated) requestAnimationFrame(() => this.onListTabActivated());
   }
 
   invalidateMapSize() {
-    // display:none から表示に切り替わった直後はコンテナ寸法が
-    // 確定していないことがあるため、次フレームでサイズ再計算＋
-    // fitBoundsのやり直し（非表示中に描画されて範囲がずれている場合の補正）を行う
     requestAnimationFrame(() => {
-      if (!this.mapView.map) return;
-      this.mapView.map.invalidateSize();
-      this.mapView.refitBounds();
+      if (this.mapView.map) this.mapView.handleShown({ forceRefit: false });
+      if (this.terrainMapView?.map) this.terrainMapView.resize();
     });
   }
 }

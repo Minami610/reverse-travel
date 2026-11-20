@@ -4,7 +4,10 @@
  * 【位置づけ】config/published-prefectures.jsonに載っていない（＝まだ公開しない）県も
  * 含めて、隣接県同時ロードの罠（CLAUDE.md「全国一括ビルドはやらない。まず少数県
  * （隣接ペアを必ず含む）で全経路を通してから展開する」）を手元で確認するための
- * 常設スクリプト。docs/dataやpublished-prefectures.jsonには一切触れない。
+ * 常設スクリプト。1〜4はdata/site-preview/配下だけを見る（docs/dataやpublished-
+ * prefectures.jsonへは一切書き込まない）。
+ * 【2026-10-11追記】5だけは例外で、docs/data（実際に配信される場所）を読んで
+ * 公開中の県の書き出し漏れ・実検索失敗を検出する（下記5参照。書き込みはしない）。
  *
  * 事前に以下を実行しておくこと（別コマンドなのは、verify-local自体は高速に
  * 繰り返し実行したい一方、generate-site-dataはGTFS由来の派生データを
@@ -32,6 +35,9 @@
  * 4. 隣接県を同時ロードしたときの検索時間の目安（jsdomのファイル読み込みのみ。
  *    ネットワーク遅延は含まない。回線込みの見積もりはnpm run verify-renderの
  *    サイズ実測と別途計算する）。
+ * 5. 公開中の都道府県について、docs/data/pref/{code}/に必要なファイル
+ *    （generate-site-data.jsのPREF_REQUIRED_FILES）が揃っているか＋実際に
+ *    docs/dataから検索が通るかを確認する。
  *
  * 使い方: npm run verify-local
  */
@@ -40,10 +46,12 @@ import fs from 'fs';
 import path from 'path';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { fileURLToPath } from 'url';
+import { PREF_REQUIRED_FILES } from './build-pipeline/generate-site-data.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, '..');
 const previewDir = path.join(rootDir, 'data/site-preview');
+const docsDataDir = path.join(rootDir, 'docs/data');
 const distIndexPath = path.join(rootDir, 'dist/index.html');
 
 /**
@@ -110,15 +118,15 @@ function listPrefCodes() {
   return fs.readdirSync(path.join(previewDir, 'pref')).sort();
 }
 
-function loadSpotsRegion(prefCode) {
+function loadSpotsRegion(prefCode, dataRoot = previewDir) {
   return JSON.parse(
-    fs.readFileSync(path.join(previewDir, 'pref', prefCode, 'spots-by-station.json'), 'utf-8')
+    fs.readFileSync(path.join(dataRoot, 'pref', prefCode, 'spots-by-station.json'), 'utf-8')
   );
 }
 
-function loadStations(prefCode) {
+function loadStations(prefCode, dataRoot = previewDir) {
   return JSON.parse(
-    fs.readFileSync(path.join(previewDir, 'pref', prefCode, 'stations.json'), 'utf-8')
+    fs.readFileSync(path.join(dataRoot, 'pref', prefCode, 'stations.json'), 'utf-8')
   );
 }
 
@@ -213,10 +221,10 @@ function checkBorderStationDuplicates(prefCodes) {
   return ok;
 }
 
-function stubFetch(window) {
+function stubFetch(window, dataRoot = previewDir) {
   window.fetch = async (url) => {
     const relPath = String(url).replace(/^\//, '').replace(/^data\//, '');
-    const filePath = path.join(previewDir, relPath);
+    const filePath = path.join(dataRoot, relPath);
     if (!fs.existsSync(filePath)) {
       return { ok: false, status: 404, json: async () => { throw new Error(`stubFetch: ${relPath} not found`); } };
     }
@@ -268,8 +276,8 @@ async function waitForSuggestion(doc, window, inputText, exactName, timeoutMs = 
  * 3・4. 指定県の「県内通し番号0」の駅から実際に検索し、クラッシュしないか・
  * 到達駅が出るか・所要時間の目安を測る。
  */
-async function searchFromFirstStation(prefCode) {
-  const stations = loadStations(prefCode);
+async function searchFromFirstStation(prefCode, dataRoot = previewDir, budget = 1000) {
+  const stations = loadStations(prefCode, dataRoot);
   const sortedIds = Object.keys(stations).sort();
   const firstStationName = stations[sortedIds[0]].display_name;
 
@@ -277,16 +285,23 @@ async function searchFromFirstStation(prefCode) {
   const capturedLogs = [];
   const virtualConsole = new VirtualConsole();
   virtualConsole.on('log', (...args) => capturedLogs.push(args.map((a) => String(a)).join(' ')));
+  const consoleErrors = [];
+  virtualConsole.on('error', (...args) => consoleErrors.push(args.map((a) => String(a)).join(' ')));
+  virtualConsole.on('warn', (...args) => consoleErrors.push(args.map((a) => String(a)).join(' ')));
+  // jsdomはwindow.alert()を実装しないとエラーを投げるため、実際のブラウザと
+  // 同じく「データの読み込みに失敗しました」等のアラート文言を捕まえられるようにする
+  const alerts = [];
 
   const dom = new JSDOM(html, {
-    url: 'http://localhost/',
+    url: 'http://localhost/?debug=1',
     runScripts: 'dangerously',
     pretendToBeVisual: true,
     virtualConsole,
   });
   const { window } = dom;
+  window.alert = (msg) => alerts.push(String(msg));
   stubMatchMedia(window);
-  stubFetch(window);
+  stubFetch(window, dataRoot);
   const errors = [];
   window.addEventListener('error', (e) => errors.push(e.error ? (e.error.stack || e.error.message) : e.message));
 
@@ -306,7 +321,7 @@ async function searchFromFirstStation(prefCode) {
     return { ok: false };
   }
   item.dispatchEvent(new window.Event('click', { bubbles: true }));
-  doc.getElementById('budget-input').value = '1000';
+  doc.getElementById('budget-input').value = String(budget);
   doc.getElementById('search-form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
 
   // 【2026-10-03追記】performSearch()が県データのfetch待ちの間に一時的な
@@ -314,13 +329,24 @@ async function searchFromFirstStation(prefCode) {
   // （main.js参照）、「children.length > 0」だけでは検索完了前のプレースホルダー
   // 挿入を検索完了と誤認する。スポットカードか0件案内文のどちらかが実際に
   // 描画された状態を完了条件にする。
+  // 【2026-10-11追記】fetchが404等で失敗すると、performSearch()はalert()を
+  // 呼ぶだけで結果欄を更新しない（「データを読み込んでいます…」のまま止まる）。
+  // この場合もrenderedはタイムアウトで検出できるが、原因がalert()の文言から
+  // すぐ分かるようalertsも別途待ち受けて報告に含める。
   const rendered = await waitFor(
     () => !!(doc.getElementById('results-list').querySelector('.spot-card') ||
-      doc.getElementById('results-list').querySelector('.no-results')),
+      doc.getElementById('results-list').querySelector('.no-results')) || alerts.length > 0,
     15000
   );
   const elapsedMs = Date.now() - t0;
 
+  if (alerts.length > 0) {
+    console.log(`❌ ${prefCode}（${firstStationName}、データルート: ${path.relative(rootDir, dataRoot)}）: 検索中にアラートが出ました`);
+    alerts.forEach((a) => console.log(`   alert: ${a}`));
+    if (consoleErrors.length > 0) consoleErrors.forEach((e) => console.log('   ' + e));
+    window.close();
+    return { ok: false };
+  }
   if (errors.length > 0) {
     console.log(`❌ ${prefCode}（${firstStationName}）: 実行中にエラーが発生しました`);
     errors.forEach((e) => console.log('   ' + e));
@@ -335,9 +361,61 @@ async function searchFromFirstStation(prefCode) {
 
   const cards = doc.querySelectorAll('.spot-card').length;
   const loadedLine = capturedLogs.find((l) => /都道府県分のデータをロード/.test(l)) || '';
-  console.log(`✅ ${prefCode}（${firstStationName}、県内通し番号0、往復¥1000）: ${elapsedMs}ms、カード${cards}件 ${loadedLine}`);
+  console.log(`✅ ${prefCode}（${firstStationName}、県内通し番号0、往復¥${budget}）: ${elapsedMs}ms、カード${cards}件 ${loadedLine}`);
   window.close();
   return { ok: true, elapsedMs, cards };
+}
+
+/**
+ * 5. 公開中の都道府県（config/published-prefectures.json）が、実際に配信される
+ * docs/data/pref/{code}/に必要なファイルをすべて持っているか＋そこから実際に
+ * 検索が通るかを確認する（2026-10-11追加）。
+ *
+ * 【背景】data/site-preview/（上記1〜4が見ている場所）とdocs/data/（実際に
+ * GitHub Pagesやローカル確認サーバーが配信する場所）は別ディレクトリであり、
+ * 互いの書き出し漏れを検出できない。実際にdocs/data/pref/16/route-sequences.json
+ * が（確認用の手元ビルドで誤って削除されたまま）欠けていたのに、
+ * site-preview側は無関係に残っていたため、本検証は成功のまま、ブラウザでの
+ * 実機検索だけが「データの読み込みに失敗しました」で全滅する事故があった。
+ * このチェックは、verify-localが「ローカルで実際に動く」ことの最終防衛線に
+ * なるよう、site-preview完結の検証とは別に、常にdocs/data（公開中の県のみ）を
+ * 直接見て通す。
+ */
+async function checkPublishedDocsData() {
+  console.log('\n=== 5. 公開中のdocs/dataが実際に揃っている・検索が通るかの確認 ===');
+  const publishedPath = path.join(rootDir, 'config/published-prefectures.json');
+  if (!fs.existsSync(publishedPath)) {
+    console.log('ℹ️  config/published-prefectures.json が見つからないためスキップします');
+    return true;
+  }
+  const published = JSON.parse(fs.readFileSync(publishedPath, 'utf-8'));
+  const prefCodes = (published.published || []).map((c) => String(c).padStart(2, '0'));
+  if (prefCodes.length === 0) {
+    console.log('ℹ️  公開中の都道府県が無いためスキップします');
+    return true;
+  }
+
+  let ok = true;
+  for (const prefCode of prefCodes) {
+    const prefDir = path.join(docsDataDir, 'pref', prefCode);
+    const missing = PREF_REQUIRED_FILES.filter((file) => !fs.existsSync(path.join(prefDir, file)));
+    if (missing.length > 0) {
+      console.log(`❌ docs/data/pref/${prefCode}/ に必要なファイルが足りません: ${missing.join(', ')}`);
+      ok = false;
+    } else {
+      console.log(`✅ docs/data/pref/${prefCode}/ に必要な${PREF_REQUIRED_FILES.length}ファイルが揃っています`);
+    }
+  }
+  if (!ok) {
+    console.log('ℹ️  書き出し漏れの直し方: node scripts/build-pipeline/generate-site-data.js（引数なし）で正しくやり直してください');
+    return false;
+  }
+
+  for (const prefCode of prefCodes) {
+    const result = await searchFromFirstStation(prefCode, docsDataDir, 1000);
+    if (!result.ok) ok = false;
+  }
+  return ok;
 }
 
 async function main() {
@@ -355,7 +433,9 @@ async function main() {
     if (!result.ok) searchesOk = false;
   }
 
-  if (spotsOk && searchesOk) {
+  const publishedOk = await checkPublishedDocsData();
+
+  if (spotsOk && searchesOk && publishedOk) {
     console.log('\n✅ ローカル複数県検証: 成功');
   } else {
     console.error('\n❌ ローカル複数県検証: 問題が見つかりました（上記参照）');

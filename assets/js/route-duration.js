@@ -91,6 +91,23 @@ export function operatorLabelWord(routeInfo, routeId) {
 }
 
 /**
+ * 「この先へ」の一言「同じ○○で」用の呼び方（2026-10-10、Minami指摘）。
+ * GTFSのroute_typeで言い分ける：0=路面電車・1=地下鉄・2=鉄道→「電車」、
+ * 3=バス→「バス」、それ以外（4=フェリー等、route_type不明含む）→「便」。
+ * is_community_operatorはここでは見ない（「同じ便」という呼び方自体の
+ * 区別が目的で、コミュニティバスかどうかは関係ないため）。
+ * @param {object} routeInfo - route-info.json
+ * @param {string|undefined} routeId
+ * @returns {string} "電車" | "バス" | "便"
+ */
+export function sameRouteWord(routeInfo, routeId) {
+  const routeType = parseInt(routeInfo?.[routeId]?.route_type, 10);
+  if (routeType === 0 || routeType === 1 || routeType === 2) return '電車';
+  if (routeType === 3) return 'バス';
+  return '便';
+}
+
+/**
  * 出発駅ID→到達駅IDの便数情報（行き・帰りの小さい方。ビルド時に確定済みの値を
  * そのまま引くだけ）を解決する。estimateRideMinutes/estimateSelectionMinutesと
  * 同じ、reachBy='direct'|'transfer'の分岐構造を踏襲する。
@@ -187,4 +204,28 @@ export function estimateSelectionMinutes(routeDetails, departureStationId, stati
   }
   const parsed = parseRouteEntry(lookupRouteEntry(routeDetails, departureStationId, station.station_id, station.viaOperator));
   return routeEntryMinutesWithWait(parsed, routeInfo);
+}
+
+/**
+ * 到達駅への「最後の区間」の事業者・route_id・乗車駅・降車駅を解決する
+ * （3本目「この先へ」機能、assets/js/onward-candidates.jsの「2) 同じ路線の先」判定用）。
+ * reachBy='transfer'（事業者をまたぐ乗換）のときは2本目のレッグ（乗換地点→到達駅）を、
+ * reachBy='direct'のエントリが同一事業者内の隠れた乗換（長さ8のRouteEntry）のときは
+ * その2本目のレッグ（via→到達駅）を「最後の区間」とする。
+ * @returns {{operatorId:string, routeId:string, legOriginId:string, legDestId:string}|null}
+ */
+export function resolveLastLeg(routeDetails, departureStationId, station) {
+  function fromEntry(fromId, toId, operatorId) {
+    const parsed = parseRouteEntry(lookupRouteEntry(routeDetails, fromId, toId, operatorId));
+    if (!parsed) return null;
+    if (parsed.type === 'direct') {
+      return { operatorId, routeId: parsed.route_id, legOriginId: fromId, legDestId: toId };
+    }
+    return { operatorId, routeId: parsed.legs[1].route_id, legOriginId: parsed.via, legDestId: toId };
+  }
+  if (station.reachBy === 'transfer' && station.transferAt) {
+    const [, op2] = station.legOperators;
+    return fromEntry(station.transferAt, station.station_id, op2);
+  }
+  return fromEntry(departureStationId, station.station_id, station.viaOperator);
 }

@@ -39,7 +39,7 @@ const outDir = path.join(__dirname, '../../data/derived/national');
 const outPath = path.join(outDir, 'municipality-to-pref.json');
 
 const WIKIDATA_SPARQL = 'https://query.wikidata.org/sparql';
-const USER_AGENT = 'reverse-travel/0.1.0 (contact: reverse-travel-maintainer)';
+const USER_AGENT = 'michidokoro/1.0 (https://github.com/minami610/reverse-travel)';
 
 const PREF_NAMES = [
   '北海道', '青森県', '岩手県', '宮城県', '秋田県', '山形県', '福島県',

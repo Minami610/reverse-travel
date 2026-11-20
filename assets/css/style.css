@@ -1,5 +1,5 @@
 /* ========================================
-   逆引き旅行アプリ - スタイルシート
+   みちどころ - スタイルシート
    ======================================== */
 
 /* カラー定義（確定） */
@@ -58,69 +58,12 @@ body {
 }
 
 /* ========================================
-   ヘッダー（約40px・1行に収める）
-   ======================================== */
 
-header {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
-  background: linear-gradient(135deg, var(--color-main) 0%, var(--color-main-deep) 100%);
-  color: white;
-  padding: 0.4rem 1rem;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  overflow: hidden;
-  white-space: nowrap;
-}
 
-header h1 {
-  font-size: 1rem;
-  flex: 0 0 auto;
-}
 
-header p {
-  font-size: 0.75rem;
-  opacity: 0.9;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1 1 auto;
-  min-width: 0; /* これが無いとテキストコンテンツの最小幅ぶん縮まず、見出しより先にmylist-btnが押し出される */
-}
 
-/* ヘッダーのマイリスト入り口。2026-10-08追加（Minamiさんの判断：フッターは
-   スマホでスクロールの一番下になり見つけにくいため使わない）。h1と同じく
-   flex:0 0 autoで、幅が狭いときは隣のpが先に省略される側に回る。 */
-#mylist-btn {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  background: rgba(255, 255, 255, 0.15);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  color: white;
-  padding: 0.3rem 0.6rem;
-  border-radius: 999px;
-  font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
-  min-height: 32px;
-}
 
-#mylist-btn:hover {
-  background: rgba(255, 255, 255, 0.25);
-}
 
-#mylist-count {
-  background: white;
-  color: var(--color-main-deep);
-  border-radius: 999px;
-  padding: 0.05rem 0.45rem;
-  font-size: 0.75rem;
-  font-weight: 700;
-  min-width: 1.2em;
-  text-align: center;
-}
 
 /* ========================================
    コンテナ（本体：flex:1で残り高さ全部を使う）
@@ -149,6 +92,75 @@ header p {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   margin-bottom: 0.75rem;
 }
+
+/* 【2026-10-16、12本目②A、Minami決定：A＋C】検索後、スマホではフォームを
+   1行の要約バーに畳む（縦長の予算スライダーを含むフォームが画面の大半を
+   占め、地図タブ・一覧タブが細い帯になりスクロールもできなかった対策）。
+   #search-summary自体はまだ一度も検索していない間hidden属性のまま
+   （JSがdisplayResults()で初めて外す）。畳む／開くの出し分けは
+   .layout-left.form-collapsedの有無とメディアクエリだけで行い、hidden属性には
+   以降触れない（[hidden]はdisplay:none!importantのため、一度外したあとは
+   このクラスだけで制御する）。PCでは常にフォームを開いたまま・要約は出さない。 */
+.search-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+  background: white;
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  margin-bottom: 0.5rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+#search-summary-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 【64本目】ボタンの中の駅名は、スマホの1行のカードだけで出す（.results-head .summary-toggle-station） */
+.summary-toggle-station {
+  display: none;
+}
+
+#search-summary-toggle {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--color-main-deep);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.2rem 0.3rem;
+}
+
+
+
+/* 【2026-10-17、32本目A、不具合修正】フォームを開いている間、#search-summary
+   （中に閉じるボタンがある）はCSS（上の規則）でdisplay:noneになるため、
+   文言が「▲閉じる」に変わっていても実際には押せなかった（Cowork指摘）。
+   フォームの中（開いている間だけ見える）に専用の閉じるボタンを置く。
+   まだ一度も検索していない間（#app-layoutに.has-resultsが付く前）は、
+   フォームを畳む概念自体が無い（常に開いたまま）ため出さない。 */
+.form-close-btn {
+  display: none;
+  width: 100%;
+  margin-bottom: 0.5rem;
+  background: none;
+  border: none;
+  color: var(--color-main-deep);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  padding: 0.2rem 0;
+}
+
 
 .form-group {
   margin-bottom: 0.6rem;
@@ -186,8 +198,12 @@ header p {
   color: var(--color-text);
 }
 
+/* 【66本目】入力欄は44px以上（押しやすさ）。低い画面で検索カードを詰めるときもここは削らない（fitSearchCard()は
+   ほかの部分で詰める） */
 .form-group input[type="text"] {
   width: 100%;
+  min-height: 44px;
+  line-height: 1.4;
   padding: 0.55rem 0.75rem;
   border: 1px solid var(--color-border);
   border-radius: 4px;
@@ -205,6 +221,24 @@ header p {
   font-weight: 600;
   color: var(--color-main);
   font-size: 0.95rem;
+}
+
+/* 予算スライダー（2026-10-10、4本目③。¥200〜¥2000・100円刻み） */
+#budget-slider {
+  display: block;
+  width: 100%;
+  margin: 0.3rem 0 0.5rem;
+  accent-color: var(--color-main);
+  cursor: pointer;
+}
+
+/* スライダー操作中に帯の件数をその場で出す（Minami指示）。
+   検索前（データが無い）は非表示（hidden属性）のまま。 */
+.budget-band-preview {
+  margin: 0.3rem 0 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-main-deep);
 }
 
 /* 予算ステッパー */
@@ -264,6 +298,11 @@ header p {
    position:fixedはoverflow:autoな祖先の影響を受けないため、
    表示位置はJS側（main.jsのpositionDepartureSuggestions）で
    入力欄のgetBoundingClientRect()から都度計算する。 */
+/* 【66本目、不具合修正】候補が無いときは出さない（空のまま枠線だけが、低い画面で入力欄の上に1本の線として重なっていた） */
+#departure-suggestions:empty {
+  display: none;
+}
+
 #departure-suggestions {
   position: fixed;
   max-height: 300px;
@@ -341,94 +380,15 @@ header p {
    全体レイアウト（アプリシェル：PC二段組／スマホ：タブ切替）
    ======================================== */
 
-/* #app-layoutは常に表示する（検索フォームまで一緒に隠さない。過去に
-   app-layoutごとhiddenにして検索フォームが消えた不具合の反省）。
-   本体（.container）のflex:1を受けて、#app-layout自身もflex:1＋
-   min-height:0で残り高さいっぱいに広がる。中身（左右カラム）が
-   それぞれ独立してoverflow-y:autoでスクロールする構造にすることで、
-   ページ全体（body）はスクロールさせない。 */
-.app-layout {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
 
-/* 検索フォーム＋地図（PC）／検索フォームのみ（スマホ）を格納する左カラム。
-   内部もflex-columnにして「検索フォームは自然な高さ、地図は残り全部」
-   という配分にする。min-height:0がないとflexの子（地図）が縮まず
-   高さが確定しない＝地図の枠が定まらない不具合の直接原因になる。 */
-.layout-left {
-  flex: 0 0 auto; /* スマホ：検索フォームだけなので自然な高さ */
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow-y: auto;
-}
 
-/* PCでは#spots-mapがここに入る。スマホでは空になるため高さ0に畳む */
-#map-slot-desktop {
-  flex: 0 0 auto;
-  height: 0;
-  overflow: hidden;
-}
 
-.mobile-tabs {
-  flex: 0 0 auto;
-  display: flex;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
-}
 
-.tab-btn {
-  flex: 1;
-  padding: 0.5rem;
-  border: 1px solid var(--color-border);
-  background-color: white;
-  color: var(--color-text-sub);
-  border-radius: 6px;
-  font-size: 0.9rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 0.2s, color 0.2s, border-color 0.2s;
-}
 
-.tab-btn.active {
-  background-color: var(--color-main);
-  color: white;
-  border-color: var(--color-main);
-}
 
-/* 右カラム：スマホでは検索フォームの残り全部（flex:1）、
-   PCではグリッドの1カラム分。中はタブ＋タブパネルのflex-column。 */
-.layout-right {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
 
-.tab-panel {
-  display: none;
-}
 
-/* アクティブなタブパネルも「残り高さいっぱい」を引き継ぐflex-column
-   にする。中の要素（並び替えUIは自然な高さ、一覧本体はflex:1で
-   スクロール）がこれに乗る。 */
-.tab-panel.active {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
 
-/* スマホの「地図」タブ：パネルの残り高さいっぱいに広がる */
-#map-slot-mobile {
-  flex: 1;
-  min-height: 0;
-}
 
 /* 検索前は非表示。JSが#app-layoutに has-results クラスを付けたときのみ表示する。
    data-view="results" の条件も含めることで、詳細画面表示中に
@@ -452,72 +412,12 @@ header p {
   min-height: 0;
 }
 
-#app-layout[data-view="detail"] .mobile-tabs,
-#app-layout[data-view="detail"] .tab-panel {
-  display: none;
-}
 
 #app-layout[data-view="detail"] #detail-container {
   display: flex;
   flex: 1;
 }
 
-/* ブレークポイント：CSSピクセル基準のため高倍率ズームでは実効幅が縮む
-   （150%ズームなら実際の画面幅の2/3）。900pxだと125〜150%ズームで
-   簡単に下回ってしまうため760pxまで下げ、さらに左カラムをminmax()で
-   可変にすることで、より狭い実効幅でも二段組を維持できるようにする。
-   layout-controller.js の DESKTOP_QUERY もこの値と必ず一致させること。 */
-@media (min-width: 760px) {
-  .app-layout {
-    display: grid;
-    grid-template-columns: minmax(280px, 42%) 1fr;
-    gap: 1.25rem;
-    /* align-items未指定＝stretchで左右カラムを同じ高さに揃え、
-       それぞれの内部でoverflow-y:autoさせる */
-  }
-
-  .container {
-    max-width: 1200px;
-  }
-
-  /* PCでは地図を左カラムに表示するため、タブUIは不要 */
-  .mobile-tabs {
-    display: none;
-  }
-
-  .tab-panel[data-tab-panel="list"] {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 0;
-  }
-
-  .tab-panel[data-tab-panel="map"] {
-    display: none;
-  }
-
-  /* #app-layout[data-view="detail"] はID+属性2つでこれらより必ず優先される */
-  #app-layout[data-view="detail"] .tab-panel {
-    display: none;
-  }
-
-  /* PCでは左カラムが「検索フォーム＋地図」の2要素になる */
-  #map-slot-desktop {
-    flex: 1;
-    min-height: 200px;
-    height: auto;
-    margin-top: 0.75rem;
-    overflow: visible;
-  }
-
-  /* PC二段組では左カラム幅（minmax）自体が制約になるため、
-     縦積み用の最大幅指定は解除する */
-  .form-row {
-    max-width: none;
-    margin-left: 0;
-    margin-right: 0;
-  }
-}
 
 /* 検索結果の見出し（「往復¥801〜¥1000で行ける場所」）。帯の範囲を常に明示する */
 .results-band-heading {
@@ -552,13 +452,532 @@ header p {
   cursor: pointer;
 }
 
-/* 結果一覧の地図（#spots-map自体はスロットいっぱいに広がる） */
-#spots-map {
+/* 結果一覧の地図エリア（#map-area自体はスロットいっぱいに広がる）。
+   2D(#spots-map)と3D(#spots-map-3d)を同じ領域に重ねて置き、
+   #map-area.mode-3dの有無でどちらか一方だけを表示する
+   （2026-10-10、4本目①「3D地図の土台」）。 */
+#map-area {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+#spots-map,
+#spots-map-3d {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   border-radius: 8px;
   overflow: hidden;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+#spots-map-3d {
+  display: none;
+}
+
+#map-area.mode-3d #spots-map {
+  display: none;
+}
+
+#map-area.mode-3d #spots-map-3d {
+  display: block;
+}
+
+
+
+
+/* 3D準備中インジケータ（4本目②）。2Dの地図は消さず、これを右下に小さく重ねるだけ */
+#terrain-loading-indicator {
+  position: absolute;
+  /* 【2026-10-10】右下はMapLibreの出典（attribution、compactでも小さいiアイコンが
+     そこに出る）と同じ角のため、右上に置いて重ならないようにする */
+  right: 8px;
+  top: 8px;
+  z-index: 1000;
+  margin: 0;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  background-color: rgba(0, 0, 0, 0.72);
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+/* 【2026-10-13、22本目、Minami決定：B】スマホの検索後に出す予算操作帯。
+   「−」「スライダー」「＋」「¥800・16件（または「この金額で探す」）」を
+   1行に収める。PCでは常に非表示にする（JS側は検索後にhidden属性を外す
+   だけで、幅の判定はしていないため、ここで確実にPCを除外する）。
+   【2026-10-16、26本目、不具合修正】以前は地図（#map-area）に重ねる絶対配置
+   だったため、「地図」タブを選んでいるときしか表示・操作できなかった
+   （#map-areaはlayout-controller.jsがタブごとにDOMの位置を付け替えるため、
+   「一覧」タブ中は非表示のタブパネルの中に入ってしまっていた）。タブパネルの
+   外（.layout-rightの直接の子）に移し、通常のフロー要素として一覧・地図
+   どちらのタブでも常に見える・操作できるようにした。 */
+.mobile-budget-overlay {
+  flex: 0 0 auto;
+  /* 【2026-10-16、26本目、不具合修正】高さ44px・上マージン0.5rem（地図への
+     絶対配置だった頃の値）のままだと、400×464のような低い画面で一覧タブの
+     占有率が画面高さの半分を割り込んだ（verify-layoutの既存チェック、
+     実測224.3px<232px）。通常のフロー要素になり一覧の高さを直接削るように
+     なったため、タブパネルを圧迫しない範囲まで詰めた
+     （高さ44→40px、上マージン0.5rem→0.2remで計10px強縮小）。 */
+  height: 40px;
+  margin: 0.2rem 0 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background-color: rgba(255, 255, 255, 0.97);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  padding: 0 0.5rem;
+}
+
+
+.mobile-budget-overlay #mobile-budget-decrement,
+.mobile-budget-overlay #mobile-budget-increment {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  background-color: white;
+  color: var(--color-main-deep);
+  font-size: 1.1rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mobile-budget-overlay #mobile-budget-decrement:disabled,
+.mobile-budget-overlay #mobile-budget-increment:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.mobile-budget-overlay input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 【2026-10-14、25本目】地図上の「最大◯km先まで」ラベル廃止の代わりに、
+   スライダーを動かしている間だけ距離を出す小さな文字（main.js参照）。
+   検索ボタンと違って押せないため、縮むだけで伸びない・省略もしない
+   （「375pxでも1行に収まるよう…収まらないときは件数より距離を優先する」
+   というMinami指示により、距離側は最後まで隠さない）。 */
+#mobile-budget-distance {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--color-text-sub);
+  white-space: nowrap;
+}
+
+/* 【2026-10-14、25本目、不具合修正】flex-shrink:1のままだと、距離表示
+   （#mobile-budget-distance）が増えた分だけスライダー・このボタン双方が
+   圧縮を分け合い、375px幅では「¥1,000で探す」という最小限の文言すら
+   収まらず省略記号で切れることが実測で判明した（scrollWidth92px>
+   clientWidth78px）。ボタンの文言は押せる操作の案内文であり省略されては
+   困るため、flex-shrink:0にしてボタンは縮めず、伸び縮みしてよい
+   スライダー側だけで調整する（max-width:45%は、それでもなお収まらない
+   極端なケースの保険として残す）。 */
+#mobile-budget-search-btn {
+  flex-shrink: 0;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  background-color: white;
+  color: var(--color-text-sub);
+}
+
+/* スライダーを動かして、まだ検索し直していない間だけ押せるボタンらしい見た目にする
+   （main.jsのupdateMobileBudgetOverlay()がこのクラスを付け外しする）。
+   【2026-10-20、36本目、Minami指示】以前は緑（--color-main、検索前の
+   #search-btnの既定色と同じ）だったが、PCの「この条件で検索」
+   （#search-btn.search-btn-pending、オレンジ）と色をそろえる。形（丸ピル）・
+   角丸・文字サイズはこのボタン本来のまま変えない（色・見た目の強さだけを
+   そろえる、というMinami指示のため）。 */
+#mobile-budget-search-btn.mobile-budget-search-btn-pending {
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-deep) 100%);
+  border-color: transparent;
+  color: white;
+}
+/* 【2026-10-21、41本目、Minami決定】寄っているときだけ出していた「全体を見る」
+   文字ボタン（11本目②、.view-all-btn）は、いつでも出ている「最初の見え方に戻るボタン」
+   （.map-reset-view-btn、下の#map-controls-clusterの中）に置き換えた。 */
+
+/* 【2026-10-17、32本目A、Minami決定】方位磁針（上、32px）とハンドル（下、
+   72px）を縦に並べ、左右中心をそろえるための入れ物。flexboxの
+   align-items:centerで、サイズの違う2つの丸を自動的に中心そろえできる。 */
+.map-controls-cluster {
+  /* 【41本目】最初の見え方に戻るボタンは2Dでも出すため、入れ物自体はいつも出す
+     （方位磁針・ハンドルは下の規則で3Dのときだけ出す）。上から：方位磁針 → 戻るボタン →
+     ハンドル（3D）。2Dは戻るボタンだけが右上に来る。 */
+  display: flex;
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1000;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+#map-area:not(.mode-3d) .map-compass-btn,
+#map-area:not(.mode-3d) .map-rotate-handle {
+  display: none;
+}
+
+/* 【2026-10-21、41本目、Minami決定】最初の見え方に戻るボタン。方位磁針と同じ32pxの
+   白い丸に、地図の出発駅と同じオレンジのしずく形を小さく入れる（GPSの現在地ボタン
+   「⌖」と間違われないようにするため）。一度も検索していないときはhidden属性で隠す
+   （display:flexを指定しているため、[hidden]のときの規則を明示しないと隠れない）。 */
+.map-reset-view-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--color-border);
+  background-color: white;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.map-reset-view-btn[hidden] {
+  display: none;
+}
+
+.map-reset-view-btn:focus-visible {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.map-reset-view-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.map-reset-view-pin {
+  /* 3Dの出発駅の印（terrain-map-view.jsのmaplibregl.Marker({color:'#e06c2c'})）と同じ色 */
+  fill: #e06c2c;
+}
+
+.map-reset-view-pin-dot {
+  fill: white;
+}
+
+/* 方位磁針：押すと北（bearing0）だけに戻る（傾きは変えない）。ハンドルから
+   「押すと元に戻る」操作を外した代わり（Minami決定：ハンドルで伝えられる
+   操作は「回す」「上下に動かす」の2つまでにする）。 */
+.map-compass-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--color-border);
+  background-color: white;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.map-compass-btn:focus-visible {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.map-compass-needle {
+  width: 16px;
+  height: 16px;
+  /* JS（terrain-map-view.jsの_setupCompassButton()）がbearingに合わせて
+     transform: rotate()を直接書き換える。 */
+}
+
+.map-compass-needle-n {
+  fill: var(--color-error);
+}
+
+.map-compass-needle-s {
+  fill: var(--color-border);
+}
+
+/* 【2026-10-17、32本目A、Minami決定】向き・傾きを変えるハンドル。Coworkの
+   モック画像（回転ハンドル_改良2案.png「改良1」）に合わせ、昔のラジオ・
+   テレビのつまみのような銀色の金属見た目に作り直した（【27】の緑のしま
+   模様・北の赤い針は廃止。北へ戻す操作は上の方位磁針に分離）。
+   外側のふち（#map-rotate-dial、細かいギザギザ＋銀色の斜めグラデーション）
+   をなぞると向き（回転）、真ん中のくぼみ（#map-rotate-knob）の中のたての溝
+   （.map-pitch-track）を上下にドラッグすると傾きが変わる。2Dでは出さない。
+   全体の直径は72px（モック画像の実寸、Minami指示）。 */
+.map-rotate-handle {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  cursor: grab;
+  /* 【重要】touch-action:noneにしないと、スマホでこのハンドルをなぞった
+     ときにブラウザ既定のスクロール・ピンチジェスチャーとポインタイベントが
+     競合し、JS側のpointermoveが安定して取れないことがある。 */
+  touch-action: none;
+  /* 【2026-10-20、35本目、不具合修正】子の.map-rotate-dialはbearingに応じて
+     transform: rotate()される正方形（border-radius:50%で丸く見せているだけ）
+     のため、90度の倍数以外の角度では軸並行バウンディングボックスが72×72より
+     膨らむ（見た目の円は変わらない）。この膨らみがPCで地図の下の横スクロール
+     バーとして表面化する不具合の根本原因だったため、見た目の円の外側
+     （どのみち見えない正方形の角）だけを確実に切り取る。 */
+  overflow: hidden;
+}
+
+.map-rotate-handle:active {
+  cursor: grabbing;
+}
+
+.map-rotate-handle:focus-visible {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ふち＋本体。JS（_setupRotateHandle()のupdateDial()）がbearingに合わせて
+   この要素ごとtransform: rotate()する（本体の金属グラデーション・ふちの
+   ギザギザも一緒に回る＝実物のつまみと同じ見え方）。中身は疑似要素2枚：
+   ::beforeがふちの細かいギザギザ（濃淡の繰り返し）、::afterが銀色の
+   斜めグラデーション本体（ふちから5px内側＝ふちの幅5px分だけギザギザが
+   見える）。 */
+.map-rotate-dial {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4);
+}
+
+.map-rotate-dial::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  /* 細かいギザギザ（昔のテレビのチャンネルつまみのような刻み、濃い灰色）。
+     【23】【27】の12度刻み（緑/白）より細かく4度刻みにして「ギザギザ」感を
+     強める（Minami指摘：【27】のしま模様は記号を見えにくくしていただけで
+     質感になっていなかった）。 */
+  background: repeating-conic-gradient(#5a5a5a 0deg 2deg, #8a8a8a 2deg 4deg);
+}
+
+.map-rotate-dial::after {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  /* 明るい銀色の金属（左上が明るく右下が暗いななめのグラデーション、
+     Minami指示）。 */
+  background: linear-gradient(135deg, #f2f2f2 0%, #d8d8d8 35%, #aeaeae 70%, #8c8c8c 100%);
+  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.8), inset 0 -2px 3px rgba(0, 0, 0, 0.25);
+}
+
+/* ふちの上の目印（今の向きを示す短い濃い灰色の線）。.map-rotate-dialの
+   子要素のため、ダイヤルごと回転しても一緒について回る。 */
+.map-rotate-tick {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 3px;
+  height: 10px;
+  border-radius: 1.5px;
+  background-color: #3a3a3a;
+  z-index: 1;
+}
+
+/* 回す矢印（同じ向き＝時計回りを2本、ふちから離して輪の中ほどに置く、
+   Minami指示）。.map-rotate-dialの外（兄弟要素）のため回転しない＝常に
+   読みやすい向きのまま固定のヒントとして見える。彫り込んだような落ち着いた
+   灰色＋溝の下側に白い細い光（text-shadow）。 */
+.map-rotate-arrow {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  margin-top: -8px;
+  color: #6a6a6a;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.7);
+  user-select: none;
+  pointer-events: none;
+}
+
+.map-rotate-arrow::before {
+  content: '↻';
+  position: absolute;
+  inset: 0;
+  font-size: 0.95rem;
+  line-height: 16px;
+  text-align: center;
+}
+
+.map-rotate-arrow-1 {
+  left: 6px;
+}
+
+.map-rotate-arrow-2 {
+  right: 6px;
+}
+
+/* 真ん中のくぼみ。ダイヤルの内側に凹んで見える（Minami指示のモック画像：
+   丸いくぼみの中にたての溝）。上下にドラッグすると傾き（terrain-map-view.js
+   参照）。【32本目A】押しても北には戻らない（方位磁針に分離したため）。 */
+.map-rotate-knob {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #c4c4c4 0%, #e8e8e8 50%, #c4c4c4 100%);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.45), inset 0 -1px 1px rgba(255, 255, 255, 0.5);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+/* 小さな「へ」の字の矢印（上向き・下向き）。CSSのborderだけで三角を作る
+   （フォント依存の文字より、どの環境でも同じ見た目になる）。 */
+.map-pitch-chevron {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+}
+
+.map-pitch-chevron-up {
+  border-bottom: 5px solid #707070;
+}
+
+.map-pitch-chevron-down {
+  border-top: 5px solid #707070;
+}
+
+/* たての溝（スライダーの軌道）。 */
+.map-pitch-track {
+  position: relative;
+  width: 6px;
+  height: 18px;
+  border-radius: 3px;
+  background-color: #8a8a8a;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+/* 溝の中を動く、横線のギザギザがついた白っぽいつまみ。つまみの位置が
+   今の傾き（pitch）を表す（上＝斜めから＝pitch大、下＝真上から＝pitch0）。
+   JS（_setupRotateHandle()のupdateDial()）がtopを0〜75度に合わせて動かす。 */
+.map-pitch-thumb {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 12px;
+  height: 7px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #fafafa 0%, #d4d4d4 100%);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  background-image:
+    linear-gradient(180deg, #fafafa 0%, #d4d4d4 100%),
+    repeating-linear-gradient(180deg, #9a9a9a 0 1px, transparent 1px 2.5px);
+  background-blend-mode: normal, multiply;
+}
+
+/* 【2026-10-16、27本目】初めて3Dに切り替えたときだけ出す案内の吹き出し。
+   【2026-10-17、32本目A】ハンドルが#map-controls-cluster（右上、方位磁針＋
+   ハンドルの縦並び）の中に移ったため、クラスタの左に、ハンドルの高さに
+   合わせて出す。 */
+.map-rotate-hint {
+  position: absolute;
+  /* 【41本目】ハンドルの上に最初の見え方に戻るボタン（32px＋隙間8px）が入ったため、
+     58px→98pxへ下げた（矢印がハンドルの中心を指す位置）。 */
+  top: 98px;
+  right: 88px;
+  max-width: 180px;
+  z-index: 1000;
+  background-color: rgba(30, 30, 30, 0.92);
+  color: white;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+}
+
+/* 【45本目】2Dの出典は、3D（MapLibreのcompact）と同じく閉じているときは右下の小さな「i」の丸。
+   押すと開いて全文（国土地理院ベクトルタイル提供実験など）を出す。 */
+#spots-map .leaflet-control-attribution.map-attrib-compact:not(.is-open) {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  margin: 0 10px 10px 0;
+  border-radius: 50%;
+  background-color: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+  font-size: 0;
+  cursor: pointer;
+  position: relative;
+}
+
+#spots-map .leaflet-control-attribution.map-attrib-compact:not(.is-open) > * {
+  display: none;
+}
+
+#spots-map .leaflet-control-attribution.map-attrib-compact:not(.is-open)::before {
+  content: 'i';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: bold 15px/1 Georgia, 'Times New Roman', serif;
+  color: #333;
+}
+
+#spots-map .leaflet-control-attribution.map-attrib-compact.is-open {
+  margin: 0 10px 10px 0;
+  border-radius: 12px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+/* 【45本目】ハンドルの左以外に出したとき（ピン等に重ならない場所を選んだとき）は矢印を出さない。
+   2Dに戻したら（3秒たつ前でも）出さない。 */
+.map-rotate-hint-free::after {
+  display: none;
+}
+
+#map-area:not(.mode-3d) .map-rotate-hint {
+  display: none;
+}
+
+.map-rotate-hint::after {
+  content: '';
+  position: absolute;
+  top: 16px;
+  right: -6px;
+  width: 0;
+  height: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-left: 6px solid rgba(30, 30, 30, 0.92);
 }
 
 .map-pin-wrapper {
@@ -569,37 +988,186 @@ header p {
 .map-pin {
   display: block;
   box-sizing: border-box;
-  transition: transform 0.15s;
+  transition: transform 0.3s ease, opacity 0.3s ease;
 }
 
-/* スポットのピン：小さめの点にして密集時の重なりを軽減 */
+/* 【2026-10-21、43本目、Minami決定：B-1】ピンの色と大きさ（2D・3D共通。3Dは
+   terrain-map-view.jsのPIN_COLOR_*と同じ値）。今のぼやけたオレンジの丸が密集して探しにくい
+   （Minami実機確認）ため、くっきりした小さな丸にし、光のにじみ（box-shadowのぼかし）はやめた。
+   - 青（.map-pin-blue）：検索した金額帯で行ける場所。円の青（#2F6FB2）より濃い紺に近い青＋白いふち、直径13px
+   - オレンジ（.map-pin-orange）：金額を変えて、新しく金額帯に入った場所（検索すると青になる）
+   - 選んだピン（.map-pin-selected）：ひと回り大きく（20px）、白い太いふちと影
+   ピンは入れ物（.map-pin-wrapper-spot、22px四方）の真ん中に置き、大きさが変わっても位置がずれない
+   ようにする。予算をこえる場所・まとめた丸に入った場所はJS側でdisplay:noneにする。 */
+.map-pin-wrapper-spot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .map-pin-spot {
-  width: 14px;
-  height: 14px;
-  background-color: var(--color-main);
-  border: 1.5px solid white;
+  width: 13px;
+  height: 13px;
+  background-color: #1f3c88;
+  border: 2px solid white;
   border-radius: 50%;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
-/* ホバーと選択は独立した状態として扱う（色・サイズ両方で段階を付け、
-   色覚特性のある方にも区別しやすくする）。選択中は最も目立たせたいため、
-   両方同時に付く場合に備えて選択のルールをホバーより後ろに置き、
-   選択の見た目が優先されるようにしている。 */
+.map-pin-spot.map-pin-blue {
+  background-color: #1f3c88;
+}
+
+/* 【48本目、Minami決定：1】オレンジも紺と同じくらいの小さな点（直径10px、白いふち）。紺（9px）より
+   ひと回りだけ大きく、影を少し濃くして、わずかに目立たせる。選んだピン・ホバーは下の決まりで大きくなる。 */
+.map-pin-spot.map-pin-orange {
+  width: 10px;
+  height: 10px;
+  background-color: #ff6b2b;
+  border-width: 1.5px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+/* 【48本目、Minami決定：2】＋で新しく増えたオレンジが、波に合わせて「ぽん」と出る（小さく出て、
+   少しふくらんで元の大きさに。0.2秒）。動きを減らす設定のときはJS側がこのクラスを付けない。
+   【2026-10-27、64本目、Minami決定】「ぽん」をやめ、しずくのように上から落ちて刺さり、「ぽよん」と弾む（つぶれて
+   戻る）動きにした（0.3秒）。前半で落ち（だんだん速く）、着いたところでつぶれ、少し縦にのびて元の形に戻る。
+   3D（terrain-map-view.js）の落ちる印（.map-pin-drop-3d）も同じ動き。 */
+.map-pin-spot.map-pin-drop,
+.map-pin-drop-3d .map-pin-drop-dot {
+  transform-origin: 50% 100%;
+  animation: map-pin-drop 0.3s linear;
+}
+
+@keyframes map-pin-drop {
+  0% { transform: translateY(-18px) scale(0.85, 1.2); opacity: 0; animation-timing-function: cubic-bezier(0.55, 0, 1, 0.45); }
+  12% { opacity: 1; }
+  45% { transform: translateY(0) scale(0.9, 1.15); animation-timing-function: ease-out; }
+  62% { transform: translateY(0) scale(1.4, 0.6); animation-timing-function: ease-in-out; }
+  80% { transform: translateY(0) scale(0.9, 1.12); animation-timing-function: ease-in-out; }
+  100% { transform: translateY(0) scale(1, 1); }
+}
+
+/* 3Dで落ちてくる間だけ出す印（地図に描く点と同じ大きさ・色：直径11px、白いふち）。落ち終わったら地図に描く点に戻す。 */
+.map-pin-drop-3d {
+  width: 11px;
+  height: 11px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.map-pin-drop-3d .map-pin-drop-dot {
+  display: block;
+  width: 11px;
+  height: 11px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background-color: #ff6b2b;
+  border: 1.5px solid white;
+}
+
+/* 【49本目】灰色の点（金額帯より安い場所）はやめた。紺とオレンジの2色にする。 */
+
+/* 【2026-10-23、47本目、Minami決定：1】オレンジが1つでもあるとき（地図の入れ物に.map-has-orange）、
+   主役はオレンジ（13pxの丸・オレンジの丸）。紺はまとめずに小さな点（9px、白いふち）にする。
+   選んだピン・ホバー中のピンは下の決まりのまま大きく出す。 */
+.map-has-orange .map-pin-spot.map-pin-blue:not(.map-pin-selected):not(.map-pin-hover) {
+  width: 9px;
+  height: 9px;
+  border-width: 1.5px;
+  /* 【2026-10-25、54本目、Minami決定】オレンジ（NEW）があるときは、紺をうすく（0.45）して背景のように見せる。
+     大きさは変えない（押しやすさのため）。opacityではなく色の透明度でうすくする（検索直後の波の演出
+     .pin-wave-hiddenが同じ要素のopacityを使うため、opacityを上書きすると隠れているはずの点が見えてしまう）。
+     選んだピン・ホバー中のピンは、この決まりから外れて元の濃さ。3Dはterrain-map-view.jsのPLAIN_PIN_OPACITY。 */
+  background-color: rgba(31, 60, 136, 0.45);
+  border-color: rgba(255, 255, 255, 0.45);
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.12);
+}
+
+/* 【54本目】地図の上でマウスを乗せた紺のピンは、元の濃さに戻す（一覧のカードに乗せたときの.map-pin-hoverは上の
+   :not()で元の濃さ）。 */
+.map-has-orange .map-pin-wrapper:hover .map-pin-spot.map-pin-blue {
+  background-color: #1f3c88;
+  border-color: white;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+/* ホバーと選択は独立した状態として扱う（選択を後ろに置き、両方付いたときは選択の見た目を優先）。 */
 .map-pin-spot.map-pin-hover {
-  width: 18px;
-  height: 18px;
-  margin: -2px 0 0 -2px;
-  background-color: var(--color-hover);
+  width: 16px;
+  height: 16px;
   border-width: 2px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
 }
 
 .map-pin-spot.map-pin-selected {
-  width: 24px;
-  height: 24px;
-  margin: -5px 0 0 -5px;
-  background-color: var(--color-selected);
-  border-width: 2.5px;
+  width: 20px;
+  height: 20px;
+  background-color: #1f3c88;
+  border: 3.5px solid white;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.55);
+}
+
+/* 【43本目A-1】3Dの選んだピン（HTMLの印、地形の裏でも隠れない）。2Dの.map-pin-selectedと
+   同じ見た目。押す操作は下の円のレイヤーで受けるため、この印自体は操作を受けない。 */
+.map-pin-selected-3d {
+  width: 20px;
+  height: 20px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background-color: #1f3c88;
+  border: 3.5px solid white;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+  z-index: 3; /* 【53本目】出発駅の印（z-index:2）より上 */
+}
+
+/* 【43本目、Minami決定：B-2】近いピンをまとめた丸（数字入りの紺の丸）。
+   大きさ（28〜38px）はJSが中の件数に応じてstyleで指定する。
+   【47本目、Minami決定：1】オレンジがあるときはオレンジだけをまとめたオレンジの丸
+   （.map-cluster-orange）にする。紺の丸の右上の小さなオレンジの点（43本目）はやめた。 */
+.map-cluster-wrapper {
+  background: none;
+  border: none;
+}
+
+.map-cluster {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background-color: #1f3c88;
+  border: 2px solid white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  color: white;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 0.3s ease, opacity 0.3s ease;
+}
+
+.map-cluster.map-cluster-orange {
+  background-color: #ff6b2b;
+}
+
+/* 【47本目】3Dのまとめた丸（HTMLの印）は選んだピンの印より下。
+   【2026-10-25、53本目、Minami決定】出発駅の印は、まとめた丸より上に描く（数字の丸が出発駅にかぶり、
+   出発駅が見えなかったため）。重なり順（上から）：選んだピン（3）→ 出発駅（2）→ まとめた丸（1）→ 地図に描く点。 */
+.map-cluster-3d {
+  z-index: 1;
+}
+
+.map-departure-3d {
+  z-index: 2;
+}
+
+/* 検索直後の波の演出（下の.pin-wave-hidden）を、まとめた丸にも同じように効かせる。 */
+.map-cluster-wrapper.pin-wave-hidden .map-cluster {
+  opacity: 0;
+  transform: scale(0.3);
 }
 
 /* 出発駅のピン：大きめのダイヤ形＋常時ラベルで一目で分かるように */
@@ -627,37 +1195,20 @@ header p {
   border-top-color: var(--color-accent-deep);
 }
 
-/* 地図ピンのポップアップ（スポット名・短い説明・詳細ボタン） */
-.map-popup {
-  min-width: 160px;
-}
-
-.map-popup-title {
-  display: block;
-  margin-bottom: 0.25rem;
-  color: var(--color-text);
-}
-
-.map-popup-description {
-  font-size: 0.85rem;
-  color: var(--color-text-sub);
-  margin-bottom: 0.5rem;
-}
-
-.popup-detail-btn {
-  width: 100%;
-  padding: 0.4rem;
-  background-color: var(--color-main);
-  color: white;
-  border: none;
-  border-radius: 4px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.popup-detail-btn:hover {
-  background-color: var(--color-main-deep);
+/* 【2026-10-14、10本目②】検索を押した直後、出発駅から近い順に点が波のように
+   広がって出る演出。pin-wave-hiddenが付いている間は見えない状態にしておき、
+   JS側がスポットごとに時間差でクラスを外すとこのtransitionで浮かび上がる。
+   prefers-reduced-motionのときはJS側がクラスを付けないため、常に即表示になる。
+   【不具合修正】当初は.map-pin-wrapper自身にtransform/opacityを付けていたが、
+   Leafletはこの同じ要素（marker.getElement()）のtransformを使ってピンを
+   地図上に位置決めしている（L.DomUtil.setPosition）。wrapper自身に
+   transitionを付けると、Leaflet自身の位置決め（transform書き換え）まで
+   アニメーションしてしまい、作成直後のboundingBox()が実際の位置とずれる
+   （verify-layoutの実クリック検証で「ポップアップが開かない」として発覚）。
+   地図上の位置決めに使われない内側の.map-pinへ対象を変えた。 */
+.map-pin-wrapper.pin-wave-hidden .map-pin {
+  opacity: 0;
+  transform: scale(0.3);
 }
 
 /* 固定ブレークポイントではなく実際のカラム幅（＝右カラムの実効幅）に
@@ -773,6 +1324,22 @@ header p {
 .spot-card-selected {
   outline: 3px solid var(--color-selected) !important;
   outline-offset: -3px;
+}
+
+/* 【2026-10-11、6本目B】地図の点を押したとき、該当カードを2秒ほど光らせる
+   （Minami決定。.spot-card-selectedの枠線とは別に、押した瞬間だけ分かる
+   一時的な明るい光を足す。アニメーション終了後はJS側でクラスを外す）。 */
+.spot-card-glow {
+  animation: spot-card-glow-fade 2s ease-out;
+}
+
+@keyframes spot-card-glow-fade {
+  0% {
+    box-shadow: 0 0 0 4px rgba(255, 107, 43, 0.9), 0 0 16px 6px rgba(255, 107, 43, 0.6);
+  }
+  100% {
+    box-shadow: 0 0 0 4px rgba(255, 107, 43, 0);
+  }
 }
 
 .spot-image {
@@ -900,79 +1467,255 @@ header p {
 #detail-container {
   background: white;
   border-radius: 8px;
-  padding: 1.5rem;
+  padding: 12px 16px; /* 【66本目】1.5remから詰めた */
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   overflow-y: auto;
 }
 
-.detail-image {
-  width: 100%;
-  max-height: 400px;
-  object-fit: cover;
-  border-radius: 8px;
-  margin-bottom: 1.5rem;
+/* 【66本目、Minami決定】詳細は、スクロールしなくても名前・写真・紹介文の最初の数行が見えるよう詰める。
+   名前の行（右に☆・共有の小さなアイコンボタン。一覧のカードと同じ44px四方の丸）→ 往復の金額・片道の時間・距離の1行
+   → 横幅いっぱいで低めの写真（PC 180px・スマホ 140px、切り抜く。押すと大きく見られる）→ 紹介文。 */
+.detail-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 8px;
 }
 
-.detail-image.spot-image-placeholder {
-  height: 240px;
-  font-size: 5rem;
+.detail-head-text {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-/* 詳細画面の☆（マイリスト）・共有ボタン。カード側の丸アイコンと違い、
-   文言付きの横長ボタンにする（タイトル直下、画像の前）。高さ44px以上を確保する。 */
-.detail-actions {
+#detail-content .detail-title {
+  margin: 0;
+  font-size: 1.15rem;
+  line-height: 1.35;
+  font-weight: 800;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.detail-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.6rem;
-  margin: 0.5rem 0 1rem;
+  margin: 2px 0 0;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--color-text-sub);
+}
+
+.detail-meta > span:first-child {
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.detail-meta-sep {
+  margin: 0 0.15em;
+}
+
+.detail-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
 }
 
 .detail-actions .favorite-btn,
 .detail-actions .share-btn {
-  width: auto;
-  height: auto;
-  min-height: 44px;
+  box-shadow: none;
+  border: 1px solid var(--color-border);
+  background: white;
+}
+
+.detail-image-btn {
+  display: block;
+  width: 100%;
+  padding: 0;
+  margin: 0 0 8px;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+}
+
+.detail-image {
+  display: block;
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
   border-radius: 6px;
+  margin: 0 0 8px;
+}
+
+.detail-image-btn .detail-image {
+  margin: 0;
+}
+
+.detail-image.spot-image-placeholder {
+  height: 120px;
+  font-size: 3rem;
+}
+
+#detail-content .detail-description {
+  margin: 0 0 10px;
+  line-height: 1.6;
+}
+
+.detail-map-btn {
+  min-height: 44px;
+  margin: 0 0 10px;
   padding: 0.5rem 1rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--color-main-light);
+  color: var(--color-text);
   font-size: 0.9rem;
   font-weight: 600;
-  gap: 0.4rem;
-  color: var(--color-text);
-  background: var(--color-main-light);
-  border: 1px solid transparent;
-  box-shadow: none;
 }
 
-/* 未保存＝目立つオレンジ塗り（保存を促すCTA）。2026-10-09、Minamiさんの指示で
-   保存済み/未保存の強調を入れ替えた（以前は保存済みをオレンジにしていたが、
-   「まだ押していない」方を目立たせる方が自然なため）。 */
-.detail-actions .favorite-btn:not(.favorite-btn-active) {
-  background: var(--color-accent);
-  color: white;
+@media (max-width: 759px) {
+  .detail-image {
+    height: 140px;
+  }
+  #detail-content .detail-title {
+    font-size: 1.05rem;
+  }
 }
 
-/* 保存済み＝白地に枠線（既にやったことを示す、控えめな見た目）。
-   ☆アイコン自体は.icon-star-filledが独立して黄色を保つ（ボタンの文字色とは
-   別のcolorプロパティのため、ここでボタン文字色を変えても影響しない）。 */
-.detail-actions .favorite-btn.favorite-btn-active {
-  background: white;
-  color: var(--color-text);
-  border-color: var(--color-border);
+/* 写真を大きく見る（画面いっぱい、× で閉じる） */
+.photo-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 56px 12px 12px;
+  background: rgba(0, 0, 0, 0.88);
 }
 
-#back-btn {
-  background-color: var(--color-text-sub);
-  color: white;
+.photo-viewer[hidden] {
+  display: none;
+}
+
+.photo-viewer-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.photo-viewer-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 44px;
+  height: 44px;
   border: none;
-  padding: 0.75rem 1.5rem;
-  border-radius: 4px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  color: #222;
+  font-size: 1.6rem;
+  line-height: 1;
   cursor: pointer;
-  margin-bottom: 1.5rem;
-  transition: background-color 0.2s;
 }
 
-#back-btn:hover {
-  background-color: var(--color-text);
+/* 【2026-10-11、5本目】「地図で見る」はスマホ幅専用（Minami指示）。PCは
+   地図が常に左に出ているため不要。レイアウト切替の基準（layout-controller.js
+   のDESKTOP_QUERY）と必ず一致させること。 */
+.detail-map-btn {
+  cursor: pointer;
+}
+
+@media (min-width: 760px) {
+  .detail-map-btn {
+    display: none;
+  }
+}
+
+/* 【2026-10-11、6本目E】「見てきた場所」の足あと（旧「← 一覧に戻る」の
+   置き換え）。見出しは小さく控えめに（旅の行程ではなく、戻るための導線で
+   あることが伝わるよう、Minami指示で「見てきた場所」という文言にした）。 */
+/* 【66本目、Minami決定】見出し「見てきた場所」と今の場所の名前はやめ、1行の小さな「← 一覧」（前の場所があれば
+   「＞ 前の場所」が続く）にした。押せる高さ44pxは残し、上下の余白は詰める。 */
+#detail-breadcrumb {
+  margin: -8px 0 0;
+}
+
+.breadcrumb-trail {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.15rem;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 0.85rem;
+}
+
+.breadcrumb-sep {
+  color: var(--color-text-sub);
+  margin: 0 0.1rem;
+}
+
+/* 押せる部分は高さ44px程度（Minami指示：スマホで押しやすい大きさ、
+   このリポジトリの他のタップ領域と同じ基準）。 */
+.breadcrumb-item,
+.breadcrumb-ellipsis {
+  background: none;
+  border: none;
+  color: var(--color-main-deep);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 0.85rem;
+  max-width: 12em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+  padding: 0.6rem 0.3rem;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.breadcrumb-item:hover,
+.breadcrumb-ellipsis:hover {
+  color: var(--color-main);
+}
+
+.breadcrumb-list-link {
+  padding-left: 0;
+  flex: 0 0 auto;
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.breadcrumb-ellipsis {
+  text-decoration: none;
+  font-weight: 700;
+}
+
+/* スマホ幅では中間の場所を省略し「一覧 ＞ … ＞ 1つ前 ＞ 今の場所」にする
+   （Minami指示）。「…」を押すと.breadcrumb-expandedが付き、中間が開く。 */
+@media (max-width: 759px) {
+  .breadcrumb-middle {
+    display: none;
+  }
+  .breadcrumb-middle-collapsed {
+    display: inline;
+  }
+  .breadcrumb-trail.breadcrumb-expanded .breadcrumb-middle {
+    display: inline;
+  }
+  .breadcrumb-trail.breadcrumb-expanded .breadcrumb-middle-collapsed {
+    display: none;
+  }
+}
+
+/* PC幅では常に全件表示（省略しない） */
+@media (min-width: 760px) {
+  .breadcrumb-middle-collapsed {
+    display: none;
+  }
 }
 
 /* 経路情報 */
@@ -1033,21 +1776,147 @@ header p {
   color: var(--color-text-sub);
 }
 
-/* リンク */
-#detail-content a {
+/* 【2026-10-11、5本目】Wikipedia・Wikidataのリンクをやめ、目立ち方を変えた
+   （Minami指示：オレンジの大きなボタン2つをやめる）。
+   Wikipediaは「控えめなボタン（枠線だけ）」、Wikidataは詳細の一番下に
+   「データの出典（Wikidata）」という小さな文字のリンクとして置く。 */
+.detail-wikipedia-btn {
   display: inline-block;
-  margin-right: 1rem;
   margin-top: 1rem;
   padding: 0.5rem 1rem;
-  background-color: var(--color-accent);
-  color: white;
+  background-color: transparent;
+  color: var(--color-accent-deep);
+  border: 1px solid var(--color-accent);
   text-decoration: none;
   border-radius: 4px;
+  font-weight: 600;
   transition: background-color 0.2s;
 }
 
-#detail-content a:hover {
-  background-color: var(--color-accent-deep);
+.detail-wikipedia-btn:hover {
+  background-color: var(--color-main-light);
+}
+
+.detail-wikidata-link {
+  display: block;
+  margin-top: 1.5rem;
+  font-size: 0.8rem;
+  color: var(--color-text-sub);
+  text-decoration: underline;
+}
+
+/* 「この先へ」（3本目、feature/kono-saki）。暗い色の枠に3件、1件を横長の1行で
+   表示する（デザイン③）：左に56px四方の小さい写真、中央に名前・一言、右に運賃。
+   3件で縦が260px前後に収まることを確認済み（verify-layoutのスクリーンショット参照）。 */
+.onward-section {
+  margin-top: 1.5rem;
+  padding: 0.75rem 0.75rem 0.9rem;
+  background-color: var(--color-text);
+  border-radius: 8px;
+  color: white;
+}
+
+.onward-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+  color: white;
+}
+
+.onward-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.onward-card {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  background-color: white;
+  border-radius: 6px;
+  padding: 0.3rem;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+
+.onward-card:hover,
+.onward-card:focus-visible {
+  transform: translateY(-1px);
+  outline: 2px solid var(--color-hover);
+  outline-offset: -2px;
+}
+
+.onward-image {
+  width: 56px;
+  height: 56px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.onward-image.spot-image-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--color-main-light, #e8f5d0);
+  font-size: 1.3rem;
+}
+
+.onward-body {
+  flex: 1 1 auto;
+  min-width: 0; /* 子要素のテキスト省略(ellipsis)のため */
+}
+
+.onward-name {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.onward-heart {
+  display: inline-flex;
+  color: var(--color-accent-deep);
+  flex-shrink: 0;
+}
+
+.onward-heart svg {
+  width: 14px;
+  height: 14px;
+}
+
+.onward-blurb {
+  margin: 0.1rem 0 0;
+  font-size: 0.72rem;
+  color: var(--color-text-sub);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.onward-fare {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex-shrink: 0;
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--color-main-deep);
+  text-align: right;
+}
+
+/* 金額・差額を別行のspanに分け、それぞれ1行に収める（スマホ幅で名前・一言の省略を
+   防ぐため運賃側は2行を許容するが、「（追加な」「し）」のような文字の途中で
+   折り返させない） */
+.onward-fare-amount,
+.onward-fare-diff {
+  white-space: nowrap;
 }
 
 /* ========================================
@@ -1120,43 +1989,12 @@ header p {
 }
 
 /* ========================================
-   フッター（必須表示3点。アプリシェル最下段に常時表示）
-   ======================================== */
 
-/* body（flex-column, height:100vh, overflow:hidden）の最下段。
-   flex:0 0 auto で自然な高さを確保し、余った高さは .container（flex:1）が
-   吸収する。3〜4行に折り返しても本体が潰れるだけでフッターは必ず見える。 */
-#app-footer {
-  flex: 0 0 auto;
-  background: white;
-  border-top: 1px solid var(--color-border);
-  padding: 0.3rem 1rem;
-  font-size: 0.68rem;
-  line-height: 1.45;
-  color: var(--color-text-sub);
-  text-align: center;
-}
 
-#app-footer .footer-summary {
-  max-width: 1000px;
-  margin: 0 auto;
-}
 
-#app-footer a {
-  color: var(--color-main-deep);
-}
 
-#about-data-btn,
-#howto-btn {
-  background: none;
-  border: none;
-  padding: 0;
-  font: inherit;
-  color: var(--color-main-deep);
-  text-decoration: underline;
-  cursor: pointer;
-  white-space: nowrap;
-}
+
+
 
 /* ========================================
    「このアプリのデータについて」モーダル
@@ -1233,10 +2071,37 @@ header p {
 }
 
 .howto-pin-spot {
-  background-color: var(--color-main);
+  background-color: #1f3c88;
   border: 1.5px solid white;
   outline: 1px solid var(--color-border);
   border-radius: 50%;
+}
+
+/* 【51本目】「NEW」（オレンジのピン）。地図のピンと同じ色。 */
+.howto-pin-new {
+  background-color: #ff6b2b;
+  border: 1.5px solid white;
+  outline: 1px solid var(--color-border);
+  border-radius: 50%;
+}
+
+/* 【62本目】使い方の「最初の見え方に戻るボタン」の絵。地図のボタン（.map-reset-view-btn）と同じ白い丸としずく。 */
+.howto-reset-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  width: 22px;
+  height: 22px;
+  margin: 0 0.2rem;
+  border-radius: 50%;
+  border: 1px solid var(--color-border);
+  background-color: white;
+}
+
+.howto-reset-icon svg {
+  width: 14px;
+  height: 14px;
 }
 
 .about-feed-summary {
@@ -1255,6 +2120,8 @@ header p {
   color: var(--color-main-deep);
 }
 
+/* 【62本目】使い方（#howto-modal-close）だけここに入っておらず、既定の小さなボタン（左上・12×19px）のままだった */
+#howto-modal-close,
 #about-modal-close,
 #mylist-modal-close,
 #shared-list-modal-close {
@@ -1280,6 +2147,26 @@ header p {
    適用したいため、ここでは上書きしない（過去にここで元の大きい値へ
    戻してしまい、縮小指示が効かなくなっていた反省を踏まえている）。 */
 @media (max-width: 759px) {
+  /* 【2026-10-13、22本目、Minami決定】地図に最低の高さ（240px、下の
+     #map-slot-mobileのmin-height参照）を設けたため、画面が低い端末
+     （例：400×464）では「ヘッダー＋要約バー＋タブ＋地図240px＋フッター」の
+     合計がビューポート高さを超えることがある。従来はbody{overflow:hidden}で
+     どの要素も一切はみ出さない設計だったが、これだと地図を240px未満に
+     潰す以外に逃げ場が無くなってしまう。
+     【不具合修正】当初はheightもauto（min-height:100vh）に変えていたが、
+     これだと#map-area{height:100%}のようなパーセント指定の高さが、bodyの
+     「明示的な高さ」が無くなったことで途中から軒並み解決できなくなり、
+     #map-areaの実際の高さが0になる regression が起きた（実機確認：
+     #map-slot-mobileは240pxを確保できているのに、その子の#map-areaだけ
+     height:0pxになっていた）。heightはこれまでどおり100vh（明示的な値）の
+     ままにし、overflowだけhidden→autoに変える：100vhという箱の大きさ自体は
+     変えず、中身がそれより高くなったときだけスクロールで逃がす。 */
+
+  /* 上のbodyのスクロールが実際に効くよう、はみ出しを押しとどめていた
+     中間の祖先（.app-layout・.layout-right）のoverflow:hiddenも
+     visibleにする（#results-listなど、個別に持つ内部スクロール領域は
+     このoverflow指定とは独立のため、一覧のスクロール自体は変わらない）。 */
+
   .container {
     padding: 0.5rem 0.75rem;
   }
@@ -1288,9 +2175,13 @@ header p {
      「予…」のように省略記号で切れていた。幅を削り合う形（text-overflow:
      ellipsis）では、タイトル・マイリストボタンを両方は入りきらないため、
      スマホ幅では説明文自体を表示しない（タイトルとマイリストボタンだけ残す）。 */
-  header p {
-    display: none;
-  }
+  /* 【51本目】副題は省略せずに出す。名前の下に小さく2段にする（1行では、名前・副題・マイリストが
+     375px幅に収まらないため）。 */
+
+
+  /* 2段にしてもヘッダーの高さが今まで（マイリストボタン32px＋上下の余白）をこえないようにする
+     （400×464で一覧タブの高さが画面の半分を切らないように）。 */
+
 
   .form-row {
     flex-direction: column;
@@ -1314,6 +2205,13 @@ header p {
     flex: 0 0 auto;
     width: 100%;
   }
+
+  /* 【2026-10-13、22本目、Minami決定：B】検索後（#app-layout.has-results）は、
+     スマホでは予算の操作を地図の下の#mobile-budget-overlayに任せるため、
+     「条件を変える」でフォームを開いたときも予算欄は出さない（出発駅と
+     検索ボタンだけにする）。まだ一度も検索していない間（has-resultsが
+     付く前）は、ここで隠さず通常どおりフォーム内に予算欄を表示する
+     （最初の検索に予算が必要なため）。 */
 }
 
 /* ========================================
@@ -1473,4 +2371,1813 @@ header p {
   text-overflow: ellipsis;
   z-index: 2100;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+/* ========================================
+   【2026-10-24、51本目、Minami決定】ピンの色の説明と「NEW +8」の札
+   紺のピンは「みちどころ」、オレンジのピンは「NEW」。地図の上の中央に出す（左上・右上の部品と
+   重ならない）。地図をつかんで動かす操作のじゃまをしないよう、押せないようにする。
+   ======================================== */
+.map-legend {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  color: #333;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.map-legend[hidden] {
+  display: none;
+}
+
+.map-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.map-legend-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid white;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
+.map-legend-dot-blue {
+  background-color: #1f3c88;
+}
+
+.map-legend-dot-orange {
+  background-color: #ff6b2b;
+}
+
+/* オレンジ地に白い文字の小さな札（地図の「NEW +8」と、一覧のカードの「NEW」で共通） */
+.new-tag {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 4px;
+  background-color: #ff6b2b;
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.new-tag[hidden] {
+  display: none;
+}
+
+/* 一覧のカードの「NEW」は、写真の左上に重ねる（右上は☆・共有ボタン） */
+.spot-card-new {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  z-index: 2;
+  font-size: 12px;
+  line-height: 20px;
+  padding: 0 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* ========================================
+   【2026-10-25、56本目、Minami決定】地図を画面いっぱいに出す骨組み
+   ヘッダー（ロゴ＋名前）の下はすべて地図（#map-area）。検索カード（.search-card＝#layout-left）と
+   結果の入れ物（.results-panel＝.layout-right）を地図の上に重ねる。ページ全体は縦にスクロールしない。
+   見本：みちどころ_見本_PC.png（①トップ）・みちどころ_見本_スマホ.png（④トップ）。
+   結果の入れ物は56本目では仮置き（今の一覧と＋−をそのまま白い入れ物に入れる）。見た目は57・58本目で作る。
+   地図の上に重ねる入れ物にはdata-map-overlayを付け、layout-controller.jsのgetMapOverlayRects()が四角を
+   1か所で取る。スマホでは、地図の下側に重なっている入れ物の高さが#app-layoutの--map-inset-bottomに入り、
+   右下の部品の列・出典・名前の帯はその上に出る。
+   ======================================== */
+
+/* ---- ヘッダー ---- */
+#app-header {
+  flex: 0 0 auto;
+  position: relative;
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 48px;
+  padding: 0 16px;
+  background: white;
+  color: var(--color-text);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  white-space: nowrap;
+}
+
+.app-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-logo {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  fill: var(--color-accent);
+}
+
+#app-header h1 {
+  flex: 0 0 auto;
+  font-size: 1.15rem;
+  letter-spacing: 0.08em;
+  color: var(--color-text);
+}
+
+#app-header .app-subtitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.75rem;
+  color: var(--color-text-sub);
+}
+
+.header-menu-btn {
+  display: none;
+}
+
+.header-nav {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.header-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 4px 6px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.header-nav-btn:hover {
+  color: var(--color-accent-deep);
+}
+
+.header-nav-sep {
+  color: var(--color-border);
+}
+
+/* 2D / 3D：今出ている側を濃くする（main.jsのupdateDimensionToggleLabel()） */
+#map-dimension-toggle .dim-label {
+  color: var(--color-text-sub);
+}
+
+#map-dimension-toggle:not(.is-3d) .dim-2d,
+#map-dimension-toggle.is-3d .dim-3d {
+  color: var(--color-accent-deep);
+  font-weight: 700;
+}
+
+#mylist-count {
+  min-width: 1.2em;
+  padding: 0 0.45rem;
+  border-radius: 999px;
+  background: var(--color-main-light);
+  color: var(--color-main-deep);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+@media (max-width: 759px) {
+  /* スマホでは副題をヘッダーに出さず、検索カードの1行目に小さく出す（.search-card-brand） */
+  #app-header .app-subtitle {
+    display: none;
+  }
+
+  .header-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+    border: none;
+    background: none;
+    font-size: 1.3rem;
+    color: var(--color-text);
+    cursor: pointer;
+  }
+
+  .header-nav {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 8px;
+    z-index: 1600;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    min-width: 180px;
+    padding: 6px;
+    border-radius: 8px;
+    background: white;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  }
+
+  #app-header.header-menu-open .header-nav {
+    display: flex;
+  }
+
+  .header-nav-sep {
+    display: none;
+  }
+
+  .header-nav-btn {
+    justify-content: flex-start;
+    min-height: 44px;
+    padding: 10px 12px;
+    font-size: 0.95rem;
+  }
+}
+
+/* ---- 地図の舞台 ---- */
+.container {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  display: block;
+  position: relative;
+}
+
+#app-layout {
+  --map-inset-bottom: 0px;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+#map-area {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+}
+
+#spots-map,
+#spots-map-3d {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* ---- 右下の部品の列（上から：ズーム＋− → 方位磁針 → 戻るボタン → 回転ハンドル）と出典 ---- */
+.map-controls-cluster {
+  top: auto;
+  right: 10px;
+  /* 出典（ⓘ、下から34px）の上に8px以上のすき間 */
+  bottom: calc(var(--map-inset-bottom, 0px) + 44px);
+}
+
+.map-zoom-controls {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 8px;
+  background: white;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.map-zoom-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: white;
+  color: var(--color-text);
+  font-size: 1.1rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.map-zoom-btn + .map-zoom-btn {
+  border-top: 1px solid var(--color-border);
+}
+
+.map-zoom-btn:hover {
+  background: var(--color-main-light);
+}
+
+#map-area .leaflet-bottom.leaflet-right,
+#map-area .maplibregl-ctrl-bottom-right {
+  bottom: var(--map-inset-bottom, 0px);
+}
+/* ---- 検索カード（トップ画面） ---- */
+.search-card {
+  position: absolute;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 20px 20px 10px;
+  border-radius: 12px;
+  background: white;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+@media (min-width: 760px) {
+  .search-card {
+    top: 16px;
+    left: 16px;
+    width: 340px;
+    max-height: calc(100% - 32px);
+  }
+}
+
+@media (max-width: 759px) {
+  .search-card {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    /* 上に右下の部品の列（ズーム＋−など）と出典が入る余地を残す（--map-controls-room、layout-controller.jsが測る）。
+       入りきらないときは検索カードの中をスクロールする（400×464など）。 */
+    max-height: calc(100% - 16px - var(--map-controls-room, 120px));
+    padding: 12px 16px 6px;
+  }
+}
+
+/* 検索したあとは隠れ、結果の入れ物の「▼条件を変える」で戻ってくる */
+#app-layout.has-results.form-collapsed .search-card {
+  display: none;
+}
+
+.search-card-brand {
+  display: none;
+  margin: 0 0 2px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-text-sub);
+}
+
+.search-card-brand span {
+  font-weight: 400;
+}
+
+.search-card-title {
+  margin: 0 0 4px;
+  font-size: 1.35rem;
+  font-weight: 800;
+  line-height: 1.35;
+  color: var(--color-text);
+}
+
+.search-card-lead {
+  margin: 0 0 12px;
+  font-size: 0.78rem;
+  color: var(--color-text-sub);
+}
+
+@media (max-width: 759px) {
+  .search-card-brand {
+    display: block;
+  }
+
+  .search-card-title {
+    font-size: 1.1rem;
+  }
+
+  .search-card-title-break {
+    display: none;
+  }
+
+  .search-card-lead {
+    margin-bottom: 8px;
+  }
+}
+
+.search-card #search-form {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.search-card .form-group {
+  margin-bottom: 10px;
+}
+
+.search-card .form-group label {
+  margin-bottom: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-sub);
+}
+
+.search-card .budget-amount {
+  margin: 0;
+  line-height: 1.2;
+}
+
+.search-card #budget-display {
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: var(--color-text);
+}
+
+.search-card #budget-slider {
+  margin: 4px 0 0;
+  accent-color: var(--color-accent);
+}
+
+.budget-range-labels {
+  display: flex;
+  justify-content: space-between;
+  margin: 0;
+  font-size: 0.68rem;
+  color: var(--color-text-sub);
+}
+
+/* 金額の入れ物と＋−は見本のトップ画面に無いため隠す（値の受け渡しはここを通す） */
+.search-card .budget-stepper {
+  display: none;
+}
+
+.search-card #search-btn {
+  padding: 0.7rem;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-deep) 100%);
+  font-size: 1rem;
+}
+
+.search-card #search-btn:hover {
+  box-shadow: 0 4px 12px rgba(255, 107, 43, 0.4);
+}
+
+/* まだこの条件で検索していないとき（main.jsのupdateSearchButtonState()）。文言は同じで、色を濃く・縁取りで伝える */
+.search-card #search-btn.search-btn-pending {
+  background: var(--color-accent-deep);
+  box-shadow: 0 0 0 3px rgba(255, 107, 43, 0.35);
+}
+
+/* 【57本目】色だけで伝えないよう、まだこの条件で検索していないときはボタンのすぐ上に小さな文字も出す */
+.search-pending-note {
+  margin: 0 0 4px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--color-accent-deep);
+}
+
+/* 【57本目】検索カードが低い画面（400×464など）で入りきらないとき（layout-controller.jsのfitSearchCard()）：
+   説明文 → 例のボタンの順に外し、それでも入らなければ行の間を詰める */
+.search-card.search-card-no-lead .search-card-lead,
+.search-card.search-card-no-examples .search-examples,
+.search-card.search-card-no-brand .search-card-brand {
+  display: none;
+}
+
+.search-card.search-card-no-lead .search-card-title {
+  margin-bottom: 6px;
+}
+
+.search-card.search-card-tight {
+  padding-top: 8px;
+}
+
+.search-card.search-card-tight .search-card-title {
+  margin-bottom: 2px;
+  line-height: 1.2;
+}
+
+.search-card.search-card-tight .form-group {
+  margin-bottom: 4px;
+}
+
+.search-card.search-card-tight .form-group label {
+  margin-bottom: 1px;
+}
+
+.search-card.search-card-tight #budget-display {
+  font-size: 1.3rem;
+}
+
+.search-card.search-card-tight #budget-slider {
+  margin-top: 0;
+}
+
+.search-card.search-card-tight #search-btn {
+  padding: 0.5rem;
+}
+
+.search-card.search-card-tight .data-line {
+  margin-top: 2px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+/* 「条件を変える」で開いたときだけ出す閉じるボタン（PC・スマホとも） */
+#app-layout.has-results:not(.form-collapsed) .form-close-btn {
+  display: block;
+}
+
+.search-examples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 0;
+  font-size: 0.75rem;
+  color: var(--color-text-sub);
+}
+
+.example-chip {
+  padding: 2px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: white;
+  color: var(--color-text);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.example-chip:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent-deep);
+}
+
+/* 必須の表示3点への入り口（検索カードの下・結果の入れ物の一番下にいつも1行） */
+.data-line {
+  flex: 0 0 auto;
+  margin: 8px 0 0;
+  text-align: center;
+  font-size: 0.72rem;
+}
+
+.data-line-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--color-text-sub);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ---- 結果の入れ物（56本目は仮置き） ---- */
+.results-panel {
+  display: none;
+  position: absolute;
+  z-index: 1100;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 10px 12px 6px;
+  background: white;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+#app-layout.has-results.form-collapsed .results-panel {
+  display: flex;
+}
+
+@media (min-width: 760px) {
+  .results-panel {
+    top: 12px;
+    left: 12px;
+    bottom: 12px;
+    width: 400px;
+    border-radius: 12px;
+  }
+}
+
+@media (max-width: 759px) {
+  .results-panel {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    /* 上に右下の部品の列と出典が入る余地を残す（検索カードと同じ） */
+    height: min(52%, calc(100% - var(--map-controls-room, 120px)));
+    border-radius: 12px 12px 0 0;
+  }
+}
+
+.results-panel .search-summary {
+  display: flex;
+  margin: 0 0 6px;
+  padding: 0 2px;
+  box-shadow: none;
+}
+
+.results-panel .mobile-budget-overlay {
+  margin: 0 0 8px;
+}
+
+.results-panel #results-container,
+.results-panel #detail-container {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.results-panel #detail-container {
+  overflow-y: auto;
+}
+
+/* 入れ物がとても低いとき（400×464の3Dなど）も、見出し・並び替えごと中でスクロールし、一番下の「データ出典・免責」の1行に
+   重ならないようにする */
+.results-panel #results-container {
+  overflow-y: auto;
+}
+
+/* 入れ物の幅（PC 400px）では一覧のカードは1列にする */
+.results-panel #results-list {
+  grid-template-columns: 1fr;
+}
+
+/* 【56本目】検索カードが小さい画面（400×464など）で中をスクロールするときも、「データ出典・免責」の1行は
+   いつも見える場所（検索カードの一番下）に留める（必須の表示3点への入り口、決定4：A'）。 */
+.search-card .data-line {
+  position: sticky;
+  bottom: -10px;
+  margin: 8px -20px -10px;
+  padding: 6px 0 8px;
+  background: white;
+}
+
+@media (max-width: 759px) {
+  .search-card .data-line {
+    bottom: -6px;
+    margin: 6px -16px -6px;
+    padding: 6px 0;
+  }
+}
+
+/* ========================================
+   【2026-10-26、58本目】PCの結果画面（見本②：左の一覧パネル、見本③：閉じたときの上の細いバー）
+   スマホ（759px以下）の結果画面は59本目で作るため、ここでは何も変えない（PCだけの部品はスマホでは出さない）。
+   ======================================== */
+.results-list-close-btn,
+.results-list-open-btn,
+.map-data-line,
+.results-legend,
+.results-departure,
+.results-budget-amount,
+.results-counts {
+  display: none;
+}
+
+@media (min-width: 760px) {
+  /* パネルの右の縁の「◀」をパネルの外にはみ出して出すため、パネル自体は切り取らない（中の一覧がスクロールする） */
+  .results-panel {
+    overflow: visible;
+    padding: 14px 16px 6px;
+  }
+
+  .results-list-close-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    top: 36px;
+    right: -18px;
+    width: 18px;
+    height: 44px;
+    padding: 0;
+    border: none;
+    border-radius: 0 8px 8px 0;
+    background: white;
+    box-shadow: 3px 2px 6px rgba(0, 0, 0, 0.15);
+    color: var(--color-text-sub);
+    font-size: 10px;
+    cursor: pointer;
+  }
+
+  .results-list-close-btn:hover {
+    color: var(--color-text);
+  }
+
+  /* 1行目：「出発：○○」と「条件を変える」（小さな灰色の文字） */
+  .results-panel .search-summary {
+    margin: 0 0 10px;
+    padding: 0;
+    background: none;
+    box-shadow: none;
+    border-radius: 0;
+    font-size: 0.85rem;
+    font-weight: 400;
+  }
+
+  .results-panel #search-summary-text,
+  .results-panel .summary-toggle-arrow,
+  .results-departure-closed {
+    display: none;
+  }
+
+  .results-departure {
+    display: inline;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-text-sub);
+  }
+
+  .results-departure b {
+    color: var(--color-text);
+    font-weight: 800;
+  }
+
+  .results-panel #search-summary-toggle {
+    padding: 0;
+    color: var(--color-text-sub);
+    font-size: 0.72rem;
+    font-weight: 400;
+  }
+
+  .results-panel #search-summary-toggle:hover {
+    color: var(--color-text);
+    text-decoration: underline;
+  }
+
+  /* 2行目：−・「予算（往復）」¥800・＋、右に「42か所」「NEW +8」 */
+  .results-panel .mobile-budget-overlay {
+    flex-wrap: wrap;
+    height: auto;
+    margin: 0 0 8px;
+    padding: 0;
+    gap: 8px;
+    border: none;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  .results-panel .mobile-budget-overlay #mobile-budget-decrement,
+  .results-panel .mobile-budget-overlay #mobile-budget-increment {
+    width: 34px;
+    height: 34px;
+    border: 2px solid var(--color-accent);
+    color: var(--color-accent);
+    font-size: 1.25rem;
+    line-height: 1;
+  }
+
+  .results-panel .mobile-budget-overlay #mobile-budget-increment {
+    background: var(--color-accent);
+    color: white;
+  }
+
+  .results-budget-amount {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.1;
+  }
+
+  .results-budget-label {
+    font-size: 0.62rem;
+    color: var(--color-text-sub);
+  }
+
+  #results-budget-value {
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: var(--color-text);
+    white-space: nowrap;
+  }
+
+  .results-counts {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 3px;
+    margin-left: auto;
+  }
+
+  #results-map-count {
+    font-size: 1.05rem;
+    font-weight: 800;
+    color: var(--color-text);
+    white-space: nowrap;
+  }
+
+  /* 金額を変えて、まだその金額で検索していないときだけ「¥◯で探す」を次の行に出す（一覧を更新するのはこのボタン） */
+  .results-panel #mobile-budget-search-btn:not(.mobile-budget-search-btn-pending) {
+    display: none;
+  }
+
+  .results-panel #mobile-budget-search-btn {
+    order: 10;
+    max-width: none;
+  }
+
+  .results-panel #mobile-budget-distance {
+    order: 11;
+  }
+
+  /* 3行目：色の説明（PCの結果画面では地図の上の中央の色の説明の代わり） */
+  .results-legend {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 10px;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 16px;
+    color: #333;
+  }
+
+
+  /* 見出し「¥601〜¥800 の場所」と右に「12か所」、下に紺の線。一覧だけがパネルの中でスクロールする */
+  .results-panel #results-container {
+    overflow: hidden;
+  }
+
+  .results-panel .results-band-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin: 0 0 6px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid #1f3c88;
+    color: var(--color-text);
+    font-size: 0.95rem;
+    font-weight: 800;
+  }
+
+  .results-panel .results-band-heading[hidden] {
+    display: none;
+  }
+
+  .band-heading-count {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--color-text-sub);
+    white-space: nowrap;
+  }
+
+  .results-panel #sort-controls {
+    margin-bottom: 4px;
+    font-size: 0.75rem;
+  }
+
+  .results-panel #sort-select {
+    padding: 0.15rem 0.4rem;
+    font-size: 0.75rem;
+  }
+
+  .results-panel #results-list {
+    gap: 0;
+  }
+
+  /* 一覧のカード：中身は今のまま、写真を左に小さく、名前・運賃などを右に並べる（見本②の並び） */
+  .results-panel .spot-card {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr) auto;
+    column-gap: 10px;
+    align-items: start;
+    min-height: 0;
+    padding: 10px 2px;
+    border-bottom: 1px solid var(--color-border);
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .results-panel .spot-card:hover {
+    transform: none;
+    box-shadow: none;
+  }
+
+  .results-panel .spot-card > * {
+    grid-column: 2 / 4;
+  }
+
+  .results-panel .spot-card .spot-image {
+    grid-column: 1;
+    grid-row: 1 / span 4;
+    width: 64px;
+    height: 64px;
+    border-radius: 8px;
+  }
+
+  .results-panel .spot-card .spot-image-placeholder {
+    font-size: 1.4rem;
+  }
+
+  .results-panel .spot-card h3 {
+    grid-column: 2;
+    grid-row: 1;
+    padding: 0;
+    font-size: 0.9rem;
+  }
+
+  .results-panel .spot-card-actions {
+    position: static;
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    gap: 2px;
+  }
+
+  /* ☆・共有は押しやすさのため44px四方のまま（影だけ消す） */
+  .results-panel .spot-card .favorite-btn,
+  .results-panel .spot-card .share-btn {
+    box-shadow: none;
+  }
+
+  /* 「NEW」は今までどおり写真の左上に重ねる（51本目） */
+  .results-panel .spot-card-new {
+    top: 8px;
+    left: 0;
+    padding: 0 4px;
+    font-size: 10px;
+    line-height: 15px;
+  }
+
+  .results-panel .spot-card .spot-summary {
+    grid-column: 2;
+    grid-row: 2;
+    padding: 0;
+    margin: 2px 0;
+    font-size: 0.8rem;
+  }
+
+  .results-panel .spot-card .spot-description {
+    padding: 0;
+    margin: 0 0 2px;
+    font-size: 0.75rem;
+    -webkit-line-clamp: 1;
+  }
+
+  .results-panel .spot-card .support-badge {
+    padding: 2px 0 0;
+  }
+
+  .results-panel .spot-card .support-badge-note {
+    margin: 4px 0;
+    font-size: 0.72rem;
+  }
+
+  .results-panel .spot-card .spot-frequency-note {
+    padding: 0;
+    margin: 0 0 2px;
+    font-size: 0.7rem;
+  }
+
+  .results-panel .spot-card .detail-btn {
+    justify-self: end;
+    width: auto;
+    margin-top: 2px;
+    padding: 2px 12px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+  }
+
+  /* ---- 一覧を閉じたとき（見本③）：パネルが地図の左上の細いバー1本になる ---- */
+  #app-layout.has-results.form-collapsed.results-list-closed .results-panel {
+    bottom: auto;
+    width: auto;
+    max-width: calc(100% - 24px);
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+    padding: 8px 16px;
+  }
+
+  #app-layout.results-list-closed .results-panel #results-container,
+  #app-layout.results-list-closed .results-panel #detail-container,
+  #app-layout.results-list-closed .results-sheet > .data-line,
+  #app-layout.results-list-closed .results-panel #search-summary-toggle,
+  #app-layout.results-list-closed .results-panel #mobile-budget-search-btn,
+  #app-layout.results-list-closed .results-panel #mobile-budget-distance,
+  #app-layout.results-list-closed .results-list-close-btn,
+  #app-layout.results-list-closed .results-departure-open {
+    display: none;
+  }
+
+  #app-layout.results-list-closed .results-departure-closed {
+    display: inline;
+  }
+
+  #app-layout.results-list-closed .results-panel .search-summary,
+  #app-layout.results-list-closed .results-panel .mobile-budget-overlay,
+  #app-layout.results-list-closed .results-legend {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    margin: 0;
+  }
+
+  #app-layout.results-list-closed .results-departure {
+    font-size: 0.8rem;
+  }
+
+  /* 「42か所」と「NEW +8」は、閉じたときは横に並べる */
+  #app-layout.results-list-closed .results-counts {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    margin-left: 4px;
+  }
+
+  /* 「☰ 一覧を開く」はバーのすぐ下（バーと一緒に動くようパネルの中に置いてある） */
+  #app-layout.results-list-closed .results-list-open-btn {
+    display: block;
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    padding: 5px 12px;
+    border: none;
+    border-radius: 8px;
+    background: white;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+    color: var(--color-text);
+    font-size: 0.78rem;
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  /* 閉じている間の「データ出典・免責」：地図の右下の出典の文字のすぐ左（layout-controller.jsが--map-attrib-roomを測る） */
+  #app-layout.has-results.form-collapsed.results-list-closed .map-data-line {
+    display: block;
+    position: absolute;
+    right: var(--map-attrib-room, 40px);
+    bottom: 3px;
+    z-index: 1000;
+    margin: 0;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+    font-size: 0.72rem;
+  }
+}
+
+/* ========================================
+   【2026-10-26、59本目】スマホの結果画面（見本⑤：上の＋−カードと小さい一覧、⑥：大きい一覧）
+   結果の入れ物（.results-panel）は、上の部分（.results-head）と下の部分（.results-sheet）に分けてある。
+   PCでは2つともdisplay: contentsで、中身がこれまでどおりパネルの中に並ぶ（58本目の見た目のまま）。
+   スマホではパネル自体がdisplay: contentsになり、上の部分は地図の上に浮かせたカード、下の部分は下から
+   引き出す一覧（小・大の2段。#app-layoutの.sheet-large、低い画面では小を見出しだけにする.sheet-compact。
+   layout-controller.jsのupdateSheetLayout()）。
+   ======================================== */
+.results-head,
+.results-sheet {
+  display: contents;
+}
+
+.results-sheet-handle {
+  display: none;
+}
+
+/* 結果画面では、色の説明は地図の上の中央ではなく、一覧（PCはパネル・バー、スマホは下の一覧）の中に出す */
+#app-layout.has-results.form-collapsed .map-legend {
+  display: none;
+}
+
+/* 【66本目、Minami指摘】スマホで「出発地を変える」のカードを開いている間は、地図の色の説明を出さない（カードの上に
+   浮いて見えたため）。PCはカードが左に並ぶため、今までどおり地図の上に出す。 */
+@media (max-width: 759px) {
+  #app-layout.has-results:not(.form-collapsed) .map-legend {
+    display: none;
+  }
+}
+
+@media (max-width: 759px) {
+  #app-layout.has-results.form-collapsed .results-panel {
+    display: contents;
+  }
+
+  /* ---- 上の＋−カード ---- */
+  #app-layout.has-results.form-collapsed .results-head {
+    display: block;
+    position: absolute;
+    z-index: 1100;
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    padding: 7px 14px 9px;
+    border-radius: 12px;
+    background: white;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  }
+
+  /* 1行目：「○○から　条件を変える」（PCの閉じたときのバーと同じ言い方） */
+  .results-head .search-summary {
+    justify-content: flex-start;
+    gap: 12px;
+    margin: 0 0 4px;
+    padding: 0;
+    background: none;
+    border-radius: 0;
+    box-shadow: none;
+    font-size: 0.72rem;
+    font-weight: 400;
+  }
+
+  .results-head #search-summary-text,
+  .results-head .summary-toggle-arrow,
+  .results-departure-open {
+    display: none;
+  }
+
+  .results-departure {
+    display: inline;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-text-sub);
+  }
+
+  .results-departure-closed {
+    display: inline;
+  }
+
+  .results-head #search-summary-toggle {
+    padding: 0;
+    color: var(--color-text-sub);
+    font-size: 0.72rem;
+    font-weight: 400;
+    text-decoration: underline;
+  }
+
+  /* 2行目：−・「予算（往復）」¥800・＋、右に「◯か所」「NEW +N」 */
+  .results-head .mobile-budget-overlay {
+    height: auto;
+    margin: 0;
+    padding: 0;
+    gap: 8px;
+    border: none;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  .results-head .mobile-budget-overlay #mobile-budget-decrement,
+  .results-head .mobile-budget-overlay #mobile-budget-increment {
+    width: 36px;
+    height: 36px;
+    border: 2px solid var(--color-accent);
+    color: var(--color-accent);
+    font-size: 1.3rem;
+    line-height: 1;
+  }
+
+  .results-head .mobile-budget-overlay #mobile-budget-increment {
+    background: var(--color-accent);
+    color: white;
+  }
+
+  .results-budget-amount {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.1;
+  }
+
+  .results-budget-label {
+    font-size: 0.62rem;
+    color: var(--color-text-sub);
+  }
+
+  #results-budget-value {
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: var(--color-text);
+    white-space: nowrap;
+  }
+
+  .results-counts {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 3px;
+    margin-left: auto;
+  }
+
+  #results-map-count {
+    font-size: 1.1rem;
+    font-weight: 800;
+    color: var(--color-text);
+    white-space: nowrap;
+  }
+
+  /* 【64本目、Minami決定】上のカードを1行に：「富山駅前▾　−　予算（往復）¥1,000　＋　97か所」。「NEW +33」は「◯か所」の
+     下に小さく（0のときは出さない）。駅名（▾つき）は「出発地を変える」のボタンで、押すと検索カードが開く。
+     カードの高さが半分ほどになり、地図の見えている範囲が広がる。入らない画面では「予算（往復）」の小さな見出しを省く
+     （#app-layout.results-head-no-label、layout-controller.jsのupdateSheetLayout()）。 */
+  #app-layout.has-results.form-collapsed .results-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+  }
+
+  .results-head .search-summary {
+    flex: 0 1 auto;
+    min-width: 0;
+    margin: 0;
+  }
+
+  .results-head .results-departure {
+    display: none;
+  }
+
+  .results-head #search-summary-toggle {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 100%;
+    padding: 6px 0;
+    color: var(--color-text);
+    font-size: 0.92rem;
+    font-weight: 800;
+    text-decoration: none;
+  }
+
+  .results-head #search-summary-toggle::after {
+    content: '▾';
+    flex: 0 0 auto;
+    margin-left: 2px;
+    color: var(--color-text-sub);
+  }
+
+  .results-head .summary-toggle-label {
+    display: none;
+  }
+
+  .results-head .summary-toggle-station {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .results-head .mobile-budget-overlay {
+    flex: 1 0 auto;
+  }
+
+  .results-head .results-counts #results-new-count {
+    padding: 0 4px;
+    font-size: 10px;
+    line-height: 14px;
+  }
+
+  #app-layout.results-head-no-label .results-head .results-budget-label {
+    display: none;
+  }
+
+  /* 【64本目、Minami決定】ピンを押したとき、下の一覧（小）の代わりに出すその場所のカード（main.jsのshowSheetSpotCard()）。
+     地図は狭くしない：下の一覧の高さは入れ替える前のまま（JSで固定）、その中に収める。左に写真、右に名前・NEW・往復の
+     金額・片道の時間・「詳細を見る」、右上に×。 */
+  #app-layout.sheet-spot:not(.sheet-large) .results-sheet .results-legend,
+  #app-layout.sheet-spot:not(.sheet-large) .results-sheet #results-container {
+    display: none;
+  }
+
+  #app-layout.sheet-spot:not(.sheet-large) .sheet-spot-card {
+    display: flex;
+    position: relative;
+    flex: 1 1 auto;
+    gap: 10px;
+    min-height: 0;
+    padding: 0 0 10px;
+    overflow: hidden;
+  }
+
+  .sheet-spot-image {
+    flex: 0 0 34%;
+    max-width: 150px;
+    height: 100%;
+    min-height: 0;
+    border-radius: 8px;
+    object-fit: cover;
+  }
+
+  .sheet-spot-image.spot-image-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.8rem;
+  }
+
+  .sheet-spot-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    gap: 3px;
+    min-width: 0;
+    padding-right: 30px;
+  }
+
+  .sheet-spot-body p {
+    margin: 0;
+  }
+
+  .sheet-spot-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .sheet-spot-name {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text);
+    font-size: 1.02rem;
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sheet-spot-new {
+    flex: 0 0 auto;
+  }
+
+  .sheet-spot-fare {
+    color: var(--color-text);
+    font-size: 1.15rem;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+
+  .sheet-spot-meta {
+    color: var(--color-text-sub);
+    font-size: 0.8rem;
+    white-space: nowrap;
+  }
+
+  .sheet-spot-detail-btn {
+    align-self: flex-start;
+    margin-top: auto;
+    padding: 7px 16px;
+    border: none;
+    border-radius: 999px;
+    background: var(--color-main);
+    color: white;
+    font-size: 0.85rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .sheet-spot-close {
+    position: absolute;
+    top: -6px;
+    right: -4px;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--color-text-sub);
+    font-size: 1.3rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  /* 低い画面（.sheet-compact、小が見出しの1行だけ）：写真を省き、名前・NEW・金額・片道の時間・「詳細を見る」・×を1行に */
+  #app-layout.sheet-compact.sheet-spot:not(.sheet-large) .sheet-spot-card {
+    align-items: center;
+    padding: 0 0 6px;
+  }
+
+  #app-layout.sheet-compact .sheet-spot-image {
+    display: none;
+  }
+
+  #app-layout.sheet-compact .sheet-spot-body {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding-right: 32px;
+  }
+
+  #app-layout.sheet-compact .sheet-spot-title {
+    flex: 0 1 auto;
+  }
+
+  #app-layout.sheet-compact .sheet-spot-name {
+    font-size: 0.88rem;
+  }
+
+  #app-layout.sheet-compact .sheet-spot-fare {
+    font-size: 0.9rem;
+  }
+
+  #app-layout.sheet-compact .sheet-spot-meta {
+    font-size: 0.72rem;
+  }
+
+  #app-layout.sheet-compact .sheet-spot-detail-btn {
+    flex: 0 0 auto;
+    margin: 0 0 0 auto;
+    padding: 5px 10px;
+    font-size: 0.78rem;
+  }
+
+  #app-layout.sheet-compact .sheet-spot-close {
+    top: 50%;
+    width: 32px;
+    height: 32px;
+    margin-top: -19px;
+  }
+
+  /* ---- 下から引き出す一覧 ---- */
+  #app-layout.has-results.form-collapsed .results-sheet {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    z-index: 1100;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-height: calc(100% - var(--results-head-bottom, 90px) - 8px);
+    padding: 0 12px;
+    border-radius: 14px 14px 0 0;
+    background: white;
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.15);
+  }
+
+  /* 上のつまみ（横棒）。押すと小⇔大、上下にドラッグしても切り替わる（main.js） */
+  .results-sheet-handle {
+    display: block;
+    position: relative;
+    flex: 0 0 auto;
+    align-self: center;
+    width: 88px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .results-sheet-handle::before {
+    content: '';
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    width: 40px;
+    height: 4px;
+    margin-left: -20px;
+    border-radius: 2px;
+    background: #c8c8c8;
+  }
+
+  .results-sheet #results-container,
+  .results-sheet #detail-container {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .results-sheet #results-container {
+    overflow: hidden;
+  }
+
+  .results-sheet #detail-container {
+    overflow-y: auto;
+  }
+
+  /* 色の説明：小のときは見出しと同じ行の右（見本⑤）、大のときは見出しの上の右（見本⑥） */
+  .results-sheet .results-legend {
+    display: flex;
+    gap: 10px;
+    margin: 0;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 16px;
+    color: #333;
+  }
+
+  #app-layout:not(.sheet-large) .results-sheet .results-legend {
+    position: absolute;
+    top: 24px;
+    right: 12px;
+  }
+
+  .results-sheet .results-band-heading {
+    margin: 0 0 8px;
+    padding-right: 140px;
+    color: var(--color-text);
+    font-size: 0.95rem;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+
+  /* 小：横に並べたカード（3枚目が少し見える幅、横にスクロール）。写真が上、名前・NEW・金額が下 */
+  #app-layout:not(.sheet-large) .results-sheet #sort-controls,
+  #app-layout:not(.sheet-large) .results-sheet > .data-line,
+  #app-layout:not(.sheet-large) .results-sheet #detail-container {
+    display: none;
+  }
+
+  #app-layout:not(.sheet-large) .results-sheet #results-list {
+    display: flex;
+    flex-direction: row;
+    gap: 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 10px;
+    scroll-snap-type: x proximity;
+  }
+
+  #app-layout:not(.sheet-large) .results-sheet .spot-card {
+    flex: 0 0 40%;
+    min-height: 0;
+    border: 1px solid var(--color-border);
+    box-shadow: none;
+    scroll-snap-align: start;
+  }
+
+  #app-layout:not(.sheet-large) .results-sheet .spot-card:hover {
+    transform: none;
+  }
+
+  #app-layout:not(.sheet-large) .results-sheet .spot-image {
+    height: 78px;
+  }
+
+  #app-layout:not(.sheet-large) .results-sheet .spot-card h3 {
+    padding: 6px 8px 0;
+    font-size: 0.82rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #app-layout:not(.sheet-large) .results-sheet .spot-summary {
+    padding: 0 8px;
+    margin: 2px 0 6px;
+    font-size: 0.72rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #app-layout:not(.sheet-large) .results-sheet .spot-card-actions,
+  #app-layout:not(.sheet-large) .results-sheet .spot-description,
+  #app-layout:not(.sheet-large) .results-sheet .support-badge,
+  #app-layout:not(.sheet-large) .results-sheet .support-badge-note,
+  #app-layout:not(.sheet-large) .results-sheet .spot-frequency-note,
+  #app-layout:not(.sheet-large) .results-sheet .detail-btn {
+    display: none;
+  }
+
+  #app-layout:not(.sheet-large) .results-sheet .spot-card-new {
+    top: 4px;
+    left: 4px;
+    padding: 0 4px;
+    font-size: 10px;
+    line-height: 15px;
+  }
+
+  /* 低い画面（.sheet-compact）の小：見出しの1行だけ（横のカードは出さず、見えている範囲を広げる） */
+  #app-layout.sheet-compact:not(.sheet-large) .results-sheet #results-list {
+    display: none;
+  }
+
+  /* 0件のときの案内文と「往復¥◯で探す」のボタン（0件の案内）は、小でも縦に並べ、低い画面でも隠さない */
+  #app-layout:not(.sheet-large) .results-sheet #results-list:has(.no-results) {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    overflow-x: hidden;
+  }
+
+  #app-layout.sheet-compact:not(.sheet-large) .results-sheet .results-band-heading {
+    margin-bottom: 10px;
+  }
+
+  /* 小のときの「データ出典・免責」は、地図の右下の出典の「i」のすぐ左（PCの閉じたときと同じ） */
+  #app-layout.has-results.form-collapsed:not(.sheet-large) .map-data-line {
+    display: block;
+    position: absolute;
+    right: var(--map-attrib-room, 40px);
+    bottom: calc(var(--map-inset-bottom, 0px) + 3px);
+    z-index: 1000;
+    margin: 0;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+    font-size: 0.72rem;
+  }
+
+  /* 大：色の説明、見出し「¥601〜¥800 の場所」と右に「12か所」・紺の線、縦の一覧、並び替え、一番下に「データ出典・免責」 */
+  #app-layout.sheet-large .results-sheet {
+    height: var(--sheet-large-h, 60%);
+  }
+
+  #app-layout.sheet-large .results-sheet .results-legend {
+    justify-content: flex-end;
+    margin: 0 0 2px;
+  }
+
+  /* 【66本目】詳細（大）：下の一覧そのものが白い入れ物なので、詳細の中の箱（余白・影）はやめて詰める。色の説明は
+     足あと「← 一覧」と同じ行の右に置く（1行ぶん縦を空ける） */
+  #app-layout[data-view="detail"] .results-sheet #detail-container {
+    padding: 0 2px 8px;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  #app-layout[data-view="detail"] .results-sheet #detail-breadcrumb {
+    margin: 0;
+    padding-right: 150px;
+  }
+
+  #app-layout.sheet-large[data-view="detail"] .results-sheet .results-legend {
+    position: absolute;
+    top: 36px;
+    right: 14px;
+    margin: 0;
+  }
+
+  /* 【66本目】低い画面（.sheet-compact、400×464など）の詳細：横幅いっぱいの写真では紹介文まで入らないため、写真は左に
+     小さく置き、紹介文を横に回り込ませる（スクロールせずに名前・写真・紹介文の1行目が見える） */
+  #app-layout.sheet-compact .results-sheet .detail-image-btn,
+  #app-layout.sheet-compact .results-sheet .detail-image.spot-image-placeholder {
+    float: left;
+    width: 112px;
+    margin: 4px 10px 4px 0;
+  }
+
+  #app-layout.sheet-compact .results-sheet .detail-image {
+    height: 84px;
+  }
+
+  #app-layout.sheet-compact .results-sheet .detail-image.spot-image-placeholder {
+    font-size: 2rem;
+  }
+
+  #app-layout.sheet-compact .results-sheet .detail-description + * {
+    clear: both;
+  }
+
+  #app-layout.sheet-large .results-sheet .results-band-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin: 0 0 6px;
+    padding: 0 0 6px;
+    border-bottom: 2px solid #1f3c88;
+  }
+
+  #app-layout.sheet-large .band-heading-count {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--color-text-sub);
+  }
+
+  #app-layout.sheet-large .results-sheet #sort-controls {
+    margin-bottom: 4px;
+    font-size: 0.75rem;
+  }
+
+  #app-layout.sheet-large .results-sheet #sort-select {
+    padding: 0.15rem 0.4rem;
+    font-size: 0.75rem;
+  }
+
+  #app-layout.sheet-large .results-sheet #results-list {
+    gap: 0;
+  }
+
+  #app-layout.sheet-large .results-sheet > .data-line {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 6px 0 8px;
+  }
+
+  /* 大のカードはPCの一覧パネルと同じ並び（写真を左に64px、名前・運賃などを右に） */
+  #app-layout.sheet-large .results-sheet .spot-card {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr) auto;
+    column-gap: 10px;
+    align-items: start;
+    min-height: 0;
+    padding: 10px 2px;
+    border-bottom: 1px solid var(--color-border);
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  #app-layout.sheet-large .results-sheet .spot-card:hover {
+    transform: none;
+    box-shadow: none;
+  }
+
+  #app-layout.sheet-large .results-sheet .spot-card > * {
+    grid-column: 2 / 4;
+  }
+
+  #app-layout.sheet-large .results-sheet .spot-image {
+    grid-column: 1;
+    grid-row: 1 / span 4;
+    width: 64px;
+    height: 64px;
+    border-radius: 8px;
+  }
+
+  #app-layout.sheet-large .results-sheet .spot-card h3 {
+    grid-column: 2;
+    grid-row: 1;
+    padding: 0;
+    font-size: 0.9rem;
+  }
+
+  #app-layout.sheet-large .results-sheet .spot-card-actions {
+    position: static;
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    gap: 2px;
+  }
+
+  #app-layout.sheet-large .results-sheet .favorite-btn,
+  #app-layout.sheet-large .results-sheet .share-btn {
+    box-shadow: none;
+  }
+
+  #app-layout.sheet-large .results-sheet .spot-card-new {
+    top: 8px;
+    left: 0;
+    padding: 0 4px;
+    font-size: 10px;
+    line-height: 15px;
+  }
+
+  #app-layout.sheet-large .results-sheet .spot-summary {
+    grid-column: 2;
+    grid-row: 2;
+    padding: 0;
+    margin: 2px 0;
+    font-size: 0.8rem;
+  }
+
+  #app-layout.sheet-large .results-sheet .spot-description {
+    padding: 0;
+    margin: 0 0 2px;
+    font-size: 0.75rem;
+    -webkit-line-clamp: 1;
+  }
+
+  #app-layout.sheet-large .results-sheet .support-badge {
+    padding: 2px 0 0;
+  }
+
+  #app-layout.sheet-large .results-sheet .support-badge-note {
+    margin: 4px 0;
+    font-size: 0.72rem;
+  }
+
+  #app-layout.sheet-large .results-sheet .spot-frequency-note {
+    padding: 0;
+    margin: 0 0 2px;
+    font-size: 0.7rem;
+  }
+
+  #app-layout.sheet-large .results-sheet .detail-btn {
+    justify-self: end;
+    width: auto;
+    margin-top: 2px;
+    padding: 2px 12px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+  }
+  /* ---- 右下の部品の列：上の＋−カードと下の一覧の間に入りきらないときは、ズーム＋−から隠す（layout-controller.js） ---- */
+  .map-controls-cluster.cluster-no-zoom .map-zoom-controls {
+    display: none;
+  }
+
+  .map-controls-cluster.cluster-hidden {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .map-controls-cluster.cluster-hidden * {
+    visibility: hidden;
+    pointer-events: none;
+  }
 }
