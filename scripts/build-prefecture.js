@@ -41,7 +41,7 @@ import { generateSpotsForRegion } from './build-pipeline/generate-spots-by-regio
 import { loadOrBuildCatalogSnapshot, recordFetchedFeedVersions } from './build-pipeline/catalog-snapshot.js';
 import { checkLicenseAllowed } from './build-pipeline/license-check.js';
 import { checkFeedHasFareData } from './build-pipeline/fare-feed-check.js';
-import { computeSpotDiff, logSpotDiff } from './build-pipeline/spot-diff-report.js';
+import { computeSpotDiff, logSpotDiff, listSpotsWithoutInstanceOf, logSpotsWithoutInstanceOf } from './build-pipeline/spot-diff-report.js';
 import { computeGtfsDiff, logGtfsDiff } from './build-pipeline/gtfs-diff-report.js';
 import { checkOperatorReachability } from './build-pipeline/operator-reachability-check.js';
 import { buildMunicipalityPolygonFinder } from './build-pipeline/municipality-polygon-lookup.js';
@@ -308,7 +308,7 @@ async function buildOnePrefecture(code, { force, acceptDiff }) {
 
   console.log('\n【ステップ3】観光スポット情報を生成（Wikidata bbox一括取得）');
   const stopsMeta = JSON.parse(fs.readFileSync(path.join(outputDir, 'stops-metadata.json'), 'utf-8'));
-  const { normalizedOutput, excludedItems } = await generateSpotsForRegion(stopsMeta, { label: prefName });
+  const { normalizedOutput, excludedItems, regionItems } = await generateSpotsForRegion(stopsMeta, { label: prefName });
   if (normalizedOutput.spotsIndex.length === 0) {
     throw new Error(`${prefName}: スポット件数が0件です`);
   }
@@ -319,6 +319,9 @@ async function buildOnePrefecture(code, { force, acceptDiff }) {
   const previousSpots = fs.existsSync(spotsPath) ? JSON.parse(fs.readFileSync(spotsPath, 'utf-8')) : null;
   const spotDiff = computeSpotDiff(previousSpots, normalizedOutput, excludedItems);
   logSpotDiff(spotDiff, prefName);
+  // P31が無いスポットはクラスの除外が効かないため、毎回一覧を出す（止めない。八重垣新地はこれですり抜けた）
+  spotDiff.spotsWithoutInstanceOf = listSpotsWithoutInstanceOf(regionItems, normalizedOutput);
+  logSpotsWithoutInstanceOf(spotDiff.spotsWithoutInstanceOf, prefName);
   fs.writeFileSync(path.join(outputDir, 'spot-diff-report.json'), JSON.stringify(spotDiff, null, 2));
 
   if (spotDiff.hasPrevious && spotDiff.removalRatio > SPOT_REMOVAL_RATIO_THRESHOLD && !acceptDiff) {
