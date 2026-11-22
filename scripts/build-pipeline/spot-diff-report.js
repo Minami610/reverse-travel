@@ -94,3 +94,42 @@ export function logSpotDiff(diff, label) {
   }
   console.log(`  削除率: ${(diff.removalRatio * 100).toFixed(1)}%（前回${diff.previousCount}件中${diff.removedCount}件）`);
 }
+
+/**
+ * P31（instance of）を1つも持たないスポットの一覧（【72】、2026-11-21）。
+ *
+ * 【背景】除外の仕組みはP31/P279*を起点にしているため、P31が無い項目は
+ * どのクラス除外にも当たらず必ず残る。公開中の高松で「八重垣新地」（性風俗街、P31なし）が
+ * この経路ですり抜けて検索結果に出ていた。P31が無いだけで除外すると、残すべき史跡・湧き水
+ * （高原製粉精米水車場・瓜裂の清水など）まで消えるため、ビルドは止めずに毎回一覧を出し、
+ * 人が見て個別除外（individual_exclusions）にするかを決める。
+ *
+ * @param {Array<{id: string, instanceOfQids: string[]}>} regionItems - generateSpotsForRegion()が返す地域全体の項目
+ * @param {{spotsIndex: string[], spots: Array<{name: string, description?: string}>}} normalizedOutput - 停留所に紐づいたスポット
+ * @returns {Array<{qid: string, name: string, firstSentence: string}>} QID順
+ */
+export function listSpotsWithoutInstanceOf(regionItems, normalizedOutput) {
+  const noInstanceOf = new Set(
+    (regionItems || []).filter((item) => (item.instanceOfQids || []).length === 0).map((item) => item.id)
+  );
+  return normalizedOutput.spotsIndex
+    .map((qid, i) => ({ qid, spot: normalizedOutput.spots[i] }))
+    .filter(({ qid }) => noInstanceOf.has(qid))
+    .map(({ qid, spot }) => ({ qid, name: spot?.name || '(不明)', firstSentence: firstSentenceOf(spot?.description) }))
+    .sort((a, b) => a.qid.localeCompare(b.qid, 'en', { numeric: true }));
+}
+
+function firstSentenceOf(text) {
+  if (!text) return '';
+  const end = text.indexOf('。');
+  const sentence = end >= 0 ? text.slice(0, end + 1) : text;
+  return sentence.length > 120 ? `${sentence.slice(0, 120)}…` : sentence;
+}
+
+/** コンソール表示用。ビルドは止めない（件数と一覧を出すだけ） */
+export function logSpotsWithoutInstanceOf(list, label) {
+  console.log(`\n👀 [${label}] P31（分類）が1つも無いスポット: ${list.length}件（クラスの除外が効かないため、場所らしくないものが無いか目で確かめる）`);
+  for (const s of list) {
+    console.log(`    ・${s.name} (${s.qid}) ${s.firstSentence || '（紹介文なし）'}`);
+  }
+}

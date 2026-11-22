@@ -1729,7 +1729,7 @@ class ReverseTravel {
       if (!this.elements.appHeader.contains(e.target)) this.closeHeaderMenu();
     });
 
-    // 検索カードの例（香川・高松／富山／石川・金沢）：押すと出発駅をその駅にする（候補を選んだときと同じ）
+    // 検索カードの例（香川・高松／富山／石川・松任）：押すと出発駅をその駅にする（候補を選んだときと同じ）
     document.querySelectorAll('.example-chip').forEach((chip) => {
       chip.addEventListener('click', () => {
         const input = this.elements.departureInput;
