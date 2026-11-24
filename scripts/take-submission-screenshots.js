@@ -50,6 +50,8 @@ async function openPage(browser, opts) {
   const errors = [];
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push(e.message));
+  // コンソールの404にはURLが出ないため、どこへの読み込みかを別に残す（標高タイル dem_png の404は直さない決まり）
+  page.on('response', (r) => { if (r.status() >= 400) errors.push(`${r.status()} ${r.url()}`); });
   const url = BASE_URL + (BASE_URL.includes('?') ? '&' : '?') + 'nocache=' + Date.now();
   await page.goto(url, { waitUntil: 'load' });
   await page.waitForFunction(() => document.getElementById('departure-input')?.placeholder === '駅名を入力...', null, { timeout: 30000 });
