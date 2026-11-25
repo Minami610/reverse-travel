@@ -11,8 +11,10 @@
  * 撮る前に、地図のタイル・地形・¥2000分の裏の取得・波やぽよん・初めて3Dにしたときの吹き出しが終わるのを待つ。
  * マウスは画面の外へ動かしてから撮る（ホバーの強調を写さない。ヘッドレスなのでカーソル・開発者ツールは写らない）。
  *
- * 使い方：node scripts/take-submission-screenshots.js [--url <URL>] [--only 01,02,...]
- * 保存先：data/screenshots/submission-75/（.gitignoreの対象）
+ *   03a〜03c 【76本目】3Dの候補（山や海が写る向き・傾きに変えた見え方。--only 03a,03b,03c のときだけ撮る）
+ *
+ * 使い方：node scripts/take-submission-screenshots.js [--url <URL>] [--only 01,02,...] [--out <入れ物の名前>]
+ * 保存先：data/screenshots/submission-75/（--outで変えられる。.gitignoreの対象）
  * 撮った画像ごとに、大きさ（ピクセル）・見出し・件数・一覧に写った場所の名前をログに出す（場所らしくないものが写っていないかを人が見る）。
  */
 
@@ -23,10 +25,10 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, '..');
-const outDir = path.join(rootDir, 'data/screenshots/submission-75');
-
 const args = process.argv.slice(2);
 const argValue = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
+// 【76】撮り直し・候補を別の入れ物に分けられるよう、保存先の名前を変えられる（既定は75本目と同じ）
+const outDir = path.join(rootDir, 'data/screenshots', argValue('--out') || 'submission-75');
 const BASE_URL = argValue('--url') || 'https://minami610.github.io/reverse-travel/';
 const ONLY = argValue('--only') ? argValue('--only').split(',') : null;
 const want = (id) => !ONLY || ONLY.includes(id);
@@ -37,6 +39,12 @@ const PC = { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 };
 const SP = { viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true };
 const STATION = '富山駅前';
 const BUDGET = 800;
+// 【76】3Dの候補。bearingは北を0°として時計回り（見ている向き）
+const CANDIDATES_3D = [
+  { id: '03a', station: '富山駅前', budget: 2000, bearing: 125, pitch: 55, zoomDelta: -0.7, note: '立山の方向（南東）を見る' },
+  { id: '03b', station: '高松築港', budget: 1000, bearing: 60, pitch: 60, zoomDelta: 0, note: '屋島の方向（東北東）を見る' },
+  { id: '03c', station: '高岡駅', budget: 1000, bearing: 0, pitch: 60, zoomDelta: 0, note: '二上山の方向（北）を見る' },
+];
 
 /** PNGの幅・高さ（IHDR）を読む */
 function pngSize(file) {
@@ -65,7 +73,8 @@ async function search(page, station, budget) {
   await page.fill('#departure-input', '');
   await page.fill('#departure-input', station);
   await page.waitForTimeout(500);
-  await page.locator('.suggestion-item', { hasText: station }).first().click();
+  // 名前が完全に同じ候補を選ぶ（「高岡駅」で「新高岡駅」を選ばないため）
+  await page.locator(`.suggestion-item[data-station-name="${station}"]`).first().click();
   await page.evaluate((v) => {
     const el = document.getElementById('budget-slider');
     el.value = v;
@@ -102,6 +111,11 @@ async function settle3d(page) {
   // 3Dの地図は初めて3Dにしたときに作られる
   await page.waitForFunction(() => window.__terrainViewForDebug && window.__terrainMapForDebug, null, { timeout: 60000 });
   await page.evaluate(() => window.__terrainViewForDebug.waitForTerrainLoaded(60000));
+  // 【76】初めて3Dにしたときの吹き出し（#map-rotate-hint、3秒）は、地形と地図の'idle'を待ってから出る。
+  // 出る前に「隠れている」を見て撮ってしまい、03に写っていた。出たこと（localStorageの記録）を待ってから、消えるのを待つ。
+  await page.waitForFunction(() => {
+    try { return localStorage.getItem('reverse-travel-rotate-hint-seen') === 'true'; } catch { return true; }
+  }, null, { timeout: 30000 }).catch(() => {});
   await page.waitForFunction(() => {
     const tv = window.__terrainViewForDebug;
     const map = window.__terrainMapForDebug;
@@ -188,6 +202,28 @@ async function main() {
       await mouseAway(page);
       const d = await describe(page);
       await shot(page, `03_pc_3d_${STATION}_800.png`, { 見出し: d.heading, 地図のか所: d.mapCount, NEW: d.newCount });
+      allErrors.push(...errors);
+      await context.close();
+    }
+
+    // --- 03a〜03c：【76】3Dの候補（山や海が写り、地形が伝わる見え方。--only 03a,03b,03c で撮る。どれを使うかはMinamiが選ぶ） ---
+    // 検索した直後の全体の見え方（円が見えている範囲いっぱい）から、向き（bearing）・傾き（pitch）だけを変える。
+    // 利用者が右下のハンドルで回す・傾けるのと同じ結果（カメラの中心はそのまま）。
+    for (const c of CANDIDATES_3D) {
+      if (!ONLY || !ONLY.includes(c.id)) continue;
+      const { context, page, errors } = await openPage(browser, PC);
+      await search(page, c.station, c.budget);
+      await settle2d(page);
+      await page.click('#map-dimension-toggle');
+      await settle3d(page);
+      await page.evaluate(({ bearing, pitch, zoomDelta }) => {
+        const map = window.__terrainMapForDebug;
+        map.jumpTo({ bearing, pitch, zoom: map.getZoom() + (zoomDelta || 0) });
+      }, c);
+      await settle3d(page);
+      await mouseAway(page);
+      const d = await describe(page);
+      await shot(page, `${c.id}_pc_3d_${c.station}_${c.budget}.png`, { 見出し: d.heading, 地図のか所: d.mapCount, NEW: d.newCount, 向き: `${c.bearing}°`, 傾き: `${c.pitch}°`, ねらい: c.note });
       allErrors.push(...errors);
       await context.close();
     }
