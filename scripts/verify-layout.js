@@ -11145,6 +11145,176 @@ async function checkRound67(browser, baseUrl, savedPaths) {
   }
 }
 
+/**
+ * 【2026-11-25、76本目】
+ * (1) 一覧のカードの「NEW」の札が写真の枠の中にあり、名前と重ならない（PC 1440・1920、スマホ390の小・大）。
+ *     75本目の提出用スクリーンショットで、PCの札が名前の頭を隠していた（gridの「.spot-card > *」が札にも
+ *     名前の列を当て、絶対配置の基準が名前の列になっていた）。
+ * (2) 端末を4倍遅くして、検索した直後（¥2,000分の裏取得を地図へ渡す前）にスライダー・＋・−を動かしても、
+ *     「0件」「0か所」「最大0km」と出ない（76本目、Minami決定：C＋A）。検索した金額以下はすぐ正しい数、
+ *     それより上は「読み込み中…」、渡したあとは数に替わる。検索した直後から帯より安い紺のピンも地図にあり
+ *     （検索した直後の波に入る）、裏取得を渡しても「◯か所」が変わらない（13個→73個へ急に増えない）。
+ */
+async function checkRound76(browser, baseUrl, savedPaths) {
+  console.log('\n=== 76本目：一覧の「NEW」の札の位置・取得中の「読み込み中…」 ===');
+  const STATION = '富山駅前';
+  const newTagGeometry = (page) => page.evaluate(() => {
+    const rows = [];
+    document.querySelectorAll('#results-list .spot-card').forEach((card) => {
+      const tag = card.querySelector('.spot-card-new');
+      if (!tag || tag.hidden || tag.offsetParent === null) return;
+      const img = card.querySelector('.spot-image');
+      const h3 = card.querySelector('h3');
+      const t = tag.getBoundingClientRect();
+      const i = img.getBoundingClientRect();
+      const h = h3.getBoundingClientRect();
+      if (t.width === 0 || i.width === 0) return;
+      const inside = t.left >= i.left - 1 && t.right <= i.right + 1 && t.top >= i.top - 1 && t.bottom <= i.bottom + 1;
+      const overlapX = Math.min(t.right, h.right) - Math.max(t.left, h.left);
+      const overlapY = Math.min(t.bottom, h.bottom) - Math.max(t.top, h.top);
+      const overlapsName = overlapX > 0.5 && overlapY > 0.5;
+      rows.push({ name: h3.textContent.trim(), inside, overlapsName, tag: [Math.round(t.left), Math.round(t.top), Math.round(t.width)], img: [Math.round(i.left), Math.round(i.top), Math.round(i.width)], h3: [Math.round(h.left), Math.round(h.top)] });
+    });
+    return rows;
+  });
+  const judgeTags = (label, rows) => {
+    record(`${label} 「NEW」の札が出ているカードがある（検証の前提）`, rows.length > 0, JSON.stringify(rows.length));
+    if (rows.length === 0) return;
+    const bad = rows.filter((r) => !r.inside || r.overlapsName);
+    record(`${label} 「NEW」の札が写真の枠の中にあり、名前と重ならない（${rows.length}枚）`, bad.length === 0, JSON.stringify(bad.slice(0, 3)));
+  };
+
+  // --- (1) NEWの札 ---
+  for (const [vLabel, viewport] of [['pc1440', { width: 1440, height: 900 }], ['pc1920', { width: 1920, height: 1080 }], ['sp390', MOBILE_FORM_COLLAPSE_VIEWPORTS.std]]) {
+    const context = await browser.newContext({ viewport });
+    await context.addInitScript(() => { try { localStorage.setItem('reverse-travel-rotate-hint-seen', 'true'); localStorage.setItem('reverse-travel-map-mode', '2d'); } catch { /* 無視 */ } });
+    const page = await context.newPage();
+    const L = `[76/NEW/${vLabel}]`;
+    try {
+      await page.goto(baseUrl, { waitUntil: 'load' });
+      await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+      await searchAtAndWaitPrefetch(page, STATION, 800);
+      await clickElementChecked(page, 'mobile-budget-increment', `${L} ＋（1回目）`);
+      await page.waitForTimeout(150);
+      await clickElementChecked(page, 'mobile-budget-increment', `${L} ＋（2回目）`);
+      await page.waitForFunction(() => /¥1,000/.test(document.getElementById('results-band-heading')?.textContent || ''), null, { timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(600);
+      judgeTags(`${L}${vLabel.startsWith('sp') ? '（下の一覧・小）' : ''}`, await newTagGeometry(page));
+      if (vLabel.startsWith('pc')) {
+        await page.screenshot({ path: path.join(screenshotDir, `round76-new-tag-${vLabel}.png`) });
+      }
+      if (vLabel.startsWith('sp')) {
+        await page.screenshot({ path: path.join(screenshotDir, `round76-new-tag-${vLabel}-small.png`) });
+        await clickElementChecked(page, 'results-sheet-handle', `${L} つまみ（大にする）`);
+        await page.waitForFunction(() => document.getElementById('app-layout').classList.contains('sheet-large'), null, { timeout: 5000 }).catch(() => {});
+        await page.waitForTimeout(500);
+        judgeTags(`${L}（下の一覧・大）`, await newTagGeometry(page));
+        await page.screenshot({ path: path.join(screenshotDir, `round76-new-tag-${vLabel}-large.png`) });
+      }
+    } finally {
+      await context.close();
+    }
+  }
+
+  // --- (2) 端末を4倍遅くして、裏取得を渡す前に動かす ---
+  const ZERO_RE = /(^|[^0-9,])0(件|か所)|最大0(\.0)?km/;
+  const readState = (page) => page.evaluate(() => {
+    const t = (id) => (document.getElementById(id)?.textContent || '').replace(/\s+/g, ' ').trim();
+    const vis = (id) => { const el = document.getElementById(id); return !!el && !el.hidden; };
+    return {
+      applied: window.__maxBudgetPrefetchAppliedCount || 0,
+      budget: parseInt(document.getElementById('budget-input').value, 10),
+      preview: t('budget-band-preview'),
+      mapCount: t('results-map-count'),
+      newCount: vis('results-new-count') ? t('results-new-count') : '',
+      mapNew: vis('map-new-count') ? t('map-new-count') : '',
+      heading: t('results-band-heading'),
+    };
+  });
+  const setSlider = (page, v) => page.evaluate((value) => {
+    const el = document.getElementById('budget-slider');
+    el.value = value;
+    el.dispatchEvent(new Event('input'));
+  }, v);
+  for (const [vLabel, viewport] of [['pc1440', { width: 1440, height: 900 }], ['sp390', MOBILE_FORM_COLLAPSE_VIEWPORTS.std]]) {
+    const context = await browser.newContext({ viewport });
+    await context.addInitScript(() => { try { localStorage.setItem('reverse-travel-rotate-hint-seen', 'true'); localStorage.setItem('reverse-travel-map-mode', '2d'); } catch { /* 無視 */ } });
+    const page = await context.newPage();
+    // 端末を4倍遅くしても、検索カードの操作・一覧の待ち方しだいで、読み取る前に裏取得が渡ってしまうことがあった
+    // （1回目の試しでPCだけ）。裏取得を始める時（main.jsのscheduleMaxBudgetPrefetch()のrequestIdleCallback、期限1500ms）を
+    // この検証の中だけ4秒遅らせ、「渡す前」を確実に作る（遅い端末で計算が長引くのと同じ状態。アプリの動きは変えない）。
+    await context.addInitScript(() => {
+      const ric = window.requestIdleCallback?.bind(window);
+      if (!ric) return;
+      window.requestIdleCallback = (cb, opts) => (opts && opts.timeout === 1500 ? setTimeout(() => ric(cb, opts), 4000) : ric(cb, opts));
+    });
+    const L = `[76/取得中/${vLabel}]`;
+    try {
+      await page.goto(baseUrl, { waitUntil: 'load' });
+      await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+      const cdp = await context.newCDPSession(page);
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+      await searchAt(page, STATION, 800);
+      // 【76】端末を4倍遅くしても、裏取得を渡すまでの間（1.5〜4.3秒）に1つずつpage.evaluate()で動かすと往復の時間で
+      // 間に合わないことがあるため、動かす操作と読み取りはページの中で続けて（同じタスクの中で）行う。
+      const steps = await page.evaluate(() => {
+        const t = (id) => (document.getElementById(id)?.textContent || '').replace(/\s+/g, ' ').trim();
+        const vis = (id) => { const el = document.getElementById(id); return !!el && !el.hidden; };
+        const read = () => ({
+          applied: window.__maxBudgetPrefetchAppliedCount || 0,
+          budget: parseInt(document.getElementById('budget-input').value, 10),
+          preview: t('budget-band-preview'),
+          mapCount: t('results-map-count'),
+          newCount: vis('results-new-count') ? t('results-new-count') : '',
+          mapNew: vis('map-new-count') ? t('map-new-count') : '',
+          heading: t('results-band-heading'),
+        });
+        const slider = (v) => { const el = document.getElementById('budget-slider'); el.value = v; el.dispatchEvent(new Event('input')); };
+        const mv = window.__mapViewForDebug;
+        const spots = mv._lastSpots || [];
+        const out = { s0: read(), early: { total: spots.length, cheaper: spots.filter((s) => s.source_round_trip_fare <= 600).length } };
+        slider(400); out.down = read();
+        slider(1200); out.up = read();
+        slider(800);
+        document.getElementById('mobile-budget-increment').click(); out.plus = read();
+        document.getElementById('mobile-budget-decrement').click();
+        document.getElementById('mobile-budget-decrement').click(); out.minus = read();
+        slider(800); out.back = read();
+        return out;
+      });
+      const s0 = steps.s0;
+      const notApplied = (s) => s.applied === s0.applied;
+      const countBefore = s0.mapCount;
+      record(`${L} 読み取りは裏取得を渡す前（検証の前提）`, s0.applied === 0, JSON.stringify(s0));
+      record(`${L} 検索した直後（裏取得の前）から、帯より安い紺のピンも地図にある（検索した直後の波に入る）`, steps.early.cheaper > 0, JSON.stringify(steps.early));
+      const sDown = steps.down;
+      const okDown = notApplied(sDown) && !ZERO_RE.test(sDown.preview) && !ZERO_RE.test(sDown.mapCount) && /件・最大/.test(sDown.preview) && !/読み込み中/.test(sDown.mapCount) && /¥201〜¥400/.test(sDown.heading);
+      record(`${L} 裏取得の前にスライダーを¥400へ下げても0件・0か所・最大0kmと出ず、見出し・一覧もすぐ変わる`, okDown, JSON.stringify(sDown));
+      const sUp = steps.up;
+      const okUp = notApplied(sUp) && /読み込み中…/.test(sUp.preview) && sUp.mapCount === '読み込み中…' && !ZERO_RE.test(sUp.preview) && !/NEW \+/.test(sUp.newCount + sUp.mapNew);
+      record(`${L} 裏取得の前にスライダーを¥1,200へ上げると、件数・距離・「◯か所」・「NEW +N」の代わりに「読み込み中…」`, okUp, JSON.stringify(sUp));
+      const sPlus = steps.plus;
+      record(`${L} 裏取得の前に＋（¥900）を押すと「読み込み中…」（0か所と出ない。見出し・一覧は検索した金額のまま＝了承済みの遅れ）`,
+        notApplied(sPlus) && sPlus.mapCount === '読み込み中…' && /¥601〜¥800/.test(sPlus.heading), JSON.stringify(sPlus));
+      const sMinus = steps.minus;
+      record(`${L} 裏取得の前に−（¥700）を押すと、すぐ数・見出しが変わる（読み込み中…・0か所と出ない）`,
+        notApplied(sMinus) && /^\d+か所$/.test(sMinus.mapCount) && sMinus.mapCount !== '0か所' && /¥501〜¥700/.test(sMinus.heading), JSON.stringify(sMinus));
+      // 検索した金額へ戻し、裏取得を渡すのを待つ（「◯か所」が変わらない＝13個→73個へ急に増えない）
+      const sBack = steps.back;
+      await page.waitForFunction((n) => (window.__maxBudgetPrefetchAppliedCount || 0) > n, s0.applied, { timeout: 60000 }).catch(() => {});
+      const sAfter = await readState(page);
+      record(`${L} 裏取得を渡す前と後で、検索した金額の「◯か所」が同じ（急に増えない）`, sAfter.applied > s0.applied && sBack.mapCount === sAfter.mapCount && sAfter.mapCount === countBefore,
+        JSON.stringify({ 検索直後: countBefore, 渡す前: sBack.mapCount, 渡した後: sAfter.mapCount }));
+      await setSlider(page, 1200);
+      const sUp2 = await readState(page);
+      record(`${L} 裏取得を渡したあとは、¥1,200でも件数・距離・「◯か所」が数で出る`, /\d+件・最大\d/.test(sUp2.preview) && /^\d+か所$/.test(sUp2.mapCount) && !ZERO_RE.test(sUp2.preview + sUp2.mapCount), JSON.stringify(sUp2));
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+    } finally {
+      await context.close();
+    }
+  }
+}
+
 async function main() {
   assertBundleFresh('verify-layout');
   assertSiteDataFresh('verify-layout');
@@ -11258,6 +11428,7 @@ async function main() {
     await runWithFreshBrowser(checkRound64Motion, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound66, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound67, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkRound76, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBreadcrumbTrail, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBudgetSlider, baseUrl, savedPaths);
     await runWithFreshBrowser(checkWaveRevealAndCircleScreenshots, baseUrl, savedPaths);

@@ -2066,7 +2066,6 @@ body {
   overflow: hidden;
 }
 
-.spot-pageviews,
 .spot-distance {
   padding: 0 0.75rem;
   font-size: 0.8rem;
@@ -3133,6 +3132,20 @@ body {
   display: none;
 }
 
+/* 【2026-11-25、76本目、Minami決定：A】検索した金額より上の金額で、¥2,000分の裏取得を地図へ渡す前は、数の代わりに
+   「読み込み中…」と出す（main.jsのupdateNewSpotMarks()）。数ではないことが分かるよう、灰色の小さめの文字にする。 */
+.new-tag.new-tag-loading {
+  background-color: #F3F4F6;
+  color: var(--color-text-sub);
+  font-weight: 600;
+}
+
+#results-map-count.results-count-loading {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-sub);
+}
+
 /* 一覧のカードの「NEW」は、写真の左上に重ねる（右上は☆・共有ボタン） */
 .spot-card-new {
   position: absolute;
@@ -3993,10 +4006,14 @@ body {
     box-shadow: none;
   }
 
-  /* 「NEW」は今までどおり写真の左上に重ねる（51本目） */
-  .results-panel .spot-card-new {
-    top: 8px;
-    left: 0;
+  /* 「NEW」は今までどおり写真の左上に重ねる（51本目）。
+     【76本目、不具合の直し】カードがgridで、上の「.spot-card > *」が札にもgrid-column: 2 / 4を当てていたため、
+     絶対配置の基準が名前の列になり、札が名前の頭を隠していた。写真と同じ枠（1列目・1〜4行目）を基準にする。 */
+  .results-panel .spot-card .spot-card-new {
+    grid-column: 1;
+    grid-row: 1 / span 4;
+    top: 4px;
+    left: 4px;
     padding: 0 4px;
     font-size: 10px;
     line-height: 15px;
@@ -4809,9 +4826,12 @@ body {
     box-shadow: none;
   }
 
-  #app-layout.sheet-large .results-sheet .spot-card-new {
-    top: 8px;
-    left: 0;
+  /* 【76本目】PCと同じ理由で、写真と同じ枠（1列目・1〜4行目）を基準にする */
+  #app-layout.sheet-large .results-sheet .spot-card .spot-card-new {
+    grid-column: 1;
+    grid-row: 1 / span 4;
+    top: 4px;
+    left: 4px;
     padding: 0 4px;
     font-size: 10px;
     line-height: 15px;
@@ -9295,11 +9315,14 @@ class ReverseTravel {
     // 【59本目】一覧（見出しの金額帯・カード）が今出している金額。結果画面で＋−を押すと、検索し直さずにこれだけ変わる
     // （「¥◯で探す」はやめた）。0件時の案内文もこの金額で出す。
     this.listBudget = null;
-    // 【59本目】¥2,000分の裏取得（scheduleMaxBudgetPrefetch()）が、どの出発駅の分まで終わっているか。
-    // 終わるまでは検索した金額の帯の場所しか持っていないため、＋−で一覧を合わせるのを待つ。
-    this._allSpotsStationId = null;
     // 【61本目】今地図に渡している場所（「◯か所」「NEW +N」を地図と同じ数え方にするため。updateNewSpotMarks()）
     this._mapSpots = null;
+    // 【2026-11-25、76本目、Minami決定：C＋A】_mapSpotsが「この金額以下の場所をすべて持っている」金額。
+    // 検索した直後は検索した金額（検索の計算で、帯より安い場所まで出ている）、¥2,000分の裏取得を地図へ渡したら
+    // MAX_BUDGET。これ以下の金額なら、＋−・スライダーで一覧・数・距離をすぐ出せる。これをこえる金額は、
+    // 裏取得が終わるまで数の代わりに「読み込み中…」を出す（isBudgetCovered()）。59本目の_allSpotsStationId
+    // （出発駅ごとに「¥2,000分が終わったか」だけを持っていた）はこれに置き換えた。null＝まだ検索していない。
+    this._mapCoveredBudget = null;
     this.currentSortOrder = 'recommended';
     // 直近に検索した条件（出発駅欄の文字列＋予算）。nullは「まだ一度も検索していない」。
     // 検索ボタンの見た目（updateSearchButtonState）は、現在の入力がこれと一致するかで決める。
@@ -9884,8 +9907,9 @@ class ReverseTravel {
    * 【2026-10-26、59本目、Minami決定】結果画面で＋−を押したら、一覧（見出しの金額帯・カード）も今の金額に
    * 合わせる（地図・「◯か所」「NEW +N」と一緒に変わる。押すボタンは＋−だけ）。検索し直しはしない（地図の
    * 合わせ方・＋の波・ピンの色は今までの＋−の決まりのまま。ピンの色の「検索した金額」も変えない）。
-   * ¥2,000分の裏取得が終わるまでは検索した金額の帯の場所しか持っていないため、終わってから合わせる
-   * （裏取得の反映でupdateMapBudgetLive()が呼ばれ直す）。
+   * ¥2,000分の裏取得が終わるまでは検索した金額以下の場所しか持っていないため、それより上の金額は終わってから
+   * 合わせる（裏取得の反映でupdateMapBudgetLive()が呼ばれ直す。了承済みの1.1〜2.2秒の遅れ）。
+   * 【76本目、Minami決定】検索した金額以下（−・下げたスライダー）は、すぐ合わせる（地図・数・見出し・一覧が一緒）。
    * 一覧が今の金額を出しているので、「この条件で探す」の比べる相手（lastSearchedBudget）もこの金額にする
    * （「条件を変える」で開いたとき「条件が変わりました」と出さない・「▲閉じる」でこの金額に戻す）。
    * @param {number} budget
@@ -9894,8 +9918,8 @@ class ReverseTravel {
     const layout = this.elements.appLayout;
     if (!layout.classList.contains('has-results') || !layout.classList.contains('form-collapsed')) return;
     if (this.listBudget === null || budget === this.listBudget) return;
-    if (this._allSpotsStationId === null || this._allSpotsStationId !== this.currentDepartureStationId) return;
-    const { bandSpots } = this.filterBandFromAllSpots(this.currentAllSpots, budget);
+    if (!this.isBudgetCovered(budget)) return;
+    const { bandSpots } = this.filterBandFromAllSpots(this._mapSpots, budget);
     this.listBudget = budget;
     this.currentSpots = bandSpots;
     this.lastSearchedBudget = budget;
@@ -9959,8 +9983,27 @@ class ReverseTravel {
       this.elements.budgetBandPreview.hidden = true;
       return;
     }
-    const { bandSpots } = this.filterBandFromAllSpots(this.currentAllSpots, budget);
-    this.updateBudgetBandPreview(budget, bandSpots.length);
+    // 【76本目】件数は、距離（mapView.computeReachRadiusKm()＝地図に渡した場所）と同じデータ（_mapSpots）で数える。
+    // 以前は件数だけ先に¥2,000分（currentAllSpots）で数えていたため、地図へ渡すまでの1.2秒は「52件・最大0km」と出ていた。
+    this.updateBudgetBandPreview(budget, this.countBandSpots(budget));
+  }
+
+  /**
+   * 【76本目】今の金額の帯の場所を、すぐ正しく数えられるか（_mapSpotsがその金額以下の場所をすべて持っているか）。
+   * @param {number} budget
+   */
+  isBudgetCovered(budget) {
+    return this._mapCoveredBudget !== null && budget <= this._mapCoveredBudget;
+  }
+
+  /**
+   * 【76本目】今の金額の帯の場所の数（地図に渡した場所で数える）。まだ数えられない金額（裏取得の前の、検索した金額より上）はnull。
+   * @param {number} budget
+   * @returns {number|null}
+   */
+  countBandSpots(budget) {
+    if (!this.isBudgetCovered(budget)) return null;
+    return this.filterBandFromAllSpots(this._mapSpots || [], budget).bandSpots.length;
   }
 
   /**
@@ -9977,19 +10020,26 @@ class ReverseTravel {
     const prev = this._mapPrevSearchedBudget ?? searched;
     const isNew = (spot) => pinCategory(spot.source_round_trip_fare, liveBudget, searched, prev) === 'orange';
     const newCount = spots.filter((s) => isFiniteNumber(s.latitude) && isFiniteNumber(s.longitude) && isNew(s)).length;
+    // 【2026-11-25、76本目、Minami決定：A】検索した金額より上（＋・スライダーを上げた）で、¥2,000分の裏取得をまだ地図へ
+    // 渡していないときは、数の代わりに「読み込み中…」を出す（以前は持っている場所だけで数え、「0か所」・NEWなしと出ていた）。
+    // 「◯か所」と「NEW +N」は並んでいるため、「読み込み中…」は「◯か所」の所に1つだけ出し、「NEW +N」は隠す。地図の色の
+    // 説明の「NEW +N」は離れた所にあるため、そこにも「読み込み中…」を出す（.new-tag-loading）。
+    const loading = this._mapCoveredBudget !== null && !this.isBudgetCovered(liveBudget);
     const tag = this.elements.mapNewCount;
     if (tag) {
-      tag.textContent = `NEW +${newCount}`;
-      tag.hidden = newCount === 0;
+      tag.textContent = loading ? '読み込み中…' : `NEW +${newCount}`;
+      tag.classList.toggle('new-tag-loading', loading);
+      tag.hidden = !loading && newCount === 0;
     }
     // 【58本目】PCの一覧パネル・細いバーの「42か所」（今地図に出ている場所＝今の金額までの場所）と「NEW +8」
     if (this.elements.resultsMapCount) {
       const shown = spots.filter((s) => isFiniteNumber(s.latitude) && isFiniteNumber(s.longitude) && s.source_round_trip_fare <= liveBudget).length;
-      this.elements.resultsMapCount.textContent = `${shown}か所`;
+      this.elements.resultsMapCount.textContent = loading ? '読み込み中…' : `${shown}か所`;
+      this.elements.resultsMapCount.classList.toggle('results-count-loading', loading);
     }
     if (this.elements.resultsNewCount) {
       this.elements.resultsNewCount.textContent = `NEW +${newCount}`;
-      this.elements.resultsNewCount.hidden = newCount === 0;
+      this.elements.resultsNewCount.hidden = loading || newCount === 0;
     }
     const spotById = new Map(spots.map((s) => [s.id, s]));
     this.elements.resultsList.querySelectorAll('.spot-card').forEach((card) => {
@@ -10011,8 +10061,17 @@ class ReverseTravel {
     // 廃止した代わりに、PCのこのプレビュー文言の末尾に出す。スライダーに
     // 合わせて変わる（呼び出し元のupdateMapBudgetLive()がスライダー操作の
     // たびに呼ぶため）。
+    // 【76本目、Minami決定：A】まだ数えられない金額（count===null、裏取得の前の検索した金額より上）は「読み込み中…」。
+    // 件数・距離はどちらも地図に渡した場所（_mapSpots）から出す。届く場所が1つも無い金額（本当に0件）は距離を書かない。
+    const band = `往復¥${formatThousands(budget - BAND_WIDTH + 1)}〜¥${formatThousands(budget)}で行ける場所`;
+    if (count === null) {
+      el.textContent = `${band} 読み込み中…`;
+      return;
+    }
     const radiusKm = this.mapView.computeReachRadiusKm(budget);
-    el.textContent = `往復¥${formatThousands(budget - BAND_WIDTH + 1)}〜¥${formatThousands(budget)}で行ける場所 ${count}件・最大${formatReachRadiusKm(radiusKm)}先まで`;
+    el.textContent = radiusKm > 0
+      ? `${band} ${count}件・最大${formatReachRadiusKm(radiusKm)}先まで`
+      : `${band} ${count}件`;
   }
 
   /**
@@ -10396,8 +10455,12 @@ class ReverseTravel {
       // ショット・計測で指摘）。まず今の予算だけで一覧を出す（従来の速さ）。
       // ¥2000全域（スライダーで帯外の安い点を塗り分けるためのデータ）は
       // 一覧を出した後、裏で計算する（scheduleMaxBudgetPrefetch）。
+      // 【2026-11-25、76本目、Minami決定：C】地図・数・スライダーには、帯より安い場所（検索の計算で出ている
+      // result.allSpots＝検索した金額以下のすべて）も最初から渡す。以前は帯の場所（result.bandSpots）だけを渡して
+      // いたため、裏取得を地図へ渡すまで（1.5〜4.3秒、75本目の計測）、紺のピンが帯の分だけ・スライダーを下げると
+      // 「0件」・「0か所」と出て、渡した瞬間に13個→73個へ急に増えていた。計算は増えない。
       const result = await this.computeSearchResult(stationId, budget);
-      this.displayResults(result.bandSpots, stationId, prefCode, result.reachableCount, budget, result.hasCheaperSpots, result.bandSpots);
+      this.displayResults(result.bandSpots, stationId, prefCode, result.reachableCount, budget, result.hasCheaperSpots, result.allSpots);
       this.scheduleMaxBudgetPrefetch(stationId);
     } catch (error) {
       console.error('検索失敗:', error);
@@ -10408,8 +10471,8 @@ class ReverseTravel {
   /**
    * 【4本目④】一覧を先に出した後、裏でMAX_BUDGET(¥2000)全域を計算し、
    * 終わり次第スライダー用のallSpotsを差し替える（Minami指示）。この計算が
-   * 終わるまで、スライダーは「今の帯の点だけ」を塗り分ける（displayResults()が
-   * 渡すallSpotsが最初はbandSpotsのままのため、自然とそうなる）。
+   * 終わるまで、地図・数・スライダーは検索した金額以下の場所だけを持つ（76本目から。
+   * それより上の金額は「読み込み中…」、_mapCoveredBudget）。
    * requestIdleCallback（無ければsetTimeout）で、一覧の描画を妨げない
    * タイミングに後回しにする。
    */
@@ -10428,7 +10491,8 @@ class ReverseTravel {
       try {
         const { allSpots } = await this.computeSearchResult(stationId, MAX_BUDGET);
         if (this.currentDepartureStationId !== stationId) return;
-        // 検索カードの金額帯の案内（スライダーの件数）は、ここで¥2,000分を使い始めてよい（地図・一覧は変えない表示）。
+        // 【76本目】スライダーの件数も、下のsetTimeoutの中で地図へ渡すときから¥2,000分で数える（距離と同じデータ。
+        // 以前はここから件数だけ¥2,000分で数え、距離は地図の側のままのため「52件・最大0km」と出ていた）。
         this.currentAllSpots = allSpots;
         // 【2026-10-26、61本目、不具合修正】¥2,000分で一覧を合わせ始める（_allSpotsStationId）のは、地図へ渡すのと
         // 同じとき（下のsetTimeoutの中）にする。「◯か所」「NEW +N」も地図に渡した場所で数える（_mapSpots）。以前は
@@ -10447,7 +10511,7 @@ class ReverseTravel {
         setTimeout(() => {
           if (this.currentDepartureStationId !== stationId) return;
           this._mapSpots = allSpots;
-          this._allSpotsStationId = stationId; // 【59本目】これで＋−の一覧合わせができる
+          this._mapCoveredBudget = MAX_BUDGET; // 【59本目・76本目】これで検索した金額より上の＋−の一覧合わせ・数ができる
           const departureStation = this.data.stations?.[stationId];
           // 【2026-10-13、10本目①修正】裏の計算中にスライダーが動かされていても、
           // 点は検索したときの予算（this.currentBudget）のまま据え置く（Minami指示：
@@ -10564,8 +10628,9 @@ class ReverseTravel {
     this.currentReachableCount = reachableCount;
     this.currentBudget = budget;
     this.listBudget = budget;
-    // 渡されたallSpotsが¥2,000分かどうかはここでは分からないため、いったん「まだ」にする（裏取得・共有リンクで付け直す）
-    this._allSpotsStationId = null;
+    // 渡されたallSpotsは少なくとも検索した金額以下のすべて（76本目）。¥2,000分かどうかはここでは分からないため、
+    // いったん検索した金額までにする（裏取得・共有リンクでMAX_BUDGETに付け直す）。
+    this._mapCoveredBudget = budget;
     this.currentSortOrder = 'recommended';
     this.elements.sortSelect.value = 'recommended';
 
@@ -10743,7 +10808,9 @@ class ReverseTravel {
       if (this.currentDepartureStationId) {
         // 【49本目】あとから作った3Dにも、直前の検索の金額（紺の上限）を渡しておく。
         if (this._mapPrevSearchedBudget != null) this.terrainMapView.setPrevSearchedBudget(this._mapPrevSearchedBudget);
-        this.terrainMapView.render(station, this.currentAllSpots, this.currentBudget);
+        // 【76本目】2Dと同じ「地図に渡した場所」（_mapSpots）を渡す。currentAllSpotsは裏取得の計算が終わった時点で
+        // ¥2,000分になるが、地図へ渡すのはその1.2秒あとのため、その間に3Dを作ると2Dと3D・数とで持つ場所が食い違っていた。
+        this.terrainMapView.render(station, this._mapSpots || this.currentAllSpots, this.currentBudget);
         // 【2026-10-21、43本目、Minami決定：A-2】検索したあとに初めて3Dへ切り替えたときも、
         // 検索した直後と同じ見え方（円が短辺の0.85（47本目）、傾き45°、向きは北）にする。以前は
         // ズーム9・傾き57°のまま（下の11本目②の判断でカメラを触らなかった）だった。
@@ -11072,7 +11139,8 @@ class ReverseTravel {
       this.updateSearchButtonState();
 
       this.displayResults(bandSpots, stationId, prefCode, reachableCount, alignedBudget, hasCheaperSpots, allSpots);
-      this._allSpotsStationId = stationId; // 【59本目】ここで渡したallSpotsは¥2,000分
+      this._mapCoveredBudget = MAX_BUDGET; // 【59本目・76本目】ここで渡したallSpotsは¥2,000分
+      this.updateNewSpotMarks(alignedBudget);
       this.detailHistory = []; // 共有リンク・マイリストからの新規の詳細表示なので履歴をリセットする
       history.pushState({}, ''); // スマホの戻る操作で一覧に戻れるよう、履歴を1つ積む（URLは変えない）
       this.showSpotDetail(spotForDetail);
@@ -12142,7 +12210,7 @@ class ReverseTravel {
 
     // 【66本目、Minami決定】スクロールしなくても名前・写真・紹介文の最初の数行が見えるよう詰める：名前の行（右に☆・共有の
     // 小さなアイコンボタン、44px四方）→ 往復の金額・片道の時間・距離の1行 → 横幅いっぱいで低めの写真（押すと大きく見られる）
-    // → 紹介文 → 「地図で見る」（スマホだけ）・ページビュー・行き方などの残り。
+    // → 紹介文 → 「地図で見る」（スマホだけ）・行き方などの残り（月間ページビュー数の行は76本目で消した。ページビュー数は使っていない）。
     const fare = spot.source_round_trip_fare;
     const metaParts = [
       typeof fare === 'number' ? `往復¥${formatThousands(fare)}` : null,
@@ -12166,7 +12234,6 @@ class ReverseTravel {
       ${imageHtml}
       <p class="detail-description">${spot.description || (spot.wikipedia_url ? '詳細はWikipediaの記事を参照してください' : 'より詳しい情報がありません')}</p>
       <button type="button" class="map-view-btn detail-map-btn" data-spot-id="${spot.id}">地図で見る</button>
-      <p class="spot-pageviews">月間ページビュー数: ${spot.pageviews || 'データなし'}</p>
       ${routeInfoHtml}
       ${spot.wikipedia_url ? `<a href="${spot.wikipedia_url}" target="_blank" class="detail-wikipedia-btn">Wikipediaで詳しく見る</a>` : ''}
       ${onwardHtml}
