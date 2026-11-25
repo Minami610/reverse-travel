@@ -1377,7 +1377,6 @@ body {
   overflow: hidden;
 }
 
-.spot-pageviews,
 .spot-distance {
   padding: 0 0.75rem;
   font-size: 0.8rem;
@@ -2444,6 +2443,20 @@ body {
   display: none;
 }
 
+/* 【2026-11-25、76本目、Minami決定：A】検索した金額より上の金額で、¥2,000分の裏取得を地図へ渡す前は、数の代わりに
+   「読み込み中…」と出す（main.jsのupdateNewSpotMarks()）。数ではないことが分かるよう、灰色の小さめの文字にする。 */
+.new-tag.new-tag-loading {
+  background-color: #F3F4F6;
+  color: var(--color-text-sub);
+  font-weight: 600;
+}
+
+#results-map-count.results-count-loading {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-sub);
+}
+
 /* 一覧のカードの「NEW」は、写真の左上に重ねる（右上は☆・共有ボタン） */
 .spot-card-new {
   position: absolute;
@@ -3304,10 +3317,14 @@ body {
     box-shadow: none;
   }
 
-  /* 「NEW」は今までどおり写真の左上に重ねる（51本目） */
-  .results-panel .spot-card-new {
-    top: 8px;
-    left: 0;
+  /* 「NEW」は今までどおり写真の左上に重ねる（51本目）。
+     【76本目、不具合の直し】カードがgridで、上の「.spot-card > *」が札にもgrid-column: 2 / 4を当てていたため、
+     絶対配置の基準が名前の列になり、札が名前の頭を隠していた。写真と同じ枠（1列目・1〜4行目）を基準にする。 */
+  .results-panel .spot-card .spot-card-new {
+    grid-column: 1;
+    grid-row: 1 / span 4;
+    top: 4px;
+    left: 4px;
     padding: 0 4px;
     font-size: 10px;
     line-height: 15px;
@@ -4120,9 +4137,12 @@ body {
     box-shadow: none;
   }
 
-  #app-layout.sheet-large .results-sheet .spot-card-new {
-    top: 8px;
-    left: 0;
+  /* 【76本目】PCと同じ理由で、写真と同じ枠（1列目・1〜4行目）を基準にする */
+  #app-layout.sheet-large .results-sheet .spot-card .spot-card-new {
+    grid-column: 1;
+    grid-row: 1 / span 4;
+    top: 4px;
+    left: 4px;
     padding: 0 4px;
     font-size: 10px;
     line-height: 15px;
