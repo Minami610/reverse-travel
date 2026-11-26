@@ -13,6 +13,8 @@
  * 再計算値を単純比較するだけで検出する）。
  */
 
+import { formatThousands } from './format.js';
+
 const STORAGE_KEY = 'ikeru.favorites.v1';
 const MAX_LIST_SHARE_ITEMS = 20;
 
@@ -178,7 +180,7 @@ export function buildSpotShareText(spotName, departureName, roundTripFare, durat
   const durationPart = typeof durationMin === 'number' ? `、約${durationMin}分` : '';
   const namePart = municipality ? `${spotName}（${municipality}）` : spotName;
   const freqPart = frequencyText ? `／${frequencyText}` : '';
-  return `${namePart}／${departureName}からバスで往復¥${roundTripFare}${durationPart}。${freqPart}／${url}`;
+  return `${namePart}／${departureName}からバスで往復¥${formatThousands(roundTripFare)}${durationPart}。${freqPart}／${url}`;
 }
 
 /**

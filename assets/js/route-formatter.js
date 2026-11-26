@@ -23,6 +23,7 @@
  */
 
 import { parseRouteEntry, routeEntryMinutes, lookupRouteEntry, formatDayLabel } from './route-duration.js';
+import { formatThousands } from './format.js';
 
 /** 2点間の距離をメートルで返す（Haversine公式） */
 function haversineMeters(lat1, lon1, lat2, lon2) {
@@ -153,7 +154,7 @@ export class RouteFormatter {
         ${this.renderLegLine(parsed.legs[0].route_id, departureName, viaName, parsed.legs[0].duration_min, null, freq)}
         <div class="route-transfer-note">↓ ${viaName}で乗換</div>
         ${this.renderLegLine(parsed.legs[1].route_id, viaName, destName, parsed.legs[1].duration_min, null, freq)}
-        <div class="route-total">合計（片道） ¥${fare}（通し運賃）・約${totalMinutes}分</div>
+        <div class="route-total">合計（片道） ¥${formatThousands(fare)}（通し運賃）・約${totalMinutes}分</div>
         <p class="route-disclaimer">※乗り換えの待ち時間は、運行本数から見積もった目安です</p>
         ${roundTripNote}
       </div>
@@ -190,7 +191,7 @@ export class RouteFormatter {
         ${this.renderLegOrSegment(departureName, transferAtName, leg1, fare1)}
         ${transferNote}
         ${this.renderLegOrSegment(transferAtName, destName, leg2, fare2)}
-        <div class="route-total">合計（片道） ¥${fare}${totalMinutes !== null ? `・約${totalMinutes}分` : ''}</div>
+        <div class="route-total">合計（片道） ¥${formatThousands(fare)}${totalMinutes !== null ? `・約${totalMinutes}分` : ''}</div>
         <p class="route-disclaimer">※乗り換えの待ち時間は、運行本数から見積もった目安です</p>
         ${roundTripNote}
       </div>
@@ -204,7 +205,7 @@ export class RouteFormatter {
    */
   renderRoundTripNote(roundTripFare) {
     if (roundTripFare === null || roundTripFare === undefined) return '';
-    return `<p class="route-round-trip">往復運賃（帰りも同額と仮定）：<strong>¥${roundTripFare}</strong></p>`;
+    return `<p class="route-round-trip">往復運賃（帰りも同額と仮定）：<strong>¥${formatThousands(roundTripFare)}</strong></p>`;
   }
 
   /** 1区間分の表示（駅名は表示用にすでに解決済みのものを受け取る）。その区間自体が
@@ -244,7 +245,7 @@ export class RouteFormatter {
     const label = this.routeLabel(routeId);
     const mode = this.routeMode(routeId);
     const icon = mode === 'bus' ? '🚌' : '🚃';
-    const farePart = fare !== null && fare !== undefined ? `¥${fare}・` : '';
+    const farePart = fare !== null && fare !== undefined ? `¥${formatThousands(fare)}・` : '';
     const freqNote = this.renderFrequencyNote(frequency);
     return `<p class="route-leg route-leg-${mode}">${icon} ${label}　${originName} → ${destName}（${farePart}約${durationMin}分）${freqNote ? `<br>${freqNote}` : ''}</p>`;
   }
@@ -252,7 +253,7 @@ export class RouteFormatter {
   renderUnresolved(spot) {
     return `
       <div class="route-info">
-        <p class="route-unresolved">経路情報を確定できませんでした（片道¥${spot.source_fare}・往復¥${spot.source_round_trip_fare}で到達可能です）</p>
+        <p class="route-unresolved">経路情報を確定できませんでした（片道¥${formatThousands(spot.source_fare)}・往復¥${formatThousands(spot.source_round_trip_fare)}で到達可能です）</p>
       </div>
     `;
   }

@@ -12,6 +12,7 @@ import { buildOnwardCandidates } from './onward-candidates.js';
 import { MapView, isFiniteNumber, formatReachRadiusKm, pinCategory } from './map-view.js';
 import { isWebglLikelySupported, loadTerrainModule, preloadTerrainModuleWhenIdle } from './terrain-loader.js';
 import { LayoutController } from './layout-controller.js';
+import { formatThousands } from './format.js';
 import {
   loadFavorites, isFavorite, toggleFavorite, removeFavorite, upsertFavorite,
   buildSpotShareUrl, parseSpotShareParams, buildListShareUrl, parseListParam,
@@ -43,10 +44,6 @@ function bandHeadingHtml(budget, count) {
   return `<span class="band-heading-range">¥${formatThousands(budget - BAND_WIDTH + 1)}〜¥${formatThousands(budget)} の場所</span><span class="band-heading-count">　${count}か所</span>`;
 }
 
-/** 数字を3桁区切りにする（例: 1740 → "1,740"。「この先へ」の運賃表記用） */
-function formatThousands(n) {
-  return n.toLocaleString('ja-JP');
-}
 
 const MAP_MODE_STORAGE_KEY = 'reverse-travel-map-mode';
 // 【2026-10-25、56本目、Minami決定：C】検索前の地図は、前回検索した出発駅のあたりを2Dで出す（端末に覚える）。
@@ -720,7 +717,7 @@ class ReverseTravel {
     const max = parseInt(input.max, 10);
     const value = parseInt(input.value, 10);
 
-    this.elements.budgetDisplay.textContent = `¥${value}`;
+    this.elements.budgetDisplay.textContent = `¥${formatThousands(value)}`;
     this.elements.budgetSlider.value = value; // ±ボタン・共有リンク復元等どの経路で変わっても表示を揃える
     this.elements.budgetDecrement.disabled = value <= min;
     this.elements.budgetIncrement.disabled = value >= max;
@@ -2175,13 +2172,13 @@ class ReverseTravel {
     const name = item.name || '（名称不明）';
     const fareToShow = item.currentFare ?? item.roundTripFare;
     const fareChangedHtml = item.fareChanged
-      ? `<p class="mylist-fare-changed">運賃が変わりました（¥${item.roundTripFare}→¥${item.currentFare}）</p>`
+      ? `<p class="mylist-fare-changed">運賃が変わりました（¥${formatThousands(item.roundTripFare)}→¥${formatThousands(item.currentFare)}）</p>`
       : '';
     const unresolvedHtml = !shared && !item.resolved
       ? '<p class="mylist-unresolved">この場所は現在検索結果に出ません。</p>'
       : '';
     const departureLine = item.departureName
-      ? `<p class="mylist-row-summary">${item.departureName}から 往復¥${fareToShow}${typeof item.durationMin === 'number' ? `・約${item.durationMin}分` : ''}</p>`
+      ? `<p class="mylist-row-summary">${item.departureName}から 往復¥${formatThousands(fareToShow)}${typeof item.durationMin === 'number' ? `・約${item.durationMin}分` : ''}</p>`
       : '';
 
     const actionsHtml = shared
@@ -2474,7 +2471,7 @@ class ReverseTravel {
    * 所要時間が経路未確定でnullの場合は運賃・距離のみ表示する。
    */
   formatSpotSummary(spot) {
-    const parts = [`往復¥${spot.source_round_trip_fare}`];
+    const parts = [`往復¥${formatThousands(spot.source_round_trip_fare)}`];
     if (typeof spot.source_ride_duration_min === 'number') {
       parts.push(`約${spot.source_ride_duration_min}分`);
     }

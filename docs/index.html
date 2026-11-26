@@ -5047,7 +5047,7 @@ body {
               value="500"
               aria-label="予算（往復）をスライダーで変更"
             >
-            <p class="budget-range-labels" aria-hidden="true"><span>¥200</span><span>¥2000</span></p>
+            <p class="budget-range-labels" aria-hidden="true"><span>¥200</span><span>¥2,000</span></p>
             <!-- 金額の入れ物と＋−（見本のトップ画面には無いため隠す。値の受け渡しはこれまでどおりここを通す） -->
             <div class="budget-stepper">
               <button type="button" id="budget-decrement" aria-label="予算を100円減らす">−</button>
@@ -5344,6 +5344,24 @@ const DEBUG_ENABLED =
 
 function debugLog(...args) {
   if (DEBUG_ENABLED) console.log(...args);
+}
+
+
+// ----- format.js -----
+/**
+ * format.js - 画面に出す数の書き方をそろえる小さな関数
+ *
+ * 【2026-11-26、78本目、Minami決定】金額は「¥1,000」のように3桁ごとにカンマを入れる。
+ * 以前はmain.jsだけにformatThousands()があり、一覧のカード・行き方・マイリスト・共有の文などは
+ * 「¥2000」と出ていた（提出の画像に写るため直す）。main.js・route-formatter.js・favorites.jsから使う。
+ * カンマを付けるのは表示のときだけ。マイリストの保存データ（roundTripFare）は数のまま保存・比較する。
+ *
+ * bundle-html.jsは全ファイルを1つのスクリプトにつなぐため、このファイルは使う側より先に並べる。
+ */
+
+/** 数字を3桁区切りにする（例: 1740 → "1,740"）。数でないもの（壊れた値）はそのまま文字にする */
+function formatThousands(n) {
+  return typeof n === 'number' && Number.isFinite(n) ? n.toLocaleString('ja-JP') : String(n);
 }
 
 
@@ -6368,6 +6386,7 @@ class SpotFinder {
  */
 
 
+
 /** 2点間の距離をメートルで返す（Haversine公式） */
 function haversineMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000;
@@ -6497,7 +6516,7 @@ class RouteFormatter {
         ${this.renderLegLine(parsed.legs[0].route_id, departureName, viaName, parsed.legs[0].duration_min, null, freq)}
         <div class="route-transfer-note">↓ ${viaName}で乗換</div>
         ${this.renderLegLine(parsed.legs[1].route_id, viaName, destName, parsed.legs[1].duration_min, null, freq)}
-        <div class="route-total">合計（片道） ¥${fare}（通し運賃）・約${totalMinutes}分</div>
+        <div class="route-total">合計（片道） ¥${formatThousands(fare)}（通し運賃）・約${totalMinutes}分</div>
         <p class="route-disclaimer">※乗り換えの待ち時間は、運行本数から見積もった目安です</p>
         ${roundTripNote}
       </div>
@@ -6534,7 +6553,7 @@ class RouteFormatter {
         ${this.renderLegOrSegment(departureName, transferAtName, leg1, fare1)}
         ${transferNote}
         ${this.renderLegOrSegment(transferAtName, destName, leg2, fare2)}
-        <div class="route-total">合計（片道） ¥${fare}${totalMinutes !== null ? `・約${totalMinutes}分` : ''}</div>
+        <div class="route-total">合計（片道） ¥${formatThousands(fare)}${totalMinutes !== null ? `・約${totalMinutes}分` : ''}</div>
         <p class="route-disclaimer">※乗り換えの待ち時間は、運行本数から見積もった目安です</p>
         ${roundTripNote}
       </div>
@@ -6548,7 +6567,7 @@ class RouteFormatter {
    */
   renderRoundTripNote(roundTripFare) {
     if (roundTripFare === null || roundTripFare === undefined) return '';
-    return `<p class="route-round-trip">往復運賃（帰りも同額と仮定）：<strong>¥${roundTripFare}</strong></p>`;
+    return `<p class="route-round-trip">往復運賃（帰りも同額と仮定）：<strong>¥${formatThousands(roundTripFare)}</strong></p>`;
   }
 
   /** 1区間分の表示（駅名は表示用にすでに解決済みのものを受け取る）。その区間自体が
@@ -6588,7 +6607,7 @@ class RouteFormatter {
     const label = this.routeLabel(routeId);
     const mode = this.routeMode(routeId);
     const icon = mode === 'bus' ? '🚌' : '🚃';
-    const farePart = fare !== null && fare !== undefined ? `¥${fare}・` : '';
+    const farePart = fare !== null && fare !== undefined ? `¥${formatThousands(fare)}・` : '';
     const freqNote = this.renderFrequencyNote(frequency);
     return `<p class="route-leg route-leg-${mode}">${icon} ${label}　${originName} → ${destName}（${farePart}約${durationMin}分）${freqNote ? `<br>${freqNote}` : ''}</p>`;
   }
@@ -6596,7 +6615,7 @@ class RouteFormatter {
   renderUnresolved(spot) {
     return `
       <div class="route-info">
-        <p class="route-unresolved">経路情報を確定できませんでした（片道¥${spot.source_fare}・往復¥${spot.source_round_trip_fare}で到達可能です）</p>
+        <p class="route-unresolved">経路情報を確定できませんでした（片道¥${formatThousands(spot.source_fare)}・往復¥${formatThousands(spot.source_round_trip_fare)}で到達可能です）</p>
       </div>
     `;
   }
@@ -8790,6 +8809,7 @@ class LayoutController {
  * 再計算値を単純比較するだけで検出する）。
  */
 
+
 const STORAGE_KEY = 'ikeru.favorites.v1';
 const MAX_LIST_SHARE_ITEMS = 20;
 
@@ -8955,7 +8975,7 @@ function buildSpotShareText(spotName, departureName, roundTripFare, durationMin,
   const durationPart = typeof durationMin === 'number' ? `、約${durationMin}分` : '';
   const namePart = municipality ? `${spotName}（${municipality}）` : spotName;
   const freqPart = frequencyText ? `／${frequencyText}` : '';
-  return `${namePart}／${departureName}からバスで往復¥${roundTripFare}${durationPart}。${freqPart}／${url}`;
+  return `${namePart}／${departureName}からバスで往復¥${formatThousands(roundTripFare)}${durationPart}。${freqPart}／${url}`;
 }
 
 /**
@@ -9178,6 +9198,7 @@ function buildOnwardCandidates(context, currentSpot) {
 
 
 
+
 // 予算の帯の幅（¥）。表示するのは「予算−BAND_WIDTHより高く、予算以下」の場所だけ
 // （2026-10-06、Minamiさんの判断により「予算以下すべて」から変更）。
 const BAND_WIDTH = 200;
@@ -9203,10 +9224,6 @@ function bandHeadingHtml(budget, count) {
   return `<span class="band-heading-range">¥${formatThousands(budget - BAND_WIDTH + 1)}〜¥${formatThousands(budget)} の場所</span><span class="band-heading-count">　${count}か所</span>`;
 }
 
-/** 数字を3桁区切りにする（例: 1740 → "1,740"。「この先へ」の運賃表記用） */
-function formatThousands(n) {
-  return n.toLocaleString('ja-JP');
-}
 
 const MAP_MODE_STORAGE_KEY = 'reverse-travel-map-mode';
 // 【2026-10-25、56本目、Minami決定：C】検索前の地図は、前回検索した出発駅のあたりを2Dで出す（端末に覚える）。
@@ -9880,7 +9897,7 @@ class ReverseTravel {
     const max = parseInt(input.max, 10);
     const value = parseInt(input.value, 10);
 
-    this.elements.budgetDisplay.textContent = `¥${value}`;
+    this.elements.budgetDisplay.textContent = `¥${formatThousands(value)}`;
     this.elements.budgetSlider.value = value; // ±ボタン・共有リンク復元等どの経路で変わっても表示を揃える
     this.elements.budgetDecrement.disabled = value <= min;
     this.elements.budgetIncrement.disabled = value >= max;
@@ -11335,13 +11352,13 @@ class ReverseTravel {
     const name = item.name || '（名称不明）';
     const fareToShow = item.currentFare ?? item.roundTripFare;
     const fareChangedHtml = item.fareChanged
-      ? `<p class="mylist-fare-changed">運賃が変わりました（¥${item.roundTripFare}→¥${item.currentFare}）</p>`
+      ? `<p class="mylist-fare-changed">運賃が変わりました（¥${formatThousands(item.roundTripFare)}→¥${formatThousands(item.currentFare)}）</p>`
       : '';
     const unresolvedHtml = !shared && !item.resolved
       ? '<p class="mylist-unresolved">この場所は現在検索結果に出ません。</p>'
       : '';
     const departureLine = item.departureName
-      ? `<p class="mylist-row-summary">${item.departureName}から 往復¥${fareToShow}${typeof item.durationMin === 'number' ? `・約${item.durationMin}分` : ''}</p>`
+      ? `<p class="mylist-row-summary">${item.departureName}から 往復¥${formatThousands(fareToShow)}${typeof item.durationMin === 'number' ? `・約${item.durationMin}分` : ''}</p>`
       : '';
 
     const actionsHtml = shared
@@ -11634,7 +11651,7 @@ class ReverseTravel {
    * 所要時間が経路未確定でnullの場合は運賃・距離のみ表示する。
    */
   formatSpotSummary(spot) {
-    const parts = [`往復¥${spot.source_round_trip_fare}`];
+    const parts = [`往復¥${formatThousands(spot.source_round_trip_fare)}`];
     if (typeof spot.source_ride_duration_min === 'number') {
       parts.push(`約${spot.source_ride_duration_min}分`);
     }
