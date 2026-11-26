@@ -593,8 +593,8 @@ async function checkResultCards(html) {
   const outOfBandCards = cards
     .map((card) => {
       const summaryText = card.querySelector('.spot-summary')?.textContent || '';
-      const fareMatch = summaryText.match(/往復¥(\d+)/);
-      return fareMatch ? { name: card.querySelector('h3')?.textContent, fare: parseInt(fareMatch[1], 10) } : null;
+      const fareMatch = summaryText.match(/往復¥([\d,]+)/); // 【78本目】¥1,000以上は3桁区切り
+      return fareMatch ? { name: card.querySelector('h3')?.textContent, fare: parseInt(fareMatch[1].replace(/,/g, ''), 10) } : null;
     })
     .filter((c) => c && (c.fare <= bandMin || c.fare > searchedBudget));
   const bandRangeOk = outOfBandCards.length === 0;
@@ -1306,8 +1306,8 @@ async function checkSpotLevelBanding(html) {
     for (const card of cards) {
       const qid = card.getAttribute('data-spot-id');
       const summaryText = card.querySelector('.spot-summary')?.textContent || '';
-      const fareMatch = summaryText.match(/往復¥(\d+)/);
-      if (fareMatch) byQid.set(qid, parseInt(fareMatch[1], 10));
+      const fareMatch = summaryText.match(/往復¥([\d,]+)/); // 【78本目】¥1,000以上は3桁区切り
+      if (fareMatch) byQid.set(qid, parseInt(fareMatch[1].replace(/,/g, ''), 10));
     }
     return byQid;
   }
@@ -2418,6 +2418,46 @@ async function checkShareTextMunicipalityAndFrequency() {
   const withoutFrequencyOk = withoutFrequency === 'テスト地（○○市）／出発駅からバスで往復¥500、約20分。／http://example.com/x';
   ok = ok && withoutFrequencyOk;
   console.log(withoutFrequencyOk ? '✅ 便数情報が無いとき、その行ごと省かれる（1本目までと同じ文面に戻る）' : `❌ 便数なし時の省略に失敗: "${withoutFrequency}"`);
+
+  // 【78本目、Minami決定】¥1,000以上の金額は3桁区切り（「往復¥1,960」）。カンマは表示のときだけ付け、
+  // マイリストの保存データ（roundTripFare）は数のまま。古い保存データ（数で保存したもの）がそのまま読めることも見る。
+  const thousand = buildSpotShareText('テスト地', '出発駅', 1960, 40, 'http://example.com/x', null, null);
+  const thousandOk = thousand === 'テスト地／出発駅からバスで往復¥1,960、約40分。／http://example.com/x';
+  ok = ok && thousandOk;
+  console.log(thousandOk ? '✅ ¥1,000以上の金額は「往復¥1,960」の形' : `❌ ¥1,000以上の金額の書き方が想定と異なる: "${thousand}"`);
+  const { formatThousands } = await import(toEngineModuleUrl('assets/js/format.js'));
+  const fmtOk = formatThousands(2000) === '2,000' && formatThousands(980) === '980' && formatThousands(0) === '0' && formatThousands('壊れた値') === '壊れた値';
+  ok = ok && fmtOk;
+  console.log(fmtOk ? '✅ formatThousands()：2000→2,000・980→980・0→0、数でない値はそのまま' : '❌ formatThousands()の結果が想定と異なる');
+  const dom = new JSDOM('', { url: 'http://localhost/' });
+  globalThis.localStorage = dom.window.localStorage;
+  const oldEntry = { qid: 'Q_OLD_1', name: '古い保存', prefCode: '16', departureStationId: 'x:1', departureName: '富山駅前', roundTripFare: 1960, durationMin: 40, savedAt: '2026-11-01T00:00:00.000Z' };
+  localStorage.setItem('ikeru.favorites.v1', JSON.stringify([oldEntry]));
+  const favMod = await import(toEngineModuleUrl('assets/js/favorites.js') + `?t78=${Date.now()}`);
+  const loaded = favMod.loadFavorites();
+  favMod.saveFavorites(loaded);
+  const reRaw = JSON.parse(localStorage.getItem('ikeru.favorites.v1'));
+  const oldDataOk = loaded.length === 1 && loaded[0].roundTripFare === 1960 && reRaw[0].roundTripFare === 1960;
+  ok = ok && oldDataOk;
+  console.log(oldDataOk ? '✅ 古いマイリストの保存データ（往復¥1960を数で保存）がそのまま読め、保存し直しても数のまま' : `❌ 古い保存データの読み書きが壊れた: ${JSON.stringify(reRaw)}`);
+
+  // 詳細の行き方（route-formatter.js）：乗り換えの「合計（片道）」・往復運賃・経路を確定できないときの文。
+  // 片道¥1,000の乗り換えは実データでは少ないため、表示に要らない部分を差し替えて組み立てる。
+  const { RouteFormatter } = await import(toEngineModuleUrl('assets/js/route-formatter.js'));
+  const rf = Object.create(RouteFormatter.prototype);
+  rf.displayName = (id) => id;
+  rf.lookup = () => null;
+  rf.parseEntry = () => ({ type: 'direct' });
+  rf.totalMinutes = () => 30;
+  rf.renderTransferNote = () => '';
+  rf.renderLegOrSegment = () => '';
+  const spot1000 = { source_transfer_at: 'B', source_station_id: 'C', source_station: 'C', source_leg_operators: ['x', 'y'], source_leg_fares: [400, 600], source_fare: 1000, source_round_trip_fare: 2000 };
+  const transferHtml = rf.formatCrossOperatorTransfer('A', spot1000);
+  const unresolvedHtml = rf.renderUnresolved({ source_fare: 980, source_round_trip_fare: 1960 });
+  const routeOk = transferHtml.includes('合計（片道） ¥1,000') && transferHtml.includes('<strong>¥2,000</strong>') && !/¥\d{4,}/.test(transferHtml)
+    && unresolvedHtml.includes('片道¥980・往復¥1,960') && !/¥\d{4,}/.test(unresolvedHtml);
+  ok = ok && routeOk;
+  console.log(routeOk ? '✅ 詳細の行き方：「合計（片道） ¥1,000」・往復運賃「¥2,000」・確定できないときの「往復¥1,960」' : `❌ 詳細の行き方の金額の書き方が想定と異なる: ${transferHtml.replace(/\s+/g, ' ')} / ${unresolvedHtml.replace(/\s+/g, ' ')}`);
 
   return ok;
 }

@@ -170,6 +170,7 @@ async function bundleHTML() {
 async function generateInlineJSScript(jsDir) {
   const jsFiles = [
     'debug-log.js',
+    'format.js', // 【78本目】金額の3桁区切り。route-formatter.js・favorites.js・main.jsより先に置く
     'gtfs-loader.js',
     'route-duration.js',
     'fare-calculator.js',

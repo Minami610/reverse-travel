@@ -32,6 +32,7 @@ const distIndexPath = path.join(rootDir, 'dist/index.html');
 // （bundle-html.js自体を変更したときはこちらも見直す）
 const JS_FILES = [
   'debug-log.js',
+  'format.js',
   'gtfs-loader.js',
   'route-duration.js',
   'fare-calculator.js',
