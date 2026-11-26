@@ -3353,28 +3353,36 @@ async function checkMobileBudgetOverlay(browser, baseUrl, savedPaths) {
         JSON.stringify({ before3d, after3d, mismatches: liveCats3d.mismatches }));
 
       // 金額帯より安い場所のピン（49本目から紺）を選んでもエラーにならない
-      let paleScreenPos = await page.evaluate(() => {
-        const map = window.__terrainMapForDebug;
-        const budget = window.__terrainViewForDebug._lastBudget;
-        const f = map.querySourceFeatures('spots-plain').find((x) => !x.properties.cluster && x.properties.fare <= budget - 200);
-        if (!f) return null;
-        const p = map.project(f.geometry.coordinates);
-        return { x: p.x, y: p.y };
-      });
-      if (!paleScreenPos) {
-        const grayId = await page.evaluate(() => {
-          const tv = window.__terrainViewForDebug;
-          const s = (tv._lastSpots || []).find((x) => x.source_round_trip_fare <= tv._lastBudget - 200);
-          return s ? s.id : null;
+      // 【78】−のあと点の作り直しが描かれる前に探すと見つからず落ちることがあった（【74】で原因を説明、
+      // 【78】の通しで3回中2回）。描かれるまで最大3秒、0.2秒ごとに探し直す（合否の決まりは変えない）。
+      let paleScreenPos = null;
+      const paleSearchStart = Date.now();
+      while (!paleScreenPos && Date.now() - paleSearchStart < 3000) {
+        paleScreenPos = await page.evaluate(() => {
+          const map = window.__terrainMapForDebug;
+          const budget = window.__terrainViewForDebug._lastBudget;
+          const f = map.querySourceFeatures('spots-plain').find((x) => !x.properties.cluster && x.properties.fare <= budget - 200);
+          if (!f) return null;
+          const p = map.project(f.geometry.coordinates);
+          return { x: p.x, y: p.y };
         });
-        if (grayId) paleScreenPos = await spotScreenPos3d(page, { id: grayId });
+        if (!paleScreenPos) {
+          const grayId = await page.evaluate(() => {
+            const tv = window.__terrainViewForDebug;
+            const s = (tv._lastSpots || []).find((x) => x.source_round_trip_fare <= tv._lastBudget - 200);
+            return s ? s.id : null;
+          });
+          if (grayId) paleScreenPos = await spotScreenPos3d(page, { id: grayId });
+        }
+        if (!paleScreenPos) await page.waitForTimeout(200);
       }
+      const paleSearchMs = Date.now() - paleSearchStart;
       if (paleScreenPos) {
         const mapBox3dPale = await page.locator('#map-area').boundingBox();
         await page.mouse.click(mapBox3dPale.x + paleScreenPos.x, mapBox3dPale.y + paleScreenPos.y);
         await page.waitForTimeout(300);
       }
-      record(`[${label}/3D] 金額帯より安い場所のピン（49本目から紺）を選ぶ操作がある`, !!paleScreenPos);
+      record(`[${label}/3D] 金額帯より安い場所のピン（49本目から紺）を選ぶ操作がある`, !!paleScreenPos, `探した時間=${paleSearchMs}ms`);
 
       record(`[${label}/3D] ここまでの一連の操作でMapLibreの「Map cannot fit」警告が出ない`, !containsMapCannotFitWarning(consoleMessages3d));
       const unexpected3d = consoleMessages3d.filter((m) => !isKnownAcceptableConsoleMessage(m));
@@ -11146,6 +11154,109 @@ async function checkRound67(browser, baseUrl, savedPaths) {
 }
 
 /**
+ * 【2026-11-26、78本目、Minami決定】¥1,000以上の金額は「¥1,000」の形（3桁区切り）。以前は一覧のカード・検索カード・
+ * 行き方・マイリストなどが「¥2000」と出ていた（提出の画像に写る）。富山駅前¥2,000（金額帯¥1,801〜¥2,000）で、
+ * 一覧のカード・検索カード（金額・スライダーの目盛り）・詳細（行き方の合計・往復運賃）・マイリスト（PC）・
+ * 場所のカード（スマホ）を読み、「¥」のあとに4桁以上の数字が続く書き方が無いこと、¥1,000以上の金額がカンマ付きで出ていることを見る。
+ */
+async function checkRound78(browser, baseUrl, savedPaths) {
+  console.log('\n=== 78本目：金額の書き方（¥1,000以上は3桁区切り） ===');
+  const NO_COMMA_RE = /¥\d{4,}/;
+  const COMMA_RE = /¥\d{1,3}(,\d{3})+/;
+  const judge = (label, text, { needComma = true } = {}) => {
+    const t = (text || '').replace(/\s+/g, ' ').trim();
+    record(`${label} 読む文がある（検証の前提）`, t.length > 0, JSON.stringify(t.slice(0, 80)));
+    const bad = t.match(NO_COMMA_RE);
+    record(`${label} 「¥」のあとに4桁以上の数字が続く書き方が無い`, !bad, JSON.stringify(bad ? t.slice(Math.max(0, bad.index - 20), bad.index + 30) : ''));
+    if (needComma) record(`${label} ¥1,000以上の金額がカンマ付きで出ている`, COMMA_RE.test(t), JSON.stringify(t.slice(0, 120)));
+  };
+  const text = (page, sel) => page.evaluate((sel) => Array.from(document.querySelectorAll(sel)).map((el) => el.textContent).join(' / '), sel);
+
+  for (const [vLabel, viewport] of [['pc1440', { width: 1440, height: 900 }], ['sp390', MOBILE_FORM_COLLAPSE_VIEWPORTS.std]]) {
+    const context = await browser.newContext({ viewport });
+    await context.addInitScript(() => {
+      try {
+        localStorage.setItem('reverse-travel-rotate-hint-seen', 'true');
+        localStorage.setItem('reverse-travel-map-mode', '2d');
+        localStorage.removeItem('ikeru.favorites.v1');
+      } catch { /* 無視 */ }
+    });
+    const page = await context.newPage();
+    const L = `[78/金額/${vLabel}]`;
+    try {
+      await page.goto(baseUrl, { waitUntil: 'load' });
+      await page.waitForFunction(() => document.getElementById('departure-input').placeholder === '駅名を入力...');
+      // 検索カードのスライダーの右端の目盛り（検索の前）
+      judge(`${L} 検索カードのスライダーの目盛り`, await text(page, '.budget-range-labels'));
+      await searchAtAndWaitPrefetch(page, '富山駅前', 2000);
+      await page.waitForFunction(() => /¥2,000/.test(document.getElementById('results-band-heading')?.textContent || ''), null, { timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(800);
+      judge(`${L} 検索カードの金額`, await text(page, '#budget-display'));
+      judge(`${L} 一覧のカードの金額の行`, await text(page, '#results-list .spot-card .spot-summary'));
+
+      if (vLabel.startsWith('pc')) {
+        // マイリスト：一覧の1枚目を保存して開く
+        await page.locator('#results-list .spot-card').first().locator('.favorite-btn').click();
+        await page.waitForTimeout(200);
+        await clickHeaderItem(page, 'mylist-btn');
+        await page.waitForSelector('#mylist-body .mylist-row', { timeout: 15000 }).catch(() => {});
+        judge(`${L} マイリストの行`, await text(page, '#mylist-body .mylist-row-summary'));
+        const shot = path.join(screenshotDir, `round78-mylist-${vLabel}.png`);
+        await page.screenshot({ path: shot });
+        savedPaths.push(shot);
+        await page.click('#mylist-modal-close');
+        await page.waitForTimeout(300);
+        // 詳細：一覧の1枚目を開く
+        await page.locator('#results-list .spot-card h3').first().click();
+      } else {
+        // 場所のカード：¥1,000以上の場所のピンで、ほかの部品に隠れていないものを押す
+        const picked = await page.evaluate(() => {
+          const mv = window.__mapViewForDebug;
+          document.querySelectorAll('[data-test-pick78]').forEach((e) => e.removeAttribute('data-test-pick78'));
+          for (const [id, marker] of mv.markersBySpotId) {
+            if (!(mv.fareBySpotId.get(id) >= 1000)) continue;
+            const el = marker.getElement();
+            if (!el) continue;
+            const b = el.getBoundingClientRect();
+            if (!(b.width > 0 && b.height > 0)) continue;
+            const t = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+            if (t && el.contains(t)) { el.setAttribute('data-test-pick78', '1'); return mv.fareBySpotId.get(id); }
+          }
+          return null;
+        });
+        record(`${L} ¥1,000以上の場所のピンで、押せるものがある（検証の前提）`, picked !== null, String(picked));
+        if (picked !== null) {
+          const b = await page.locator('[data-test-pick78="1"]').boundingBox();
+          await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
+          await page.waitForFunction(() => { const c = document.getElementById('sheet-spot-card'); return c && !c.hidden && c.getBoundingClientRect().height > 0; }, null, { timeout: 5000 }).catch(() => {});
+          await page.waitForTimeout(300);
+          judge(`${L} 場所のカードの金額`, await text(page, '#sheet-spot-card .sheet-spot-fare'));
+          const shot = path.join(screenshotDir, `round78-sheet-card-${vLabel}.png`);
+          await page.screenshot({ path: shot });
+          savedPaths.push(shot);
+          await page.locator('#sheet-spot-card .sheet-spot-detail-btn').click();
+        } else {
+          await page.locator('#results-list .spot-card h3').first().click();
+        }
+      }
+      await page.waitForFunction(() => !!document.querySelector('#detail-container .route-round-trip'), null, { timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(400);
+      judge(`${L} 詳細の往復運賃の行`, await text(page, '#detail-container .route-round-trip'));
+      // 行き方の合計（片道）は乗り換えのある場所にしか出ず、¥1,000未満のことが多い。出ているときだけ、4桁が続く書き方が無いことを見る
+      // （¥1,000の形になることは、verify-renderが乗り換えの行き方を組み立てて確かめる）
+      const routeTotal = await text(page, '#detail-container .route-total');
+      if (routeTotal) judge(`${L} 詳細の行き方の合計（片道）`, routeTotal, { needComma: false });
+      judge(`${L} 詳細の全体`, await text(page, '#detail-container'));
+      const shot = path.join(screenshotDir, `round78-detail-${vLabel}.png`);
+      await page.screenshot({ path: shot });
+      savedPaths.push(shot);
+    } finally {
+      await context.close();
+    }
+  }
+}
+
+/**
  * 【2026-11-25、76本目】
  * (1) 一覧のカードの「NEW」の札が写真の枠の中にあり、名前と重ならない（PC 1440・1920、スマホ390の小・大）。
  *     75本目の提出用スクリーンショットで、PCの札が名前の頭を隠していた（gridの「.spot-card > *」が札にも
@@ -11429,6 +11540,7 @@ async function main() {
     await runWithFreshBrowser(checkRound66, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound67, baseUrl, savedPaths);
     await runWithFreshBrowser(checkRound76, baseUrl, savedPaths);
+    await runWithFreshBrowser(checkRound78, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBreadcrumbTrail, baseUrl, savedPaths);
     await runWithFreshBrowser(checkBudgetSlider, baseUrl, savedPaths);
     await runWithFreshBrowser(checkWaveRevealAndCircleScreenshots, baseUrl, savedPaths);
